@@ -1,0 +1,11 @@
+.DS_Store
+.env
+.idea/
+.vscode/
+bin/
+coverage/
+dist/
+node_modules/
+web/dist/
+*.log
+*.out

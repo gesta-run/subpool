@@ -1,0 +1,52 @@
+name: subpool
+
+services:
+  subpool:
+    image: subpool:local
+    build:
+      context: .
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      SUBPOOL_LISTEN_ADDRESS: ":8080"
+      SUBPOOL_CODEX_CALLBACK_ADDRESS: ":1455"
+      SUBPOOL_PUBLIC_URL: ${SUBPOOL_PUBLIC_URL:-http://localhost:8080}
+      SUBPOOL_DATABASE_URL: postgres://${POSTGRES_USER:-subpool}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-subpool}?sslmode=disable
+      SUBPOOL_ADMIN_USERNAME: ${SUBPOOL_ADMIN_USERNAME:?Set SUBPOOL_ADMIN_USERNAME}
+      SUBPOOL_ADMIN_PASSWORD: ${SUBPOOL_ADMIN_PASSWORD:?Set SUBPOOL_ADMIN_PASSWORD}
+      SUBPOOL_TRUSTED_PROXY_CIDRS: ${SUBPOOL_TRUSTED_PROXY_CIDRS:-}
+      SUBPOOL_CREDENTIAL_KEY: ${SUBPOOL_CREDENTIAL_KEY:?Set SUBPOOL_CREDENTIAL_KEY}
+      SUBPOOL_API_KEY_HMAC_KEY: ${SUBPOOL_API_KEY_HMAC_KEY:?Set SUBPOOL_API_KEY_HMAC_KEY}
+    ports:
+      - "${SUBPOOL_PORT:-8080}:8080"
+      - "1455:1455"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8080/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 15s
+    security_opt:
+      - no-new-privileges:true
+
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-subpool}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-subpool}
+    volumes:
+      - subpool-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  subpool-postgres:
