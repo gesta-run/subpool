@@ -68,7 +68,7 @@ func (c *Client) Responses(ctx context.Context, body []byte, downstream http.Hea
 	if credentials.AccountID != "" {
 		req.Header.Set("Chatgpt-Account-Id", credentials.AccountID)
 	}
-	for _, name := range []string{"Version", "X-Codex-Beta-Features", "X-Codex-Turn-Metadata", "X-Client-Request-Id", "X-Codex-Window-Id", "Thread-Id", "Session-Id", "X-Openai-Internal-Codex-Responses-Lite"} {
+	for _, name := range []string{"Version", "X-Codex-Beta-Features", "X-Codex-Installation-Id", "X-Codex-Turn-Metadata", "X-Client-Request-Id", "X-Codex-Window-Id", "Thread-Id", "Session-Id", "X-Openai-Internal-Codex-Responses-Lite"} {
 		if value := downstream.Get(name); value != "" {
 			req.Header.Set(name, value)
 		}
