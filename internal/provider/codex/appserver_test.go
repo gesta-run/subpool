@@ -17,7 +17,7 @@ func TestAppServerReadsAndConsumesResetCredits(t *testing.T) {
 	if err := os.WriteFile(executable, []byte(wrapper), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	client := NewAppServer(executable)
+	client := &AppServer{executable: executable}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	credentials := Credentials{AccessToken: "test-access-token", AccountID: "test-account"}

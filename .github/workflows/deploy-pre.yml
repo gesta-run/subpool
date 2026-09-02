@@ -15,7 +15,7 @@ env:
   AWS_REGION: us-east-2
   GESTA_PRE_INSTANCE_ID: i-06dd31f05e6c295fd
   SUBPOOL_HOST_PORT: "8082"
-  SUBPOOL_PUBLIC_URL: ${{ vars.SUBPOOL_PRE_PUBLIC_URL || 'http://localhost:8080' }}
+  SUBPOOL_PUBLIC_URL: http://3.21.189.90:8082
 
 jobs:
   deploy:
@@ -24,6 +24,27 @@ jobs:
     timeout-minutes: 20
     environment: preproduction
     steps:
+      - name: Validate deployment secrets
+        env:
+          AWS_AK: ${{ secrets.AWS_AK }}
+          AWS_SK: ${{ secrets.AWS_SK }}
+          SUBPOOL_ADMIN_USERNAME: ${{ secrets.SUBPOOL_ADMIN_USERNAME }}
+          SUBPOOL_ADMIN_PASSWORD: ${{ secrets.SUBPOOL_ADMIN_PASSWORD }}
+          SUBPOOL_POSTGRES_PASSWORD: ${{ secrets.SUBPOOL_POSTGRES_PASSWORD }}
+          SUBPOOL_CREDENTIAL_KEY: ${{ secrets.SUBPOOL_CREDENTIAL_KEY }}
+          SUBPOOL_API_KEY_HMAC_KEY: ${{ secrets.SUBPOOL_API_KEY_HMAC_KEY }}
+        run: |
+          for name in \
+            AWS_AK \
+            AWS_SK \
+            SUBPOOL_ADMIN_USERNAME \
+            SUBPOOL_ADMIN_PASSWORD \
+            SUBPOOL_POSTGRES_PASSWORD \
+            SUBPOOL_CREDENTIAL_KEY \
+            SUBPOOL_API_KEY_HMAC_KEY; do
+            test -n "${!name:-}" || { echo "$name is required" >&2; exit 1; }
+          done
+
       - name: Check out source
         uses: actions/checkout@v4
 
