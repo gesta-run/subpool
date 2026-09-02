@@ -2,7 +2,6 @@ package store
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -10,8 +9,6 @@ import (
 
 	"github.com/gesta-run/subpool/internal/domain"
 	"github.com/gesta-run/subpool/migrations"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -89,17 +86,19 @@ func (p *Postgres) migrate(ctx context.Context) error {
 
 func (p *Postgres) CreateProviderAccount(ctx context.Context, a domain.ProviderAccount) error {
 	_, err := p.pool.Exec(ctx, `INSERT INTO provider_accounts
-		(id, provider, credential_type, display_name, subject_hmac, credential_ciphertext, credential_version, status, max_api_keys, quota_snapshot)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,COALESCE($10,'{}'::jsonb))`,
-		a.ID, a.Provider, a.CredentialType, a.DisplayName, a.SubjectHMAC, a.CredentialCiphertext, a.CredentialVersion, a.Status, a.MaxAPIKeys, nullableJSON(a.QuotaSnapshot))
+		(id, provider, credential_type, display_name, email, subject_hmac, credential_ciphertext, credential_version, status, quota_snapshot,
+		 health_status,last_checked_at,last_health_error_code,consecutive_health_failures,next_health_check_at)
+		VALUES ($1,$2,$3,$4,NULLIF($5,''),$6,$7,$8,$9,COALESCE($10,'{}'::jsonb),COALESCE(NULLIF($11,''),'unknown'),$12,NULLIF($13,''),$14,$15)`,
+		a.ID, a.Provider, a.CredentialType, a.DisplayName, a.Email, a.SubjectHMAC, a.CredentialCiphertext, a.CredentialVersion, a.Status, nullableJSON(a.QuotaSnapshot),
+		a.HealthStatus, a.LastCheckedAt, a.LastHealthErrorCode, a.ConsecutiveFailures, a.NextHealthCheckAt)
 	return wrapDB("create provider account", err)
 }
 
 func (p *Postgres) ListProviderAccounts(ctx context.Context) ([]domain.ProviderAccount, error) {
-	rows, err := p.pool.Query(ctx, `SELECT a.id,a.provider,a.credential_type,a.display_name,a.credential_version,a.status,s.max_api_keys_per_account,
+	rows, err := p.pool.Query(ctx, `SELECT a.id,a.provider,a.credential_type,a.display_name,COALESCE(a.email,''),a.credential_version,a.status,
 		(SELECT count(*) FROM api_key_account_bindings b JOIN api_keys k ON k.id=b.api_key_id WHERE b.provider_account_id=a.id AND k.revoked_at IS NULL AND (k.expires_at IS NULL OR k.expires_at>now())),
-		a.quota_snapshot,a.cooldown_until,a.last_success_at,a.last_failure_at,a.created_at,a.updated_at
-		FROM provider_accounts a CROSS JOIN global_settings s WHERE s.singleton ORDER BY a.created_at`)
+		a.quota_snapshot,a.cooldown_until,a.last_success_at,a.last_failure_at,a.health_status,a.last_checked_at,COALESCE(a.last_health_error_code,''),a.consecutive_health_failures,a.next_health_check_at,a.created_at,a.updated_at
+		FROM provider_accounts a ORDER BY a.created_at`)
 	if err != nil {
 		return nil, wrapDB("list provider accounts", err)
 	}
@@ -107,8 +106,8 @@ func (p *Postgres) ListProviderAccounts(ctx context.Context) ([]domain.ProviderA
 	var out []domain.ProviderAccount
 	for rows.Next() {
 		var a domain.ProviderAccount
-		if err = rows.Scan(&a.ID, &a.Provider, &a.CredentialType, &a.DisplayName, &a.CredentialVersion, &a.Status, &a.MaxAPIKeys,
-			&a.AssignedAPIKeys, &a.QuotaSnapshot, &a.CooldownUntil, &a.LastSuccessAt, &a.LastFailureAt, &a.CreatedAt, &a.UpdatedAt); err != nil {
+		if err = rows.Scan(&a.ID, &a.Provider, &a.CredentialType, &a.DisplayName, &a.Email, &a.CredentialVersion, &a.Status,
+			&a.AssignedAPIKeys, &a.QuotaSnapshot, &a.CooldownUntil, &a.LastSuccessAt, &a.LastFailureAt, &a.HealthStatus, &a.LastCheckedAt, &a.LastHealthErrorCode, &a.ConsecutiveFailures, &a.NextHealthCheckAt, &a.CreatedAt, &a.UpdatedAt); err != nil {
 			return nil, wrapDB("scan provider account", err)
 		}
 		out = append(out, a)
@@ -116,13 +115,70 @@ func (p *Postgres) ListProviderAccounts(ctx context.Context) ([]domain.ProviderA
 	return out, wrapDB("list provider accounts", rows.Err())
 }
 
+func (p *Postgres) ListPoolProviderAccounts(ctx context.Context, poolID string) ([]domain.ProviderAccount, error) {
+	rows, err := p.pool.Query(ctx, `SELECT a.id,a.provider,a.credential_type,a.display_name,COALESCE(a.email,''),a.credential_ciphertext,a.credential_version,a.status,
+		a.health_status,a.quota_snapshot,a.cooldown_until,a.last_success_at,a.last_failure_at,a.created_at,a.updated_at
+		FROM provider_accounts a JOIN pool_accounts pa ON pa.provider_account_id=a.id
+		WHERE pa.pool_id=$1 AND pa.enabled
+		AND (a.status='active' OR (a.status='cooling_down' AND a.cooldown_until<=now()))
+		AND COALESCE(NULLIF(a.health_status,''),'unknown')!='unhealthy'
+		ORDER BY pa.priority,a.id`, poolID)
+	if err != nil {
+		return nil, wrapDB("list pool provider accounts", err)
+	}
+	defer rows.Close()
+	var accounts []domain.ProviderAccount
+	for rows.Next() {
+		var account domain.ProviderAccount
+		if err = rows.Scan(&account.ID, &account.Provider, &account.CredentialType, &account.DisplayName, &account.Email, &account.CredentialCiphertext, &account.CredentialVersion, &account.Status,
+			&account.HealthStatus, &account.QuotaSnapshot, &account.CooldownUntil, &account.LastSuccessAt, &account.LastFailureAt, &account.CreatedAt, &account.UpdatedAt); err != nil {
+			return nil, wrapDB("scan pool provider account", err)
+		}
+		accounts = append(accounts, account)
+	}
+	return accounts, wrapDB("list pool provider accounts", rows.Err())
+}
+
 func (p *Postgres) GetProviderAccount(ctx context.Context, id string) (domain.ProviderAccount, error) {
 	var a domain.ProviderAccount
-	err := p.pool.QueryRow(ctx, `SELECT id,provider,credential_type,display_name,credential_ciphertext,credential_version,status,max_api_keys,
-		quota_snapshot,cooldown_until,last_success_at,last_failure_at,created_at,updated_at FROM provider_accounts WHERE id=$1`, id).
-		Scan(&a.ID, &a.Provider, &a.CredentialType, &a.DisplayName, &a.CredentialCiphertext, &a.CredentialVersion, &a.Status, &a.MaxAPIKeys,
-			&a.QuotaSnapshot, &a.CooldownUntil, &a.LastSuccessAt, &a.LastFailureAt, &a.CreatedAt, &a.UpdatedAt)
+	err := p.pool.QueryRow(ctx, `SELECT id,provider,credential_type,display_name,COALESCE(email,''),credential_ciphertext,credential_version,status,
+		quota_snapshot,cooldown_until,last_success_at,last_failure_at,health_status,last_checked_at,COALESCE(last_health_error_code,''),consecutive_health_failures,next_health_check_at,created_at,updated_at FROM provider_accounts WHERE id=$1`, id).
+		Scan(&a.ID, &a.Provider, &a.CredentialType, &a.DisplayName, &a.Email, &a.CredentialCiphertext, &a.CredentialVersion, &a.Status,
+			&a.QuotaSnapshot, &a.CooldownUntil, &a.LastSuccessAt, &a.LastFailureAt, &a.HealthStatus, &a.LastCheckedAt, &a.LastHealthErrorCode, &a.ConsecutiveFailures, &a.NextHealthCheckAt, &a.CreatedAt, &a.UpdatedAt)
 	return a, wrapDB("get provider account", err)
+}
+
+func (p *Postgres) UpdateProviderDetails(ctx context.Context, id, email string, quota []byte) error {
+	tag, err := p.pool.Exec(ctx, `UPDATE provider_accounts SET email=COALESCE(NULLIF($2,''),email),quota_snapshot=COALESCE($3,'{}'::jsonb),updated_at=now() WHERE id=$1`, id, email, nullableJSON(quota))
+	return wrapMutation("update provider details", tag.RowsAffected(), err)
+}
+
+func (p *Postgres) GetProviderResetCredits(ctx context.Context, id string) ([]byte, *time.Time, error) {
+	var snapshot []byte
+	var checkedAt *time.Time
+	err := p.pool.QueryRow(ctx, `SELECT reset_credits_snapshot,reset_credits_checked_at FROM provider_accounts WHERE id=$1`, id).Scan(&snapshot, &checkedAt)
+	return snapshot, checkedAt, wrapDB("get provider reset credits", err)
+}
+
+func (p *Postgres) SetProviderResetCredits(ctx context.Context, id string, snapshot []byte, checkedAt time.Time) error {
+	tag, err := p.pool.Exec(ctx, `UPDATE provider_accounts SET reset_credits_snapshot=$2,reset_credits_checked_at=$3,
+		reset_credits_refresh_claimed_until=NULL,updated_at=now() WHERE id=$1`, id, snapshot, checkedAt)
+	return wrapMutation("set provider reset credits", tag.RowsAffected(), err)
+}
+
+func (p *Postgres) ClaimProviderResetCreditRefresh(ctx context.Context, id string, staleBefore, claimedUntil time.Time) (bool, error) {
+	tag, err := p.pool.Exec(ctx, `UPDATE provider_accounts SET reset_credits_refresh_claimed_until=$3
+		WHERE id=$1 AND (reset_credits_checked_at IS NULL OR reset_credits_checked_at<$2)
+		AND (reset_credits_refresh_claimed_until IS NULL OR reset_credits_refresh_claimed_until<now())`, id, staleBefore, claimedUntil)
+	if err != nil {
+		return false, wrapDB("claim provider reset credit refresh", err)
+	}
+	return tag.RowsAffected() == 1, nil
+}
+
+func (p *Postgres) ReleaseProviderResetCreditRefresh(ctx context.Context, id string) error {
+	tag, err := p.pool.Exec(ctx, `UPDATE provider_accounts SET reset_credits_refresh_claimed_until=NULL WHERE id=$1`, id)
+	return wrapMutation("release provider reset credit refresh", tag.RowsAffected(), err)
 }
 
 func (p *Postgres) UpdateProviderAccount(ctx context.Context, account domain.ProviderAccount) error {
@@ -140,34 +196,8 @@ func (p *Postgres) GetSettings(ctx context.Context) (domain.Settings, error) {
 }
 
 func (p *Postgres) UpdateSettings(ctx context.Context, settings domain.Settings) error {
-	tx, err := p.pool.Begin(ctx)
-	if err != nil {
-		return wrapDB("begin settings update", err)
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(731242002)`); err != nil {
-		return wrapDB("lock settings update", err)
-	}
-	var value int
-	err = tx.QueryRow(ctx, `UPDATE global_settings SET max_api_keys_per_account=$1,updated_at=now()
-		WHERE singleton AND $1 >= COALESCE((
-			SELECT max(binding_count) FROM (
-				SELECT count(k.id) AS binding_count FROM provider_accounts a
-				LEFT JOIN api_key_account_bindings b ON b.provider_account_id=a.id
-				LEFT JOIN api_keys k ON k.id=b.api_key_id AND k.revoked_at IS NULL AND (k.expires_at IS NULL OR k.expires_at>now())
-				GROUP BY a.id
-			) counts
-		),0) RETURNING max_api_keys_per_account`, settings.MaxAPIKeysPerAccount).Scan(&value)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return ErrCapacityExhausted
-	}
-	if err != nil {
-		return wrapDB("update settings", err)
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return wrapDB("commit settings update", err)
-	}
-	return nil
+	tag, err := p.pool.Exec(ctx, `UPDATE global_settings SET max_api_keys_per_account=$1,updated_at=now() WHERE singleton`, settings.MaxAPIKeysPerAccount)
+	return wrapMutation("update settings", tag.RowsAffected(), err)
 }
 
 func (p *Postgres) DeleteProviderAccount(ctx context.Context, id string) error {
@@ -180,7 +210,10 @@ func (p *Postgres) DeleteProviderAccount(ctx context.Context, id string) error {
 		return wrapDB("lock provider account deletion", err)
 	}
 	tag, err := tx.Exec(ctx, `DELETE FROM provider_accounts a WHERE a.id=$1
-		AND NOT EXISTS (SELECT 1 FROM api_key_account_bindings b WHERE b.provider_account_id=a.id)`, id)
+		AND NOT EXISTS (
+			SELECT 1 FROM api_key_account_bindings b JOIN api_keys k ON k.id=b.api_key_id
+			WHERE b.provider_account_id=a.id AND k.revoked_at IS NULL AND (k.expires_at IS NULL OR k.expires_at>now())
+		)`, id)
 	if err != nil {
 		return wrapDB("delete provider account", err)
 	}
@@ -209,305 +242,51 @@ func (p *Postgres) UpdateProviderCredentialCAS(ctx context.Context, id string, e
 }
 
 func (p *Postgres) UpdateProviderStatus(ctx context.Context, id, status string, cooldown *time.Time) error {
-	tag, err := p.pool.Exec(ctx, `UPDATE provider_accounts SET status=$2,cooldown_until=$3,last_failure_at=CASE WHEN $2='active' THEN last_failure_at ELSE now() END,updated_at=now() WHERE id=$1`, id, status, cooldown)
+	tag, err := p.pool.Exec(ctx, `UPDATE provider_accounts SET status=$2,cooldown_until=$3,
+		last_failure_at=CASE WHEN $2='active' THEN last_failure_at ELSE now() END,
+		health_status=CASE WHEN $2='auth_failed' THEN 'unhealthy' WHEN $2='cooling_down' THEN 'healthy' ELSE health_status END,
+		last_checked_at=CASE WHEN $2 IN ('auth_failed','cooling_down') THEN now() ELSE last_checked_at END,
+		last_health_error_code=CASE WHEN $2='auth_failed' THEN 'authentication_failed' WHEN $2='cooling_down' THEN NULL ELSE last_health_error_code END,
+		consecutive_health_failures=CASE WHEN $2='auth_failed' THEN 3 WHEN $2='cooling_down' THEN 0 ELSE consecutive_health_failures END,
+		next_health_check_at=CASE WHEN $2 IN ('auth_failed','cooling_down') THEN now()+interval '5 minutes' ELSE next_health_check_at END,
+		updated_at=now() WHERE id=$1`, id, status, cooldown)
 	return wrapMutation("update provider status", tag.RowsAffected(), err)
 }
 
-func (p *Postgres) MarkProviderSuccess(ctx context.Context, id string) error {
-	tag, err := p.pool.Exec(ctx, `UPDATE provider_accounts SET status='active',cooldown_until=NULL,last_success_at=now(),updated_at=now() WHERE id=$1`, id)
-	return wrapMutation("mark provider success", tag.RowsAffected(), err)
+func (p *Postgres) SetProviderHealth(ctx context.Context, id, healthStatus, errorCode string, checkedAt, nextCheckAt time.Time) error {
+	tag, err := p.pool.Exec(ctx, `UPDATE provider_accounts SET health_status=$2,last_checked_at=$4,last_health_error_code=NULLIF($3,''),
+		consecutive_health_failures=CASE WHEN $2 IN ('healthy','unknown') THEN 0 ELSE consecutive_health_failures END,
+		next_health_check_at=$5,updated_at=now() WHERE id=$1`, id, healthStatus, errorCode, checkedAt, nextCheckAt)
+	return wrapMutation("set provider health", tag.RowsAffected(), err)
 }
 
-func (p *Postgres) CreatePool(ctx context.Context, pool domain.Pool) error {
-	_, err := p.pool.Exec(ctx, `INSERT INTO pools(id,name,provider,strategy,model_allowlist) VALUES($1,$2,$3,$4,$5)`, pool.ID, pool.Name, pool.Provider, pool.Strategy, nonNilStrings(pool.ModelAllowlist))
-	return wrapDB("create pool", err)
+func (p *Postgres) RecordProviderHealthFailure(ctx context.Context, id, errorCode string, checkedAt, nextCheckAt time.Time) error {
+	tag, err := p.pool.Exec(ctx, `UPDATE provider_accounts SET
+		consecutive_health_failures=consecutive_health_failures+1,
+		health_status=CASE WHEN consecutive_health_failures+1>=3 THEN 'unhealthy' ELSE health_status END,
+		last_checked_at=$3,last_health_error_code=$2,next_health_check_at=$4,updated_at=now() WHERE id=$1`, id, errorCode, checkedAt, nextCheckAt)
+	return wrapMutation("record provider health failure", tag.RowsAffected(), err)
 }
 
-func (p *Postgres) UpdatePool(ctx context.Context, pool domain.Pool) error {
-	tag, err := p.pool.Exec(ctx, `UPDATE pools SET name=$2,strategy=$3,model_allowlist=$4,updated_at=now() WHERE id=$1`, pool.ID, pool.Name, pool.Strategy, nonNilStrings(pool.ModelAllowlist))
-	return wrapMutation("update pool", tag.RowsAffected(), err)
-}
-
-func (p *Postgres) ListPools(ctx context.Context) ([]domain.Pool, error) {
-	rows, err := p.pool.Query(ctx, `SELECT id,name,provider,strategy,model_allowlist,created_at,updated_at FROM pools ORDER BY created_at`)
+func (p *Postgres) ClaimProviderHealthChecks(ctx context.Context, limit int, now, claimedUntil time.Time) ([]domain.ProviderAccount, error) {
+	rows, err := p.pool.Query(ctx, `WITH due AS (
+		SELECT id FROM provider_accounts WHERE status='active' AND (next_health_check_at IS NULL OR next_health_check_at<=$1)
+		ORDER BY next_health_check_at NULLS FIRST,id FOR UPDATE SKIP LOCKED LIMIT $2
+	) UPDATE provider_accounts a SET next_health_check_at=$3,updated_at=now() FROM due WHERE a.id=due.id
+	RETURNING a.id,a.provider,a.credential_type,a.display_name,a.credential_ciphertext,a.credential_version,a.status,
+		a.health_status,a.last_checked_at,COALESCE(a.last_health_error_code,''),a.consecutive_health_failures,a.next_health_check_at`, now, limit, claimedUntil)
 	if err != nil {
-		return nil, wrapDB("list pools", err)
+		return nil, wrapDB("claim provider health checks", err)
 	}
 	defer rows.Close()
-	var out []domain.Pool
+	var accounts []domain.ProviderAccount
 	for rows.Next() {
-		var pool domain.Pool
-		if err = rows.Scan(&pool.ID, &pool.Name, &pool.Provider, &pool.Strategy, &pool.ModelAllowlist, &pool.CreatedAt, &pool.UpdatedAt); err != nil {
-			return nil, wrapDB("scan pool", err)
+		var account domain.ProviderAccount
+		if err = rows.Scan(&account.ID, &account.Provider, &account.CredentialType, &account.DisplayName, &account.CredentialCiphertext, &account.CredentialVersion, &account.Status,
+			&account.HealthStatus, &account.LastCheckedAt, &account.LastHealthErrorCode, &account.ConsecutiveFailures, &account.NextHealthCheckAt); err != nil {
+			return nil, wrapDB("scan provider health check", err)
 		}
-		out = append(out, pool)
+		accounts = append(accounts, account)
 	}
-	if err = rows.Err(); err != nil {
-		return nil, wrapDB("list pools", err)
-	}
-	poolIndexes := make(map[string]int, len(out))
-	for i := range out {
-		poolIndexes[out[i].ID] = i
-	}
-	memberRows, queryErr := p.pool.Query(ctx, `SELECT pool_id,provider_account_id,weight,priority,enabled FROM pool_accounts ORDER BY priority,provider_account_id`)
-	if queryErr != nil {
-		return nil, wrapDB("list pool accounts", queryErr)
-	}
-	defer memberRows.Close()
-	for memberRows.Next() {
-		var member domain.PoolAccount
-		if queryErr = memberRows.Scan(&member.PoolID, &member.ProviderAccountID, &member.Weight, &member.Priority, &member.Enabled); queryErr != nil {
-			return nil, wrapDB("scan pool account", queryErr)
-		}
-		if index, ok := poolIndexes[member.PoolID]; ok {
-			out[index].Accounts = append(out[index].Accounts, member)
-		}
-	}
-	if queryErr = memberRows.Err(); queryErr != nil {
-		return nil, wrapDB("list pool accounts", queryErr)
-	}
-	return out, nil
-}
-
-func (p *Postgres) AddPoolAccount(ctx context.Context, membership domain.PoolAccount) error {
-	tag, err := p.pool.Exec(ctx, `INSERT INTO pool_accounts(pool_id,provider_account_id,weight,priority,enabled)
-		SELECT $1,$2,$3,$4,$5 FROM pools p JOIN provider_accounts a ON a.id=$2 WHERE p.id=$1 AND p.provider=a.provider
-		ON CONFLICT(pool_id,provider_account_id) DO UPDATE SET weight=excluded.weight,priority=excluded.priority,enabled=excluded.enabled`,
-		membership.PoolID, membership.ProviderAccountID, membership.Weight, membership.Priority, membership.Enabled)
-	return wrapMutation("add pool account", tag.RowsAffected(), err)
-}
-
-func (p *Postgres) CreateAPIKeyAndBind(ctx context.Context, key domain.APIKey) (string, error) {
-	tx, err := p.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
-	if err != nil {
-		return "", wrapDB("begin API key assignment", err)
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(731242002)`); err != nil {
-		return "", wrapDB("lock API key assignment", err)
-	}
-	accountID, err := selectAccountForUpdate(ctx, tx, key.PoolID, "")
-	if err != nil {
-		return "", err
-	}
-	_, err = tx.Exec(ctx, `INSERT INTO api_keys(id,pool_id,employee_name,key_hmac,key_hint,scopes,rate_limit,expires_at)
-		VALUES($1,$2,$3,$4,$5,$6,$7,$8)`, key.ID, key.PoolID, key.EmployeeName, key.KeyHMAC, key.KeyHint, nonNilStrings(key.Scopes), key.RateLimit, key.ExpiresAt)
-	if err == nil {
-		_, err = tx.Exec(ctx, `INSERT INTO api_key_account_bindings(api_key_id,provider_account_id) VALUES($1,$2)`, key.ID, accountID)
-	}
-	if err != nil {
-		return "", wrapDB("create API key", err)
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return "", wrapDB("commit API key assignment", err)
-	}
-	return accountID, nil
-}
-
-func selectAccountForUpdate(ctx context.Context, tx pgx.Tx, poolID, excludeID string) (string, error) {
-	var id string
-	err := tx.QueryRow(ctx, `SELECT a.id FROM provider_accounts a
-		JOIN pool_accounts pa ON pa.provider_account_id=a.id AND pa.pool_id=$1 AND pa.enabled
-		WHERE a.id <> COALESCE(NULLIF($2,'')::uuid,'00000000-0000-0000-0000-000000000000'::uuid)
-		AND (a.status='active' OR (a.status='cooling_down' AND a.cooldown_until<=now()))
-		AND (SELECT count(*) FROM api_key_account_bindings b JOIN api_keys k ON k.id=b.api_key_id
-		     WHERE b.provider_account_id=a.id AND k.revoked_at IS NULL AND (k.expires_at IS NULL OR k.expires_at>now()))
-		    < (SELECT max_api_keys_per_account FROM global_settings WHERE singleton)
-		ORDER BY (SELECT count(*) FROM api_key_account_bindings b JOIN api_keys k ON k.id=b.api_key_id
-		  WHERE b.provider_account_id=a.id AND k.revoked_at IS NULL AND (k.expires_at IS NULL OR k.expires_at>now())) ASC,
-		 pa.priority ASC,
-		 random()
-		FOR UPDATE OF a LIMIT 1`, poolID, excludeID).Scan(&id)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return "", ErrCapacityExhausted
-	}
-	return id, wrapDB("select provider account", err)
-}
-
-func (p *Postgres) ListAPIKeys(ctx context.Context) ([]domain.APIKey, error) {
-	rows, err := p.pool.Query(ctx, `SELECT k.id,k.pool_id,b.provider_account_id,k.employee_name,k.key_hint,k.scopes,k.rate_limit,k.expires_at,k.revoked_at,k.last_used_at,k.created_at FROM api_keys k JOIN api_key_account_bindings b ON b.api_key_id=k.id ORDER BY k.created_at DESC`)
-	if err != nil {
-		return nil, wrapDB("list API keys", err)
-	}
-	defer rows.Close()
-	var out []domain.APIKey
-	for rows.Next() {
-		var key domain.APIKey
-		if err = rows.Scan(&key.ID, &key.PoolID, &key.ProviderAccountID, &key.EmployeeName, &key.KeyHint, &key.Scopes, &key.RateLimit, &key.ExpiresAt, &key.RevokedAt, &key.LastUsedAt, &key.CreatedAt); err != nil {
-			return nil, wrapDB("scan API key", err)
-		}
-		out = append(out, key)
-	}
-	return out, wrapDB("list API keys", rows.Err())
-}
-
-func (p *Postgres) RevokeAPIKey(ctx context.Context, id string) error {
-	tag, err := p.pool.Exec(ctx, `UPDATE api_keys SET revoked_at=now() WHERE id=$1 AND revoked_at IS NULL`, id)
-	return wrapMutation("revoke API key", tag.RowsAffected(), err)
-}
-
-func (p *Postgres) ResolveAPIKey(ctx context.Context, digest []byte) (domain.KeyRoute, error) {
-	var route domain.KeyRoute
-	err := p.pool.QueryRow(ctx, `SELECT k.id,k.pool_id,k.employee_name,k.key_hint,k.scopes,k.rate_limit,k.expires_at,k.revoked_at,k.last_used_at,k.created_at,
-		p.id,p.name,p.provider,p.strategy,p.model_allowlist,p.created_at,p.updated_at,
-		a.id,a.provider,a.credential_type,a.display_name,a.credential_ciphertext,a.credential_version,a.status,a.max_api_keys,a.quota_snapshot,a.cooldown_until,a.last_success_at,a.last_failure_at,a.created_at,a.updated_at,
-		pa.enabled
-		FROM api_keys k JOIN pools p ON p.id=k.pool_id JOIN api_key_account_bindings b ON b.api_key_id=k.id JOIN provider_accounts a ON a.id=b.provider_account_id
-		JOIN pool_accounts pa ON pa.pool_id=p.id AND pa.provider_account_id=a.id
-		WHERE k.key_hmac=$1 AND k.revoked_at IS NULL AND (k.expires_at IS NULL OR k.expires_at>now())`, digest).Scan(
-		&route.Key.ID, &route.Key.PoolID, &route.Key.EmployeeName, &route.Key.KeyHint, &route.Key.Scopes, &route.Key.RateLimit, &route.Key.ExpiresAt, &route.Key.RevokedAt, &route.Key.LastUsedAt, &route.Key.CreatedAt,
-		&route.Pool.ID, &route.Pool.Name, &route.Pool.Provider, &route.Pool.Strategy, &route.Pool.ModelAllowlist, &route.Pool.CreatedAt, &route.Pool.UpdatedAt,
-		&route.Account.ID, &route.Account.Provider, &route.Account.CredentialType, &route.Account.DisplayName, &route.Account.CredentialCiphertext, &route.Account.CredentialVersion, &route.Account.Status, &route.Account.MaxAPIKeys, &route.Account.QuotaSnapshot, &route.Account.CooldownUntil, &route.Account.LastSuccessAt, &route.Account.LastFailureAt, &route.Account.CreatedAt, &route.Account.UpdatedAt,
-		&route.MembershipEnabled)
-	return route, wrapDB("resolve API key", err)
-}
-
-func (p *Postgres) ResolveSessionAccount(ctx context.Context, keyID string, sessionHash []byte) (domain.ProviderAccount, error) {
-	var account domain.ProviderAccount
-	err := p.pool.QueryRow(ctx, `SELECT a.id,a.provider,a.credential_type,a.display_name,a.credential_ciphertext,a.credential_version,a.status,a.max_api_keys,
-		a.quota_snapshot,a.cooldown_until,a.last_success_at,a.last_failure_at,a.created_at,a.updated_at
-		FROM session_bindings s JOIN provider_accounts a ON a.id=s.provider_account_id
-		JOIN pool_accounts pa ON pa.pool_id=s.pool_id AND pa.provider_account_id=a.id AND pa.enabled
-		WHERE s.api_key_id=$1 AND s.session_hash=$2 AND s.expires_at>now()`, keyID, sessionHash).Scan(
-		&account.ID, &account.Provider, &account.CredentialType, &account.DisplayName, &account.CredentialCiphertext, &account.CredentialVersion, &account.Status, &account.MaxAPIKeys,
-		&account.QuotaSnapshot, &account.CooldownUntil, &account.LastSuccessAt, &account.LastFailureAt, &account.CreatedAt, &account.UpdatedAt)
-	return account, wrapDB("resolve session account", err)
-}
-
-func (p *Postgres) SaveSessionBinding(ctx context.Context, keyID, poolID string, sessionHash []byte, accountID string, expiresAt time.Time) error {
-	_, err := p.pool.Exec(ctx, `INSERT INTO session_bindings(api_key_id,pool_id,session_hash,provider_account_id,expires_at)
-		VALUES($1,$2,$3,$4,$5) ON CONFLICT(api_key_id,session_hash) DO UPDATE SET expires_at=GREATEST(session_bindings.expires_at,excluded.expires_at)
-		WHERE session_bindings.provider_account_id=excluded.provider_account_id`, keyID, poolID, sessionHash, accountID, expiresAt)
-	return wrapDB("save session binding", err)
-}
-
-func (p *Postgres) ReassignAPIKey(ctx context.Context, keyID, poolID, excludeID string) (domain.ProviderAccount, error) {
-	tx, err := p.pool.Begin(ctx)
-	if err != nil {
-		return domain.ProviderAccount{}, wrapDB("begin API key reassignment", err)
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(731242002)`); err != nil {
-		return domain.ProviderAccount{}, wrapDB("lock API key reassignment", err)
-	}
-	id, err := selectAccountForUpdate(ctx, tx, poolID, excludeID)
-	if err != nil {
-		return domain.ProviderAccount{}, err
-	}
-	_, err = tx.Exec(ctx, `UPDATE api_key_account_bindings SET provider_account_id=$2,assigned_at=now() WHERE api_key_id=$1`, keyID, id)
-	if err != nil {
-		return domain.ProviderAccount{}, wrapDB("reassign API key", err)
-	}
-	var account domain.ProviderAccount
-	err = tx.QueryRow(ctx, `SELECT id,provider,credential_type,display_name,credential_ciphertext,credential_version,status,max_api_keys,quota_snapshot,cooldown_until,last_success_at,last_failure_at,created_at,updated_at FROM provider_accounts WHERE id=$1`, id).Scan(
-		&account.ID, &account.Provider, &account.CredentialType, &account.DisplayName, &account.CredentialCiphertext, &account.CredentialVersion, &account.Status, &account.MaxAPIKeys, &account.QuotaSnapshot, &account.CooldownUntil, &account.LastSuccessAt, &account.LastFailureAt, &account.CreatedAt, &account.UpdatedAt)
-	if err != nil {
-		return domain.ProviderAccount{}, wrapDB("read reassigned account", err)
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return domain.ProviderAccount{}, wrapDB("commit API key reassignment", err)
-	}
-	return account, nil
-}
-
-func (p *Postgres) TouchAPIKey(ctx context.Context, id string) error {
-	_, err := p.pool.Exec(ctx, `UPDATE api_keys SET last_used_at=now() WHERE id=$1`, id)
-	return wrapDB("touch API key", err)
-}
-
-func (p *Postgres) AddUsage(ctx context.Context, keyID string, eventHash []byte, day time.Time, input, output int64) error {
-	if input < 0 || output < 0 {
-		return fmt.Errorf("token counts cannot be negative")
-	}
-	if len(eventHash) == 0 {
-		return fmt.Errorf("usage event hash is required")
-	}
-	tx, err := p.pool.Begin(ctx)
-	if err != nil {
-		return wrapDB("begin usage transaction", err)
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-	tag, err := tx.Exec(ctx, `INSERT INTO usage_event_dedup(api_key_id,event_hash) VALUES($1,$2) ON CONFLICT DO NOTHING`, keyID, eventHash)
-	if err != nil {
-		return wrapDB("deduplicate usage event", err)
-	}
-	if tag.RowsAffected() == 0 {
-		if err = tx.Commit(ctx); err != nil {
-			return wrapDB("commit duplicate usage event", err)
-		}
-		return nil
-	}
-	_, err = tx.Exec(ctx, `INSERT INTO api_key_usage_daily(api_key_id,usage_date,input_tokens,output_tokens)
-		VALUES($1,$2,$3,$4) ON CONFLICT(api_key_id,usage_date) DO UPDATE SET
-		input_tokens=api_key_usage_daily.input_tokens+excluded.input_tokens,
-		output_tokens=api_key_usage_daily.output_tokens+excluded.output_tokens,updated_at=now()`, keyID, day.UTC(), input, output)
-	if err != nil {
-		return wrapDB("add usage", err)
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return wrapDB("commit usage transaction", err)
-	}
-	return nil
-}
-
-func (p *Postgres) ListUsage(ctx context.Context, filter domain.UsageFilter) ([]domain.UsageRow, error) {
-	rows, err := p.pool.Query(ctx, `SELECT u.api_key_id,k.employee_name,u.usage_date,u.input_tokens,u.output_tokens
-		FROM api_key_usage_daily u JOIN api_keys k ON k.id=u.api_key_id
-		WHERE (NULLIF($1,'')::uuid IS NULL OR u.api_key_id=NULLIF($1,'')::uuid) AND ($2::timestamptz IS NULL OR u.usage_date >= $2::date) AND ($3::timestamptz IS NULL OR u.usage_date <= $3::date)
-		ORDER BY u.usage_date DESC,k.employee_name`, filter.APIKeyID, filter.From, filter.To)
-	if err != nil {
-		return nil, wrapDB("list usage", err)
-	}
-	defer rows.Close()
-	var out []domain.UsageRow
-	for rows.Next() {
-		var row domain.UsageRow
-		if err = rows.Scan(&row.APIKeyID, &row.EmployeeName, &row.UsageDate, &row.InputTokens, &row.OutputTokens); err != nil {
-			return nil, wrapDB("scan usage", err)
-		}
-		out = append(out, row)
-	}
-	return out, wrapDB("list usage", rows.Err())
-}
-
-func (p *Postgres) Audit(ctx context.Context, event domain.AuditEvent) error {
-	_, err := p.pool.Exec(ctx, `INSERT INTO audit_events(actor,action,target_type,target_id,result) VALUES($1,$2,$3,$4,$5)`, event.Actor, event.Action, event.TargetType, event.TargetID, event.Result)
-	return wrapDB("write audit event", err)
-}
-
-func nullableJSON(raw []byte) any {
-	if len(raw) == 0 {
-		return nil
-	}
-	return string(raw)
-}
-func nonNilStrings(values []string) []string {
-	if values == nil {
-		return []string{}
-	}
-	return values
-}
-
-func wrapMutation(action string, affected int64, err error) error {
-	if err != nil {
-		return wrapDB(action, err)
-	}
-	if affected == 0 {
-		return ErrNotFound
-	}
-	return nil
-}
-
-func wrapDB(action string, err error) error {
-	if err == nil {
-		return nil
-	}
-	if errors.Is(err, pgx.ErrNoRows) {
-		return ErrNotFound
-	}
-	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
-		return ErrConflict
-	}
-	return fmt.Errorf("%s: %w", action, err)
+	return accounts, wrapDB("claim provider health checks", rows.Err())
 }

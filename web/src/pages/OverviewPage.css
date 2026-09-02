@@ -1,0 +1,28 @@
+.overview-grid { margin-bottom: 16px; display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(360px, .8fr); gap: 16px; }
+.overview-panel { min-width: 0; overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius-panel); background: var(--panel); }
+.overview-panel > header { min-height: 68px; padding: 16px 18px; display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; border-bottom: 1px solid var(--line); }
+.overview-panel > header h3 { margin: 0 0 5px; font-size: 14px; }
+.overview-panel > header p { margin: 0; color: var(--ink-muted); font-size: 11px; }
+.overview-panel > header a { color: var(--ink-muted); font-size: 11px; text-decoration: none; }
+.overview-panel > header a:hover { color: var(--ink); text-decoration: underline; text-underline-offset: 4px; }
+.overview-panel .state-panel { min-height: 260px; border: 0; border-radius: inherit; }
+.overview-panel--table { margin-top: 0; }
+.overview-panel--table .table-frame { border: 0; border-radius: inherit; }
+.capacity-list { padding: 4px 18px; }
+.capacity-list article { min-height: 62px; display: grid; grid-template-columns: minmax(150px, 1fr) auto; align-items: center; gap: 16px; border-bottom: 1px solid var(--line); }
+.capacity-list article:last-child { border-bottom: 0; }
+.capacity-list strong,
+.capacity-list small { display: block; }
+.capacity-list strong { font-size: 12px; }
+.capacity-list small { margin-top: 4px; color: var(--ink-muted); font-size: 9px; text-transform: capitalize; }
+.capacity-count { color: var(--ink-muted); font: 10px/1 "Geist Mono", "SFMono-Regular", monospace; text-align: right; }
+.usage-bars { padding: 14px 18px 18px; display: grid; gap: 16px; }
+.usage-bars article > div:first-child { margin-bottom: 7px; display: flex; justify-content: space-between; gap: 12px; }
+.usage-bars strong { font-size: 11px; }
+.usage-bars span { color: var(--ink-soft); font: 10px/1 "Geist Mono", "SFMono-Regular", monospace; }
+.usage-bars small { display: block; margin-top: 6px; color: var(--ink-muted); font-size: 9px; }
+.usage-bar { height: 6px; overflow: hidden; border-radius: 999px; background: var(--panel-nested); }
+.usage-bar i { display: block; height: 100%; border-radius: inherit; background: var(--acid-deep); }
+
+@media (max-width: 1180px) { .overview-grid { grid-template-columns: 1fr; } }
+@media (max-width: 480px) { .capacity-list article { grid-template-columns: minmax(130px, 1fr) auto; } .capacity-count { display: none; } }

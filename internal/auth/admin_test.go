@@ -1,6 +1,8 @@
 package auth
 
 import (
+	"bytes"
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -9,17 +11,28 @@ import (
 
 func TestAdminSessionLifecycle(t *testing.T) {
 	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	sessions := NewAdminSessions("admin", "secret", time.Hour, true)
+	backend := newMemoryAdminSessionStore()
+	sessions := NewAdminSessions("admin", "secret", time.Hour, true, bytes.Repeat([]byte{1}, 32), backend)
 	sessions.now = func() time.Time { return now }
-	if _, ok := sessions.Authenticate("admin", "wrong", "127.0.0.1"); ok {
+	if _, ok, err := sessions.Authenticate(context.Background(), "admin", "wrong", "127.0.0.1"); err != nil || ok {
 		t.Fatal("wrong password authenticated")
 	}
-	id, ok := sessions.Authenticate("admin", "secret", "127.0.0.1")
-	if !ok || id == "" {
+	id, ok, err := sessions.Authenticate(context.Background(), "admin", "secret", "127.0.0.1")
+	if err != nil || !ok || id == "" {
 		t.Fatal("valid credentials were rejected")
 	}
-	if !sessions.Valid(id) {
+	if valid, _ := sessions.Valid(context.Background(), id); !valid {
 		t.Fatal("session is not valid")
+	}
+	restarted := NewAdminSessions("admin", "secret", time.Hour, true, bytes.Repeat([]byte{1}, 32), backend)
+	restarted.now = func() time.Time { return now }
+	if valid, _ := restarted.Valid(context.Background(), id); !valid {
+		t.Fatal("session did not survive a process restart")
+	}
+	changedPassword := NewAdminSessions("admin", "changed", time.Hour, true, bytes.Repeat([]byte{1}, 32), backend)
+	changedPassword.now = func() time.Time { return now }
+	if valid, _ := changedPassword.Valid(context.Background(), id); valid {
+		t.Fatal("session remained valid after credentials changed")
 	}
 	recorder := httptest.NewRecorder()
 	sessions.SetCookie(recorder, id)
@@ -27,18 +40,27 @@ func TestAdminSessionLifecycle(t *testing.T) {
 	if !cookie.HttpOnly || !cookie.Secure || cookie.SameSite != 3 {
 		t.Fatalf("insecure cookie: %#v", cookie)
 	}
+	if valid, _ := sessions.Valid(context.Background(), id+"tampered"); valid {
+		t.Fatal("tampered session was accepted")
+	}
+	if err = sessions.Revoke(context.Background(), id); err != nil {
+		t.Fatal(err)
+	}
+	if valid, _ := sessions.Valid(context.Background(), id); valid {
+		t.Fatal("revoked session remained valid")
+	}
 	now = now.Add(2 * time.Hour)
-	if sessions.Valid(id) {
+	if valid, _ := restarted.Valid(context.Background(), id); valid {
 		t.Fatal("expired session remained valid")
 	}
 }
 
 func TestAdminLoginFailureLimit(t *testing.T) {
-	sessions := NewAdminSessions("admin", "secret", time.Hour, false)
+	sessions := NewAdminSessions("admin", "secret", time.Hour, false, bytes.Repeat([]byte{1}, 32))
 	for i := 0; i < 5; i++ {
-		sessions.Authenticate("guessed-user-"+string(rune('a'+i)), "bad", "ip")
+		_, _, _ = sessions.Authenticate(context.Background(), "guessed-user-"+string(rune('a'+i)), "bad", "ip")
 	}
-	if _, ok := sessions.Authenticate("admin", "secret", "ip"); ok {
+	if _, ok, _ := sessions.Authenticate(context.Background(), "admin", "secret", "ip"); ok {
 		t.Fatal("failure limit was not enforced")
 	}
 }

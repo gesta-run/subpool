@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useState } from 'react'
 import { APIError, errorMessage, request } from './api'
+import { AppSkeleton } from './components/PageSkeleton'
 import { Shell, type PageID } from './components/Shell'
 import { AccountsPage } from './pages/AccountsPage'
 import { APIKeysPage } from './pages/APIKeysPage'
 import { LoginPage } from './pages/LoginPage'
+import { OverviewPage } from './pages/OverviewPage'
 import { PoolsPage } from './pages/PoolsPage'
 import { UsagePage } from './pages/UsagePage'
 import { SettingsPage } from './pages/SettingsPage'
@@ -12,7 +14,16 @@ type AuthState = 'checking' | 'authenticated' | 'anonymous'
 
 function pageFromHash(): PageID {
   const value = window.location.hash.replace(/^#\//, '')
-  return ['accounts', 'pools', 'api-keys', 'usage', 'settings'].includes(value) ? value as PageID : 'accounts'
+  return ['overview', 'accounts', 'pools', 'api-keys', 'usage', 'settings'].includes(value) ? value as PageID : 'accounts'
+}
+
+function CurrentPage({ page }: { page: PageID }) {
+  if (page === 'overview') return <OverviewPage />
+  if (page === 'accounts') return <AccountsPage />
+  if (page === 'pools') return <PoolsPage />
+  if (page === 'api-keys') return <APIKeysPage />
+  if (page === 'usage') return <UsagePage />
+  return <SettingsPage />
 }
 
 export default function App() {
@@ -38,6 +49,11 @@ export default function App() {
 
   useEffect(() => { void checkSession() }, [checkSession])
   useEffect(() => {
+    const onUnauthorized = () => setAuth('anonymous')
+    window.addEventListener('subpool:unauthorized', onUnauthorized)
+    return () => window.removeEventListener('subpool:unauthorized', onUnauthorized)
+  }, [])
+  useEffect(() => {
     const onHashChange = () => setPage(pageFromHash())
     window.addEventListener('hashchange', onHashChange)
     return () => window.removeEventListener('hashchange', onHashChange)
@@ -48,7 +64,7 @@ export default function App() {
   }
 
   if (auth === 'checking') {
-    return <main className="boot-screen" aria-live="polite"><span className="brand__mark" aria-hidden="true"><i /><i /><i /></span><p>Connecting to Subpool…</p></main>
+    return <AppSkeleton />
   }
 
   if (auth === 'anonymous') {
@@ -57,7 +73,7 @@ export default function App() {
 
   return (
     <Shell activePage={page} onNavigate={setPage} onLogout={() => void logout()}>
-      {page === 'accounts' ? <AccountsPage /> : page === 'pools' ? <PoolsPage /> : page === 'api-keys' ? <APIKeysPage /> : page === 'usage' ? <UsagePage /> : <SettingsPage />}
+      <CurrentPage page={page} />
     </Shell>
   )
 }

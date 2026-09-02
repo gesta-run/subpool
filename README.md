@@ -1,38 +1,71 @@
-# Subpool
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="web/public/brand/subpool-by-gesta-inverse.svg">
+    <img src="web/public/brand/subpool-by-gesta.svg" alt="Subpool by Gesta" width="460">
+  </picture>
+</p>
 
-Subpool is a self-hosted gateway for sharing Codex subscription accounts through employee-specific API keys. It provides an OpenAI-compatible data plane and a small administration console without storing prompts, responses, or source code.
+<p align="center">
+  Enterprise AI subscription quota allocation and governance, self-hosted.
+</p>
 
-The first release supports Codex subscriptions. Claude Code, official provider API keys, and additional provider adapters are planned for later phases.
+<p align="center">
+  <img alt="Go 1.24" src="https://img.shields.io/badge/Go-1.24-00ADD8?logo=go&logoColor=white">
+  <img alt="React" src="https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black">
+  <img alt="PostgreSQL" src="https://img.shields.io/badge/PostgreSQL-17-4169E1?logo=postgresql&logoColor=white">
+  <img alt="Docker Compose" src="https://img.shields.io/badge/Deploy-Docker_Compose-2496ED?logo=docker&logoColor=white">
+</p>
 
-## Run with Docker Compose
+Subpool is a self-hosted control plane for allocating, governing, and auditing AI subscription capacity across teams. Administrators combine authorized subscription and API accounts into pools, distribute employee-specific keys, monitor remaining quota, and expose one consistent API without storing conversation content.
 
-Requirements: Docker Engine with the Compose plugin.
+<p align="center">
+  <img src="docs/images/subpool-accounts-console.png" alt="Subpool provider accounts console">
+</p>
+
+## Features
+
+- Pool authorized subscription and API capacity behind one managed endpoint.
+- Allocate employee-specific keys across healthy provider accounts.
+- Monitor account health, remaining subscription capacity, and reset availability.
+- Keep key-to-account assignments visible and auditable.
+- Prefer subscription capacity and fall back to paid API accounts with the same employee key.
+- Rate-limit, expire, and revoke employee access independently.
+- Expose OpenAI-compatible Responses and Chat Completions APIs.
+- Track aggregate input and output usage per API key.
+- Encrypt upstream credentials and never persist prompts, responses, or source code.
+
+## Architecture
+
+![Subpool architecture](design/architecture/reference-layout.svg)
+
+Subpool is a single Go service with an embedded React console and PostgreSQL persistence.
+
+## Quick start
+
+Requires Docker Engine and Docker Compose.
 
 ```bash
 cp .env.example .env
-# Run this twice and use a different result for each key in .env.
+
+# Generate independent secrets and place them in .env.
 openssl rand -base64 32
+openssl rand -base64 32
+openssl rand -hex 32
+
 docker compose up -d --build
 ```
 
-Replace every `replace-with-*` value in `.env` before starting. The console is available at `SUBPOOL_PUBLIC_URL`, or at `http://localhost:8080` with the example port mapping.
+Replace every `replace-with-*` value, then open [http://localhost:8080](http://localhost:8080) and sign in with the administrator credentials from `.env`.
 
-`SUBPOOL_PUBLIC_URL` is not tied to a Gesta-owned domain. Use any valid domain or internal address. Configure an origin only, without a path prefix, query, fragment, or embedded credentials. For HTTPS, terminate TLS at a reverse proxy and forward traffic to port `8080`.
+## Connect and use
 
-If a reverse proxy supplies `X-Forwarded-For`, add only that proxy network to the comma-separated `SUBPOOL_TRUSTED_PROXY_CIDRS` setting. Leave it empty for direct access. Forwarded client addresses from untrusted peers are ignored.
+1. Open **Accounts** and connect a Codex or OpenAI-compatible account.
+2. Create a pool and add the account.
+3. Create an employee API key for the pool.
 
-The Compose stack contains exactly two services:
+Codex OAuth uses `http://localhost:1455/auth/callback`. Forward port `1455` when the Docker host is remote.
 
-- `subpool`: the Go gateway and embedded React console.
-- `postgres`: persistent configuration and aggregate token usage.
-
-Codex OAuth uses OpenAI's registered loopback callback at `http://localhost:1455/auth/callback`. Keep host port `1455` available and exposed to the Subpool container.
-
-Administrator credentials come from `SUBPOOL_ADMIN_USERNAME` and `SUBPOOL_ADMIN_PASSWORD`. Changing either value and restarting the Subpool container invalidates previous login sessions.
-
-## Employee client setup
-
-Create an employee API key in the console, then configure Codex CLI:
+Configure Codex CLI:
 
 ```toml
 model_provider = "subpool"
@@ -45,47 +78,35 @@ wire_api = "responses"
 ```
 
 ```bash
-export SUBPOOL_API_KEY="sk-subpool-example-not-a-real-key"
+export SUBPOOL_API_KEY="sk-example-not-a-real-key"
 ```
+
+Available endpoints include `POST /v1/responses`, `POST /v1/chat/completions`, `GET /v1/models`, `GET /healthz`, `GET /readyz`, and `GET /metrics`.
+
+## Deployment notes
+
+- Terminate TLS at a reverse proxy and set `SUBPOOL_PUBLIC_URL` to the public origin.
+- Back up PostgreSQL together with `SUBPOOL_CREDENTIAL_KEY` and `SUBPOOL_API_KEY_HMAC_KEY`.
+- Use PostgreSQL for shared authentication, rate-limit, assignment, and health state across replicas.
+
+See [.env.example](.env.example) for configuration options.
 
 ## Development
 
-Start the Go server on port `8080`, then run the Vite development server:
-
 ```bash
+docker compose up -d --build
 make web-install
 make dev
 ```
 
-Vite proxies `/api`, `/v1`, and `/healthz` to the Go server.
-
-Run targeted checks:
+Before opening a pull request:
 
 ```bash
 make web-test
 make web-build
+go test ./...
 ```
 
-## Upgrade
+## Terms
 
-Back up PostgreSQL and securely back up the deployment secrets before every upgrade. The database dump is not sufficient on its own: existing upstream credentials require the exact `SUBPOOL_CREDENTIAL_KEY`, and existing employee API keys require the exact `SUBPOOL_API_KEY_HMAC_KEY`. Preserve those values in an encrypted secret manager or an access-controlled backup; do not generate replacements during restore.
-
-```bash
-docker compose exec -T postgres sh -c 'pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB"' > subpool-backup.sql
-docker compose build --pull subpool
-docker compose up -d
-```
-
-Database migrations run when the Subpool container starts.
-
-## Restore
-
-Restore the saved deployment secrets to `.env` first, including the original `SUBPOOL_CREDENTIAL_KEY` and `SUBPOOL_API_KEY_HMAC_KEY`. Then restore the database into an empty PostgreSQL database after stopping the application container:
-
-```bash
-docker compose stop subpool
-docker compose exec -T postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"' < subpool-backup.sql
-docker compose start subpool
-```
-
-If either cryptographic key is missing or changed, upstream credentials or previously issued employee API keys cannot be recovered from the database backup.
+Subpool is independent and self-hosted. Use only accounts you are authorized to manage, and review each upstream provider's terms before sharing access.

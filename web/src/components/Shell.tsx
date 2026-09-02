@@ -1,16 +1,18 @@
 import { useEffect, useState, type ComponentType, type SVGProps } from 'react'
+import { GestaCredit } from './GestaCredit'
 import {
   AccountIcon,
   CloseIcon,
   KeyIcon,
   LogoutIcon,
   MenuIcon,
+  OverviewIcon,
   PoolIcon,
   SettingsIcon,
   UsageIcon,
 } from './Icons'
 
-export type PageID = 'accounts' | 'pools' | 'api-keys' | 'usage' | 'settings'
+export type PageID = 'overview' | 'accounts' | 'pools' | 'api-keys' | 'usage' | 'settings'
 
 interface NavigationItem {
   id: PageID
@@ -20,6 +22,7 @@ interface NavigationItem {
 }
 
 export const navigation: NavigationItem[] = [
+  { id: 'overview', label: 'Overview', description: 'Capacity and usage', icon: OverviewIcon },
   { id: 'accounts', label: 'Accounts', description: 'Codex subscriptions', icon: AccountIcon },
   { id: 'pools', label: 'Pools', description: 'Routing groups', icon: PoolIcon },
   { id: 'api-keys', label: 'API Keys', description: 'Employee access', icon: KeyIcon },
@@ -47,14 +50,13 @@ export function Shell({ activePage, onNavigate, onLogout, children }: ShellProps
       {mobileOpen ? <button className="mobile-scrim" type="button" aria-label="Close navigation" onClick={() => setMobileOpen(false)} /> : null}
       <aside className={`sidebar ${mobileOpen ? 'sidebar--open' : ''}`} aria-label="Primary navigation">
         <div className="brand">
-          <span className="brand__mark" aria-hidden="true"><i /><i /><i /></span>
-          <div><strong>SUBPOOL</strong><span>CONTROL PLANE</span></div>
+          <img className="brand__logo" src="/brand/subpool-wordmark-inverse.svg" alt="Subpool" />
         </div>
         <button className="sidebar__close icon-button" type="button" aria-label="Close navigation" onClick={() => setMobileOpen(false)}>
           <CloseIcon />
         </button>
         <nav className="nav-list">
-          {navigation.map((item, index) => {
+          {navigation.map((item) => {
             const Icon = item.icon
             return (
               <a
@@ -64,17 +66,13 @@ export function Shell({ activePage, onNavigate, onLogout, children }: ShellProps
                 aria-current={activePage === item.id ? 'page' : undefined}
                 onClick={() => onNavigate(item.id)}
               >
-                <span className="nav-item__index">0{index + 1}</span>
                 <Icon className="nav-item__icon" />
                 <span><strong>{item.label}</strong><small>{item.description}</small></span>
               </a>
             )
           })}
         </nav>
-        <div className="sidebar__footer">
-          <span className="status-dot" />
-          <span><strong>Gateway online</strong><small>Single instance</small></span>
-        </div>
+        <GestaCredit />
       </aside>
       <div className="shell-content">
         <header className="topbar">
@@ -82,7 +80,6 @@ export function Shell({ activePage, onNavigate, onLogout, children }: ShellProps
             <MenuIcon />
           </button>
           <div className="topbar__title">
-            <span>Administration / {active.label}</span>
             <h1>{active.label}</h1>
           </div>
           <button className="logout-button button button--ghost" type="button" onClick={onLogout}>

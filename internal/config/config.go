@@ -26,6 +26,7 @@ type Config struct {
 	CodexUpstreamURL     string
 	CodexRedirectURL     string
 	CodexCallbackAddress string
+	CodexExecutable      string
 	TrustedProxyCIDRs    []string
 }
 
@@ -42,6 +43,7 @@ func Load() (Config, error) {
 		CodexTokenURL:        envOr("SUBPOOL_CODEX_TOKEN_URL", "https://auth.openai.com/oauth/token"),
 		CodexUpstreamURL:     strings.TrimRight(envOr("SUBPOOL_CODEX_UPSTREAM_URL", "https://chatgpt.com/backend-api/codex"), "/"),
 		CodexCallbackAddress: envOr("SUBPOOL_CODEX_CALLBACK_ADDRESS", ":1455"),
+		CodexExecutable:      envOr("SUBPOOL_CODEX_EXECUTABLE", "codex"),
 	}
 
 	var err error

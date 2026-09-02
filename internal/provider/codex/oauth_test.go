@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestOAuthStartAndExchange(t *testing.T) {
@@ -22,7 +23,7 @@ func TestOAuthStartAndExchange(t *testing.T) {
 	}))
 	defer tokenServer.Close()
 	oauth := NewOAuth(OAuthConfig{ClientID: "client", AuthURL: "https://auth.example/authorize", TokenURL: tokenServer.URL, RedirectURL: "https://subpool.example/callback"})
-	authURL, err := oauth.Start("Primary", 3)
+	authURL, err := oauth.Start("Primary")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,15 +37,15 @@ func TestOAuthStartAndExchange(t *testing.T) {
 	if query.Get("code_challenge") == "" || query.Get("state") == "" {
 		t.Fatal("PKCE or state is missing")
 	}
-	credentials, display, maxKeys, err := oauth.Exchange(context.Background(), query.Get("state"), "authorization-code")
+	credentials, display, err := oauth.Exchange(context.Background(), query.Get("state"), "authorization-code")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if credentials.AccessToken != "access" || credentials.RefreshToken != "refresh" || credentials.AccountID != "acct-1" || credentials.Email != "employee@example.com" {
 		t.Fatalf("unexpected credentials: %#v", credentials)
 	}
-	if display != "Primary" || maxKeys != 3 {
-		t.Fatalf("metadata = %q, %d", display, maxKeys)
+	if display != "Primary" {
+		t.Fatalf("metadata = %q", display)
 	}
 	for key, want := range map[string]string{"grant_type": "authorization_code", "client_id": "client", "code": "authorization-code", "redirect_uri": "https://subpool.example/callback"} {
 		if got := tokenForm.Get(key); got != want {
@@ -75,12 +76,19 @@ func TestOAuthRefreshPreservesRefreshToken(t *testing.T) {
 	}
 }
 
-func TestOAuthRejectsInvalidCapacity(t *testing.T) {
-	oauth := NewOAuth(OAuthConfig{})
-	for _, value := range []int{-1, 101} {
-		if _, err := oauth.Start("", value); err == nil {
-			t.Fatalf("capacity %d accepted", value)
-		}
+func TestOAuthStartPrunesExpiredAttempts(t *testing.T) {
+	current := time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
+	oauth := NewOAuth(OAuthConfig{ClientID: "client", AuthURL: "https://auth.example/authorize"})
+	oauth.now = func() time.Time { return current }
+	if _, err := oauth.Start("Expired"); err != nil {
+		t.Fatal(err)
+	}
+	current = current.Add(11 * time.Minute)
+	if _, err := oauth.Start("Current"); err != nil {
+		t.Fatal(err)
+	}
+	if len(oauth.attempts) != 1 {
+		t.Fatalf("pending attempts = %d, want 1", len(oauth.attempts))
 	}
 }
 

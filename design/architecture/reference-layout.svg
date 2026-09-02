@@ -1,0 +1,108 @@
+<svg width="1600" height="900" viewBox="0 0 1600 900" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="header" x1="500" y1="50" x2="1550" y2="150" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#22A6F2"/>
+      <stop offset="1" stop-color="#4F46E5"/>
+    </linearGradient>
+    <linearGradient id="dataPlane" x1="500" y1="450" x2="1550" y2="850" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F2FAFF"/>
+      <stop offset="1" stop-color="#EEF2FF"/>
+    </linearGradient>
+    <clipPath id="subpoolClip">
+      <rect x="500" y="50" width="1050" height="800" rx="38"/>
+    </clipPath>
+    <filter id="shadow" x="-20%" y="-28%" width="140%" height="164%">
+      <feDropShadow dx="0" dy="10" stdDeviation="12" flood-color="#172554" flood-opacity="0.12"/>
+    </filter>
+    <marker id="arrow" markerWidth="14" markerHeight="14" refX="12" refY="7" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M1 1L13 7L1 13Z" fill="#172554"/>
+    </marker>
+    <marker id="arrowBlue" markerWidth="14" markerHeight="14" refX="12" refY="7" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M1 1L13 7L1 13Z" fill="#4F46E5"/>
+    </marker>
+    <style>
+      .brand { font: 750 38px Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; fill: #FFFFFF; }
+      .brandSub { font: 450 18px Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; fill: rgba(255,255,255,.84); }
+      .section { font: 750 28px Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; fill: #4F46E5; }
+      .sectionSub { font: 450 17px Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; fill: #64748B; }
+      .externalTitle { font: 720 24px Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; fill: #172554; }
+      .externalText { font: 450 17px Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; fill: #64748B; }
+      .cardTitle { font: 700 19px Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; fill: #FFFFFF; }
+      .cardText { font: 450 15px Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; fill: rgba(255,255,255,.8); }
+      .flow { fill: none; stroke: #172554; stroke-width: 3; stroke-linecap: round; marker-end: url(#arrow); }
+      .flowBlue { fill: none; stroke: #4F46E5; stroke-width: 3; stroke-linecap: round; marker-end: url(#arrowBlue); }
+      .flowSoft { fill: none; stroke: #4F46E5; stroke-width: 2.5; stroke-dasharray: 8 9; marker-end: url(#arrowBlue); }
+    </style>
+  </defs>
+
+  <rect width="1600" height="900" fill="#FFFFFF"/>
+
+  <rect x="50" y="220" width="390" height="160" rx="28" fill="#F2F8FF" filter="url(#shadow)"/>
+  <rect x="82" y="264" width="72" height="60" rx="13" fill="#FFFFFF" stroke="#A9D9F8" stroke-width="2"/>
+  <rect x="82" y="264" width="72" height="16" rx="8" fill="#22A6F2"/>
+  <circle cx="94" cy="272" r="2.5" fill="#FFFFFF"/>
+  <circle cx="103" cy="272" r="2.5" fill="#FFFFFF" fill-opacity=".65"/>
+  <text x="180" y="282" class="externalTitle">Administrator</text>
+  <text x="180" y="314" class="externalText">Manage accounts and API keys</text>
+
+  <rect x="50" y="520" width="390" height="160" rx="28" fill="#F2F8FF" filter="url(#shadow)"/>
+  <rect x="82" y="564" width="72" height="60" rx="13" fill="#FFFFFF" stroke="#A9D9F8" stroke-width="2"/>
+  <path d="M104 580L94 594L104 608M132 580L142 594L132 608M124 576L112 612" stroke="#4F46E5" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="180" y="582" class="externalTitle">Codex / API Client</text>
+  <text x="180" y="614" class="externalText">Call the unified API with sk- keys</text>
+
+  <rect x="500" y="50" width="1050" height="800" rx="38" fill="#FFFFFF" stroke="#4F46E5" stroke-width="2"/>
+  <path d="M538 50H1512C1533 50 1550 67 1550 88V150H500V88C500 67 517 50 538 50Z" fill="url(#header)"/>
+  <rect x="500" y="450" width="1050" height="400" fill="url(#dataPlane)" clip-path="url(#subpoolClip)"/>
+  <line x1="500" y1="450" x2="1550" y2="450" stroke="#C7DDF8"/>
+
+  <text x="1025" y="102" text-anchor="middle" class="brand">Subpool</text>
+  <text x="1025" y="132" text-anchor="middle" class="brandSub">Pooled AI coding subscriptions behind one API</text>
+
+  <text x="550" y="215" class="section">Control Plane</text>
+  <text x="550" y="245" class="sectionSub">Configure accounts and employee access.</text>
+
+  <rect x="550" y="290" width="230" height="96" rx="18" fill="#172554" filter="url(#shadow)"/>
+  <text x="665" y="328" text-anchor="middle" class="cardTitle">React Console</text>
+  <text x="665" y="356" text-anchor="middle" class="cardText">administrator UI</text>
+
+  <rect x="860" y="290" width="230" height="96" rx="18" fill="#172554" filter="url(#shadow)"/>
+  <text x="975" y="328" text-anchor="middle" class="cardTitle">Control API</text>
+  <text x="975" y="356" text-anchor="middle" class="cardText">accounts + keys</text>
+
+  <rect x="1170" y="290" width="280" height="96" rx="18" fill="#4F46E5" filter="url(#shadow)"/>
+  <text x="1310" y="328" text-anchor="middle" class="cardTitle">PostgreSQL</text>
+  <text x="1310" y="356" text-anchor="middle" class="cardText">configuration + token usage</text>
+
+  <path class="flow" d="M790 338H845"/>
+  <path class="flowBlue" d="M1100 338H1155"/>
+
+  <text x="550" y="520" class="section">Request Routing</text>
+  <text x="550" y="550" class="sectionSub">Authenticate, select an available account and stream the response.</text>
+
+  <rect x="550" y="610" width="190" height="96" rx="18" fill="#172554" filter="url(#shadow)"/>
+  <text x="645" y="648" text-anchor="middle" class="cardTitle">Unified API</text>
+  <text x="645" y="676" text-anchor="middle" class="cardText">OpenAI compatible</text>
+
+  <rect x="780" y="610" width="190" height="96" rx="18" fill="#172554" filter="url(#shadow)"/>
+  <text x="875" y="648" text-anchor="middle" class="cardTitle">API Key Auth</text>
+  <text x="875" y="676" text-anchor="middle" class="cardText">employee access</text>
+
+  <rect x="1010" y="610" width="190" height="96" rx="18" fill="#172554" filter="url(#shadow)"/>
+  <text x="1105" y="648" text-anchor="middle" class="cardTitle">Pool Router</text>
+  <text x="1105" y="676" text-anchor="middle" class="cardText">health + affinity</text>
+
+  <rect x="1240" y="610" width="210" height="96" rx="18" fill="#4F46E5" filter="url(#shadow)"/>
+  <text x="1345" y="648" text-anchor="middle" class="cardTitle">Codex Accounts</text>
+  <text x="1345" y="676" text-anchor="middle" class="cardText">subscription pool</text>
+
+  <path class="flow" d="M750 658H765"/>
+  <path class="flow" d="M980 658H995"/>
+  <path class="flowBlue" d="M1210 658H1225"/>
+
+  <path class="flow" d="M440 300C485 300 505 338 535 338"/>
+  <path class="flowBlue" d="M440 600C485 600 505 658 535 658"/>
+  <path class="flowSoft" d="M1310 396V505C1310 550 1200 565 1105 595"/>
+
+  <rect x="500" y="50" width="1050" height="800" rx="38" fill="none" stroke="#4F46E5" stroke-width="2"/>
+</svg>

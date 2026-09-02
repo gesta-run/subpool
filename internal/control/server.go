@@ -4,14 +4,17 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"io"
+	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
 	"github.com/gesta-run/subpool/internal/auth"
+	"github.com/gesta-run/subpool/internal/catalog"
 	"github.com/gesta-run/subpool/internal/credential"
 	"github.com/gesta-run/subpool/internal/domain"
+	providerhealth "github.com/gesta-run/subpool/internal/health"
 	"github.com/gesta-run/subpool/internal/id"
 	"github.com/gesta-run/subpool/internal/provider/codex"
 	"github.com/gesta-run/subpool/internal/store"
@@ -24,22 +27,42 @@ type Cipher interface {
 	Decrypt([]byte) ([]byte, error)
 }
 type OAuth interface {
-	Start(string, int) (string, error)
-	Exchange(context.Context, string, string) (codex.Credentials, string, int, error)
+	Start(string) (string, error)
+	Exchange(context.Context, string, string) (codex.Credentials, string, error)
 }
-
+type ResetCredits interface {
+	ReadResetCredits(context.Context, codex.Credentials) (*codex.ResetCreditsSummary, error)
+	ConsumeResetCredit(context.Context, codex.Credentials, string, string) (codex.ConsumeResetCreditResult, error)
+}
 type Server struct {
 	store     store.Store
 	sessions  *auth.AdminSessions
 	keys      *auth.APIKeys
 	cipher    Cipher
 	oauth     OAuth
+	resets    ResetCredits
+	catalog   *catalog.Service
 	refresher credential.AccountRefresher
 	sources   *auth.SourceResolver
+	health    *providerhealth.Checker
 }
 
-func New(st store.Store, sessions *auth.AdminSessions, keys *auth.APIKeys, cipher Cipher, oauth OAuth, refresher credential.AccountRefresher, sources *auth.SourceResolver) *Server {
-	return &Server{store: st, sessions: sessions, keys: keys, cipher: cipher, oauth: oauth, refresher: refresher, sources: sources}
+func New(st store.Store, sessions *auth.AdminSessions, keys *auth.APIKeys, cipher Cipher, oauth OAuth, refresher credential.AccountRefresher, sources *auth.SourceResolver, healthChecker ...*providerhealth.Checker) *Server {
+	var checker *providerhealth.Checker
+	if len(healthChecker) > 0 {
+		checker = healthChecker[0]
+	}
+	return &Server{store: st, sessions: sessions, keys: keys, cipher: cipher, oauth: oauth, refresher: refresher, sources: sources, health: checker}
+}
+
+func (s *Server) WithResetCredits(resets ResetCredits) *Server {
+	s.resets = resets
+	return s
+}
+
+func (s *Server) WithModelProviders(codexModels catalog.CodexModels, compatibleModels catalog.CompatibleModels) *Server {
+	s.catalog = catalog.New(s.cipher, s.refresher, codexModels, compatibleModels)
+	return s
 }
 
 func (s *Server) Register(mux *http.ServeMux) {
@@ -49,9 +72,14 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/provider-accounts/oauth/start", s.admin(s.oauthStart))
 	mux.HandleFunc("GET /api/v1/provider-accounts/oauth/callback", s.oauthCallback)
 	mux.HandleFunc("GET /api/v1/provider-accounts", s.admin(s.listProviderAccounts))
+	mux.HandleFunc("GET /api/v1/provider-accounts/{id}/models", s.admin(s.listProviderModels))
+	mux.HandleFunc("POST /api/v1/provider-accounts", s.admin(s.createProviderAccount))
 	mux.HandleFunc("PUT /api/v1/provider-accounts/{id}", s.admin(s.updateProviderAccount))
 	mux.HandleFunc("DELETE /api/v1/provider-accounts/{id}", s.admin(s.deleteProviderAccount))
 	mux.HandleFunc("POST /api/v1/provider-accounts/{id}/refresh", s.admin(s.refreshProviderAccount))
+	mux.HandleFunc("POST /api/v1/provider-accounts/{id}/check", s.admin(s.checkProviderAccount))
+	mux.HandleFunc("GET /api/v1/provider-accounts/{id}/reset-credits", s.admin(s.getResetCredits))
+	mux.HandleFunc("POST /api/v1/provider-accounts/{id}/reset-credits/consume", s.admin(s.consumeResetCredit))
 	mux.HandleFunc("GET /api/v1/settings", s.admin(s.getSettings))
 	mux.HandleFunc("PUT /api/v1/settings", s.admin(s.updateSettings))
 	mux.HandleFunc("GET /api/v1/pools", s.admin(s.listPools))
@@ -71,7 +99,16 @@ func (s *Server) session(w http.ResponseWriter, _ *http.Request) {
 func (s *Server) admin(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		cookie, err := r.Cookie(auth.SessionCookieName)
-		if err != nil || !s.sessions.Valid(cookie.Value) {
+		if err != nil {
+			writeError(w, http.StatusUnauthorized, "authentication required")
+			return
+		}
+		valid, err := s.sessions.Valid(r.Context(), cookie.Value)
+		if err != nil {
+			writeError(w, http.StatusServiceUnavailable, "authentication is temporarily unavailable")
+			return
+		}
+		if !valid {
 			writeError(w, http.StatusUnauthorized, "authentication required")
 			return
 		}
@@ -87,7 +124,11 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &request) {
 		return
 	}
-	sessionID, ok := s.sessions.Authenticate(request.Username, request.Password, s.sources.SourceIP(r))
+	sessionID, ok, err := s.sessions.Authenticate(r.Context(), request.Username, request.Password, s.sources.SourceIP(r))
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "authentication is temporarily unavailable")
+		return
+	}
 	if !ok {
 		writeError(w, http.StatusUnauthorized, "invalid username or password")
 		return
@@ -97,7 +138,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 }
 func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 	if cookie, err := r.Cookie(auth.SessionCookieName); err == nil {
-		s.sessions.Revoke(cookie.Value)
+		_ = s.sessions.Revoke(r.Context(), cookie.Value)
 	}
 	s.sessions.ClearCookie(w)
 	writeJSON(w, http.StatusOK, map[string]any{"authenticated": false})
@@ -110,7 +151,7 @@ func (s *Server) oauthStart(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &request) {
 		return
 	}
-	authURL, err := s.oauth.Start(request.DisplayName, 0)
+	authURL, err := s.oauth.Start(request.DisplayName)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -123,7 +164,7 @@ func (s *Server) oauthCallback(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "provider authorization failed")
 		return
 	}
-	credentials, display, maxKeys, err := s.oauth.Exchange(r.Context(), r.URL.Query().Get("state"), r.URL.Query().Get("code"))
+	credentials, display, err := s.oauth.Exchange(r.Context(), r.URL.Query().Get("state"), r.URL.Query().Get("code"))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -149,7 +190,10 @@ func (s *Server) oauthCallback(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to create account")
 		return
 	}
-	account := domain.ProviderAccount{ID: accountID, Provider: domain.ProviderCodex, CredentialType: domain.CredentialSubscription, DisplayName: display, SubjectHMAC: s.keys.Digest("provider-subject:" + domain.ProviderCodex + ":" + credentials.AccountID), CredentialCiphertext: ciphertext, CredentialVersion: 1, Status: domain.AccountActive, MaxAPIKeys: maxKeys}
+	account := domain.ProviderAccount{ID: accountID, Provider: domain.ProviderCodex, CredentialType: domain.CredentialSubscription, DisplayName: display, SubjectHMAC: s.keys.Digest("provider-subject:" + domain.ProviderCodex + ":" + credentials.AccountID), CredentialCiphertext: ciphertext, CredentialVersion: 1, Status: domain.AccountActive}
+	if !s.checkNewAccount(r.Context(), &account, w) {
+		return
+	}
 	if err = s.store.CreateProviderAccount(r.Context(), account); err != nil {
 		if errors.Is(err, store.ErrConflict) {
 			writeError(w, http.StatusConflict, "this Codex account is already imported")
@@ -162,13 +206,110 @@ func (s *Server) oauthCallback(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/#/accounts", http.StatusSeeOther)
 }
 
+func (s *Server) createProviderAccount(w http.ResponseWriter, r *http.Request) {
+	var request struct {
+		Provider    string `json:"provider"`
+		DisplayName string `json:"display_name"`
+		BaseURL     string `json:"base_url"`
+		APIKey      string `json:"api_key"`
+	}
+	if !decode(w, r, &request) {
+		return
+	}
+	request.DisplayName = strings.TrimSpace(request.DisplayName)
+	request.BaseURL = strings.TrimRight(strings.TrimSpace(request.BaseURL), "/")
+	request.APIKey = strings.TrimSpace(request.APIKey)
+	if request.Provider != domain.ProviderOpenAICompatible {
+		writeError(w, http.StatusBadRequest, "provider must be openai_compatible")
+		return
+	}
+	parsed, err := url.Parse(request.BaseURL)
+	if request.DisplayName == "" || request.APIKey == "" || err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+		writeError(w, http.StatusBadRequest, "display_name, a valid base_url, and api_key are required")
+		return
+	}
+	credentials := map[string]string{"base_url": request.BaseURL, "api_key": request.APIKey}
+	raw, err := json.Marshal(credentials)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to encode credentials")
+		return
+	}
+	ciphertext, err := s.cipher.Encrypt(raw)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to encrypt credentials")
+		return
+	}
+	accountID, err := id.New()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to create account")
+		return
+	}
+	account := domain.ProviderAccount{
+		ID:                   accountID,
+		Provider:             domain.ProviderOpenAICompatible,
+		CredentialType:       domain.CredentialAPIKey,
+		DisplayName:          request.DisplayName,
+		SubjectHMAC:          s.keys.Digest("provider-subject:" + request.Provider + ":" + request.BaseURL + "\x00" + request.APIKey),
+		CredentialCiphertext: ciphertext,
+		CredentialVersion:    1,
+		Status:               domain.AccountActive,
+	}
+	if !s.checkNewAccount(r.Context(), &account, w) {
+		return
+	}
+	if err = s.store.CreateProviderAccount(r.Context(), account); err != nil {
+		if errors.Is(err, store.ErrConflict) {
+			writeError(w, http.StatusConflict, "this endpoint and API key are already connected")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to save provider account")
+		return
+	}
+	s.audit(r.Context(), "provider_account.create", "provider_account", accountID, "success")
+	writeJSON(w, http.StatusCreated, account)
+}
+
 func (s *Server) listProviderAccounts(w http.ResponseWriter, r *http.Request) {
 	accounts, err := s.store.ListProviderAccounts(r.Context())
 	if err != nil {
+		slog.Error("failed to list provider accounts", "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to list provider accounts")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"data": accounts})
+}
+
+func (s *Server) listProviderModels(w http.ResponseWriter, r *http.Request) {
+	account, err := s.store.GetProviderAccount(r.Context(), r.PathValue("id"))
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
+
+	if s.catalog == nil {
+		writeError(w, http.StatusServiceUnavailable, "model discovery is unavailable")
+		return
+	}
+	models, err := s.catalog.ListAccount(ctx, account)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "failed to load supported models")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"data": models})
+}
+
+func (s *Server) decryptCredentials(account domain.ProviderAccount) (codex.Credentials, error) {
+	plaintext, err := s.cipher.Decrypt(account.CredentialCiphertext)
+	if err != nil {
+		return codex.Credentials{}, err
+	}
+	var credentials codex.Credentials
+	if err = json.Unmarshal(plaintext, &credentials); err != nil {
+		return codex.Credentials{}, err
+	}
+	return credentials, nil
 }
 
 func (s *Server) updateProviderAccount(w http.ResponseWriter, r *http.Request) {
@@ -218,10 +359,7 @@ func (s *Server) updateSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	settings := domain.Settings{MaxAPIKeysPerAccount: request.MaxAPIKeysPerAccount}
-	if err := s.store.UpdateSettings(r.Context(), settings); errors.Is(err, store.ErrCapacityExhausted) {
-		writeError(w, http.StatusConflict, "the limit cannot be lower than an account's active API key assignments")
-		return
-	} else if err != nil {
+	if err := s.store.UpdateSettings(r.Context(), settings); err != nil {
 		writeStoreError(w, err)
 		return
 	}
@@ -253,6 +391,10 @@ func (s *Server) refreshProviderAccount(w http.ResponseWriter, r *http.Request) 
 		writeStoreError(w, err)
 		return
 	}
+	if account.CredentialType != "" && account.CredentialType != domain.CredentialSubscription {
+		writeError(w, http.StatusBadRequest, "static API key accounts do not support credential refresh")
+		return
+	}
 	_, err = s.refresher.RefreshAccount(r.Context(), account.ID, account.CredentialVersion)
 	if err != nil {
 		status := domain.AccountCoolingDown
@@ -271,237 +413,34 @@ func (s *Server) refreshProviderAccount(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, map[string]any{"status": "active"})
 }
 
-func (s *Server) createPool(w http.ResponseWriter, r *http.Request) {
-	var request struct {
-		Name           string   `json:"name"`
-		ModelAllowlist []string `json:"model_allowlist"`
-	}
-	if !decode(w, r, &request) {
+func (s *Server) checkProviderAccount(w http.ResponseWriter, r *http.Request) {
+	if s.health == nil {
+		writeError(w, http.StatusServiceUnavailable, "provider health checker is unavailable")
 		return
 	}
-	request.Name = strings.TrimSpace(request.Name)
-	if request.Name == "" {
-		writeError(w, http.StatusBadRequest, "name is required")
-		return
-	}
-	request.ModelAllowlist = normalizeModelAllowlist(request.ModelAllowlist)
-	if len(request.ModelAllowlist) == 0 {
-		writeError(w, http.StatusBadRequest, "model_allowlist must contain at least one model")
-		return
-	}
-	poolID, err := id.New()
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	account, err := s.health.CheckAccount(ctx, r.PathValue("id"))
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to create pool")
-		return
-	}
-	pool := domain.Pool{ID: poolID, Name: request.Name, Provider: domain.ProviderCodex, Strategy: domain.StrategyLeastAssigned, ModelAllowlist: request.ModelAllowlist}
-	if err = s.store.CreatePool(r.Context(), pool); err != nil {
-		writeError(w, http.StatusConflict, "failed to create pool")
-		return
-	}
-	s.audit(r.Context(), "pool.create", "pool", poolID, "success")
-	writeJSON(w, http.StatusCreated, pool)
-}
-func (s *Server) updatePool(w http.ResponseWriter, r *http.Request) {
-	var pool domain.Pool
-	if !decode(w, r, &pool) {
-		return
-	}
-	pool.ID = r.PathValue("id")
-	pool.Provider = domain.ProviderCodex
-	pool.Strategy = domain.StrategyLeastAssigned
-	if strings.TrimSpace(pool.Name) == "" {
-		writeError(w, http.StatusBadRequest, "name is required")
-		return
-	}
-	pool.ModelAllowlist = normalizeModelAllowlist(pool.ModelAllowlist)
-	if len(pool.ModelAllowlist) == 0 {
-		writeError(w, http.StatusBadRequest, "model_allowlist must contain at least one model")
-		return
-	}
-	if err := s.store.UpdatePool(r.Context(), pool); err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	s.audit(r.Context(), "pool.update", "pool", pool.ID, "success")
-	writeJSON(w, http.StatusOK, pool)
+	s.audit(r.Context(), "provider_account.check", "provider_account", account.ID, "success")
+	writeJSON(w, http.StatusOK, account)
 }
 
-func normalizeModelAllowlist(models []string) []string {
-	result := make([]string, 0, len(models))
-	seen := make(map[string]struct{}, len(models))
-	for _, model := range models {
-		model = strings.TrimSpace(model)
-		if model == "" {
-			continue
-		}
-		if _, exists := seen[model]; exists {
-			continue
-		}
-		seen[model] = struct{}{}
-		result = append(result, model)
+func (s *Server) checkNewAccount(ctx context.Context, account *domain.ProviderAccount, w http.ResponseWriter) bool {
+	if s.health == nil {
+		account.HealthStatus = domain.HealthUnknown
+		return true
 	}
-	return result
-}
-func (s *Server) listPools(w http.ResponseWriter, r *http.Request) {
-	pools, err := s.store.ListPools(r.Context())
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to list pools")
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"data": pools})
-}
-
-func (s *Server) addPoolAccount(w http.ResponseWriter, r *http.Request) {
-	var request struct {
-		ProviderAccountID string `json:"provider_account_id"`
-		Weight            int    `json:"weight"`
-		Priority          int    `json:"priority"`
-		Enabled           *bool  `json:"enabled"`
-	}
-	if !decode(w, r, &request) {
-		return
-	}
-	if request.Weight == 0 {
-		request.Weight = 1
-	}
-	enabled := true
-	if request.Enabled != nil {
-		enabled = *request.Enabled
-	}
-	membership := domain.PoolAccount{PoolID: r.PathValue("id"), ProviderAccountID: request.ProviderAccountID, Weight: request.Weight, Priority: request.Priority, Enabled: enabled}
-	if err := s.store.AddPoolAccount(r.Context(), membership); err != nil {
-		writeStoreError(w, err)
-		return
-	}
-	s.audit(r.Context(), "pool.account.add", "pool", membership.PoolID, "success")
-	writeJSON(w, http.StatusOK, membership)
-}
-
-func (s *Server) createAPIKey(w http.ResponseWriter, r *http.Request) {
-	var request struct {
-		PoolID       string     `json:"pool_id"`
-		EmployeeName string     `json:"employee_name"`
-		Scopes       []string   `json:"scopes"`
-		RateLimit    int        `json:"rate_limit"`
-		ExpiresAt    *time.Time `json:"expires_at"`
-	}
-	if !decode(w, r, &request) {
-		return
-	}
-	if strings.TrimSpace(request.EmployeeName) == "" || request.PoolID == "" {
-		writeError(w, http.StatusBadRequest, "pool_id and employee_name are required")
-		return
-	}
-	if request.RateLimit < 0 {
-		writeError(w, http.StatusBadRequest, "rate_limit cannot be negative")
-		return
-	}
-	if !validScopes(request.Scopes) {
-		writeError(w, http.StatusBadRequest, "scopes may contain only *, responses, chat_completions, or models")
-		return
-	}
-	plain, digest, hint, err := s.keys.Generate()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to generate API key")
-		return
-	}
-	keyID, err := id.New()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to generate API key")
-		return
-	}
-	key := domain.APIKey{ID: keyID, PoolID: request.PoolID, EmployeeName: strings.TrimSpace(request.EmployeeName), KeyHMAC: digest, KeyHint: hint, Scopes: request.Scopes, RateLimit: request.RateLimit, ExpiresAt: request.ExpiresAt}
-	accountID, err := s.store.CreateAPIKeyAndBind(r.Context(), key)
-	if errors.Is(err, store.ErrCapacityExhausted) {
-		writeJSON(w, http.StatusConflict, map[string]any{"error": map[string]any{"code": "subpool_account_capacity_exhausted", "message": "all account API key slots are full"}})
-		return
-	}
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to create API key")
-		return
-	}
-	s.audit(r.Context(), "api_key.create", "api_key", keyID, "success")
-	writeJSON(w, http.StatusCreated, map[string]any{"id": keyID, "api_key": plain, "key_hint": hint, "provider_account_id": accountID})
-}
-func (s *Server) listAPIKeys(w http.ResponseWriter, r *http.Request) {
-	keys, err := s.store.ListAPIKeys(r.Context())
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to list API keys")
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"data": keys})
-}
-func (s *Server) revokeAPIKey(w http.ResponseWriter, r *http.Request) {
-	keyID := r.PathValue("id")
-	if err := s.store.RevokeAPIKey(r.Context(), keyID); err != nil {
-		writeStoreError(w, err)
-		return
-	}
-	s.audit(r.Context(), "api_key.revoke", "api_key", keyID, "success")
-	writeJSON(w, http.StatusOK, map[string]any{"revoked": true})
-}
-
-func (s *Server) listUsage(w http.ResponseWriter, r *http.Request) {
-	filter := domain.UsageFilter{APIKeyID: r.URL.Query().Get("api_key_id")}
-	var err error
-	if raw := r.URL.Query().Get("from"); raw != "" {
-		var value time.Time
-		value, err = time.Parse("2006-01-02", raw)
-		filter.From = &value
-	}
-	if err == nil {
-		if raw := r.URL.Query().Get("to"); raw != "" {
-			var value time.Time
-			value, err = time.Parse("2006-01-02", raw)
-			filter.To = &value
-		}
-	}
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "dates must use YYYY-MM-DD")
-		return
-	}
-	rows, err := s.store.ListUsage(r.Context(), filter)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to list usage")
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"data": rows})
-}
-
-func (s *Server) audit(ctx context.Context, action, targetType, targetID, result string) {
-	_ = s.store.Audit(ctx, domain.AuditEvent{Actor: "admin", Action: action, TargetType: targetType, TargetID: targetID, Result: result})
-}
-func decode(w http.ResponseWriter, r *http.Request, target any) bool {
-	decoder := json.NewDecoder(io.LimitReader(r.Body, maxControlBody))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(target); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
+	checkCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	result := s.health.Check(checkCtx, *account)
+	if result.AuthFailed {
+		writeError(w, http.StatusBadRequest, "provider rejected the credentials")
 		return false
 	}
-	return true
-}
-func writeStoreError(w http.ResponseWriter, err error) {
-	if errors.Is(err, store.ErrNotFound) {
-		writeError(w, http.StatusNotFound, "resource not found")
-		return
-	}
-	writeError(w, http.StatusInternalServerError, "operation failed")
-}
-func writeError(w http.ResponseWriter, status int, message string) {
-	writeJSON(w, status, map[string]any{"error": map[string]any{"message": message}})
-}
-func writeJSON(w http.ResponseWriter, status int, value any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(value)
-}
-
-func validScopes(scopes []string) bool {
-	for _, scope := range scopes {
-		if scope != "*" && scope != "responses" && scope != "chat_completions" && scope != "models" {
-			return false
-		}
-	}
+	s.health.ApplyNewAccount(account, result)
 	return true
 }

@@ -14,6 +14,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	providerhttp "github.com/gesta-run/subpool/internal/provider/httpclient"
 )
 
 const oauthScope = "openid email profile offline_access"
@@ -55,7 +57,6 @@ type OAuthConfig struct {
 type oauthAttempt struct {
 	verifier    string
 	displayName string
-	maxAPIKeys  int
 	expiresAt   time.Time
 }
 
@@ -68,12 +69,12 @@ type OAuth struct {
 
 func NewOAuth(config OAuthConfig) *OAuth {
 	if config.HTTPClient == nil {
-		config.HTTPClient = http.DefaultClient
+		config.HTTPClient = providerhttp.New()
 	}
 	return &OAuth{config: config, attempts: make(map[string]oauthAttempt), now: time.Now}
 }
 
-func (o *OAuth) Start(displayName string, maxAPIKeys int) (string, error) {
+func (o *OAuth) Start(displayName string) (string, error) {
 	state, err := randomURLString(32)
 	if err != nil {
 		return "", err
@@ -84,14 +85,14 @@ func (o *OAuth) Start(displayName string, maxAPIKeys int) (string, error) {
 	}
 	challengeRaw := sha256.Sum256([]byte(verifier))
 	challenge := base64.RawURLEncoding.EncodeToString(challengeRaw[:])
-	if maxAPIKeys == 0 {
-		maxAPIKeys = 3
-	}
-	if maxAPIKeys < 1 || maxAPIKeys > 100 {
-		return "", fmt.Errorf("max_api_keys must be between 1 and 100")
-	}
+	now := o.now()
 	o.mu.Lock()
-	o.attempts[state] = oauthAttempt{verifier: verifier, displayName: strings.TrimSpace(displayName), maxAPIKeys: maxAPIKeys, expiresAt: o.now().Add(10 * time.Minute)}
+	for pendingState, attempt := range o.attempts {
+		if !now.Before(attempt.expiresAt) {
+			delete(o.attempts, pendingState)
+		}
+	}
+	o.attempts[state] = oauthAttempt{verifier: verifier, displayName: strings.TrimSpace(displayName), expiresAt: now.Add(10 * time.Minute)}
 	o.mu.Unlock()
 
 	values := url.Values{
@@ -102,23 +103,23 @@ func (o *OAuth) Start(displayName string, maxAPIKeys int) (string, error) {
 	return o.config.AuthURL + "?" + values.Encode(), nil
 }
 
-func (o *OAuth) Exchange(ctx context.Context, state, code string) (Credentials, string, int, error) {
+func (o *OAuth) Exchange(ctx context.Context, state, code string) (Credentials, string, error) {
 	o.mu.Lock()
 	attempt, ok := o.attempts[state]
 	delete(o.attempts, state)
 	o.mu.Unlock()
 	if !ok || !o.now().Before(attempt.expiresAt) {
-		return Credentials{}, "", 0, fmt.Errorf("OAuth state is invalid or expired")
+		return Credentials{}, "", fmt.Errorf("OAuth state is invalid or expired")
 	}
 	if strings.TrimSpace(code) == "" {
-		return Credentials{}, "", 0, fmt.Errorf("authorization code is required")
+		return Credentials{}, "", fmt.Errorf("authorization code is required")
 	}
 	values := url.Values{
 		"grant_type": {"authorization_code"}, "client_id": {o.config.ClientID}, "code": {code},
 		"redirect_uri": {o.config.RedirectURL}, "code_verifier": {attempt.verifier},
 	}
 	credentials, err := o.tokenRequest(ctx, values)
-	return credentials, attempt.displayName, attempt.maxAPIKeys, err
+	return credentials, attempt.displayName, err
 }
 
 func (o *OAuth) Refresh(ctx context.Context, refreshToken string) (Credentials, error) {

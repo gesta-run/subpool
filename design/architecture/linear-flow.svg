@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 760" role="img" aria-labelledby="title desc">
+  <title id="title">Subpool linear architecture</title>
+  <desc id="desc">Employee and administrator traffic flow through the Subpool service to PostgreSQL and pooled Codex subscription accounts.</desc>
+  <defs>
+    <linearGradient id="brand" x1="0" y1="0" x2="1" y2="0"><stop stop-color="#22A6F2"/><stop offset="1" stop-color="#4F46E5"/></linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%"><feDropShadow dx="0" dy="10" stdDeviation="18" flood-color="#19304F" flood-opacity=".08"/></filter>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M0 0 10 5 0 10Z" fill="#22A6F2"/></marker>
+  </defs>
+  <rect width="1440" height="760" fill="#FFFFFF"/>
+  <g font-family="Avenir Next, Helvetica Neue, Arial, sans-serif">
+    <text x="72" y="76" fill="#0F172A" font-size="34" font-weight="700" letter-spacing="-1">Subpool architecture</text>
+    <text x="72" y="108" fill="#64748B" font-size="15">One controlled gateway for pooled AI coding subscriptions</text>
+    <path d="M72 136H1368" stroke="#E2E8F0"/>
+
+    <text x="72" y="190" fill="#94A3B8" font-size="12" font-weight="700" letter-spacing="1.8">EMPLOYEE DATA PLANE</text>
+    <g filter="url(#shadow)">
+      <rect x="72" y="226" width="210" height="92" rx="16" fill="#FFFFFF" stroke="#CBD5E1"/>
+      <rect x="340" y="226" width="220" height="92" rx="16" fill="#F8FBFF" stroke="#A9DDF8"/>
+      <rect x="618" y="226" width="190" height="92" rx="16" fill="#F8FBFF" stroke="#A9DDF8"/>
+      <rect x="866" y="226" width="190" height="92" rx="16" fill="#F8F8FF" stroke="#C7C4FA"/>
+    </g>
+    <g fill="#0F172A" font-size="15" font-weight="650" text-anchor="middle">
+      <text x="177" y="267">Codex / API clients</text><text x="177" y="291" fill="#64748B" font-size="12" font-weight="500">Employee API key</text>
+      <text x="450" y="267">OpenAI-compatible API</text><text x="450" y="291" fill="#64748B" font-size="12" font-weight="500">Responses · Chat Completions</text>
+      <text x="713" y="267">API key auth</text><text x="713" y="291" fill="#64748B" font-size="12" font-weight="500">Scope · rate limit</text>
+      <text x="961" y="267">Pool scheduler</text><text x="961" y="291" fill="#64748B" font-size="12" font-weight="500">Health · concurrency</text>
+    </g>
+    <g fill="none" stroke="#22A6F2" stroke-width="2" marker-end="url(#arrow)">
+      <path d="M282 272H340"/><path d="M560 272H618"/><path d="M808 272H866"/>
+      <path d="M1056 272C1092 272 1094 220 1130 220"/><path d="M1056 272H1130"/><path d="M1056 272C1092 272 1094 324 1130 324"/>
+    </g>
+    <g filter="url(#shadow)">
+      <rect x="1130" y="178" width="238" height="84" rx="15" fill="#FFFFFF" stroke="#BFC8F5"/>
+      <rect x="1130" y="282" width="238" height="84" rx="15" fill="#FFFFFF" stroke="#BFC8F5"/>
+      <rect x="1130" y="386" width="238" height="84" rx="15" fill="#FFFFFF" stroke="#BFC8F5"/>
+    </g>
+    <g fill="#0F172A" text-anchor="middle"><text x="1249" y="213" font-size="14" font-weight="650">Codex subscription A</text><text x="1249" y="236" fill="#64748B" font-size="12">OAuth · weekly usage</text><text x="1249" y="317" font-size="14" font-weight="650">Codex subscription B</text><text x="1249" y="340" fill="#64748B" font-size="12">OAuth · weekly usage</text><text x="1249" y="421" font-size="14" font-weight="650">Codex subscription N</text><text x="1249" y="444" fill="#64748B" font-size="12">OAuth · weekly usage</text></g>
+
+    <text x="72" y="418" fill="#94A3B8" font-size="12" font-weight="700" letter-spacing="1.8">ADMIN CONTROL PLANE</text>
+    <g filter="url(#shadow)">
+      <rect x="72" y="454" width="210" height="92" rx="16" fill="#FFFFFF" stroke="#CBD5E1"/>
+      <rect x="340" y="454" width="220" height="92" rx="16" fill="#F8FBFF" stroke="#A9DDF8"/>
+      <rect x="618" y="454" width="190" height="92" rx="16" fill="#F8FBFF" stroke="#A9DDF8"/>
+      <path d="M892 458h128v74c0 14-29 26-64 26s-64-12-64-26Z" fill="#FFFFFF" stroke="#C7C4FA"/>
+      <ellipse cx="956" cy="458" rx="64" ry="22" fill="#F8F8FF" stroke="#C7C4FA"/>
+    </g>
+    <g fill="#0F172A" font-size="15" font-weight="650" text-anchor="middle"><text x="177" y="495">Administrator</text><text x="177" y="519" fill="#64748B" font-size="12" font-weight="500">Browser session</text><text x="450" y="495">React console</text><text x="450" y="519" fill="#64748B" font-size="12" font-weight="500">Accounts · pools · keys</text><text x="713" y="495">Control API</text><text x="713" y="519" fill="#64748B" font-size="12" font-weight="500">Audit · configuration</text><text x="956" y="495">PostgreSQL</text><text x="956" y="519" fill="#64748B" font-size="12" font-weight="500">Encrypted metadata</text></g>
+    <g fill="none" stroke="#22A6F2" stroke-width="2" marker-end="url(#arrow)"><path d="M282 500H340"/><path d="M560 500H618"/><path d="M808 500H890"/><path d="M713 454V348C713 332 700 318 684 318"/></g>
+
+    <rect x="72" y="628" width="1296" height="64" rx="16" fill="#F8FAFC" stroke="#E2E8F0"/>
+    <rect x="72" y="628" width="7" height="64" rx="3.5" fill="url(#brand)"/>
+    <text x="104" y="655" fill="#0F172A" font-size="14" font-weight="650">Single Go service</text>
+    <text x="104" y="677" fill="#64748B" font-size="13">Embedded console · unified API · encrypted credentials · aggregate token counters only</text>
+  </g>
+</svg>

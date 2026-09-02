@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 )
@@ -14,7 +15,7 @@ func chatToResponses(raw []byte) ([]byte, error) {
 		return nil, fmt.Errorf("invalid JSON request")
 	}
 	response := make(map[string]any)
-	for _, name := range []string{"model", "temperature", "top_p", "max_output_tokens", "reasoning", "tool_choice", "parallel_tool_calls"} {
+	for _, name := range []string{"model", "max_output_tokens", "reasoning", "tool_choice", "parallel_tool_calls"} {
 		if value, ok := chat[name]; ok {
 			response[name] = value
 		}
@@ -25,7 +26,12 @@ func chatToResponses(raw []byte) ([]byte, error) {
 	if value, ok := chat["max_completion_tokens"]; ok {
 		response["max_output_tokens"] = value
 	}
+	if effort, ok := chat["reasoning_effort"].(string); ok && strings.TrimSpace(effort) != "" {
+		response["reasoning"] = map[string]any{"effort": effort}
+	}
 	response["stream"] = true
+	response["store"] = false
+	response["instructions"] = ""
 	messages, ok := chat["messages"].([]any)
 	if !ok {
 		return nil, fmt.Errorf("messages is required")
@@ -128,7 +134,7 @@ func (s *Server) proxyChatJSON(w http.ResponseWriter, r *http.Request, keyID, mo
 	}
 	result := map[string]any{"id": id, "object": "chat.completion", "created": created, "model": model, "choices": []any{map[string]any{"index": 0, "message": message, "finish_reason": finish}}, "usage": map[string]any{"prompt_tokens": input, "completion_tokens": output, "total_tokens": input + output}}
 	if input > 0 || output > 0 {
-		s.addUsage(keyID, s.usageEventHash(id, fallbackEventHash), input, output)
+		s.addUsage(keyID, s.usageEventHash(id, fallbackEventHash), model, input, output)
 	}
 	writeJSON(w, http.StatusOK, result)
 }
@@ -207,7 +213,41 @@ func (s *Server) proxyChatStream(w http.ResponseWriter, r *http.Request, keyID, 
 		flusher.Flush()
 	}
 	if input > 0 || output > 0 {
-		s.addUsage(keyID, s.usageEventHash(id, fallbackEventHash), input, output)
+		s.addUsage(keyID, s.usageEventHash(id, fallbackEventHash), model, input, output)
+	}
+}
+
+func (s *Server) proxyCompatibleChatJSON(w http.ResponseWriter, keyID, model string, resp *http.Response) {
+	var value any
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 32<<20)).Decode(&value); err != nil {
+		writeOpenAIError(w, http.StatusBadGateway, "invalid provider response", "provider_error")
+		return
+	}
+	raw, _ := json.Marshal(value)
+	input, output := usageFromEvent(raw)
+	responseID := ""
+	if payload, ok := value.(map[string]any); ok {
+		responseID, _ = payload["id"].(string)
+	}
+	if input > 0 || output > 0 {
+		s.addUsage(keyID, s.usageEventHash(responseID, s.randomUsageEventHash()), model, input, output)
+	}
+	copyResponseHeaders(w.Header(), resp.Header)
+	writeJSON(w, resp.StatusCode, value)
+}
+
+func (s *Server) proxyCompatibleChatStream(w http.ResponseWriter, keyID, model string, resp *http.Response) {
+	copyResponseHeaders(w.Header(), resp.Header)
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.WriteHeader(resp.StatusCode)
+	responseID := ""
+	input, output, err := copySSE(w, resp.Body, func(data []byte) {
+		if id := responseIDFromEvent(data); id != "" {
+			responseID = id
+		}
+	})
+	if err == nil && (input > 0 || output > 0) {
+		s.addUsage(keyID, s.usageEventHash(responseID, s.randomUsageEventHash()), model, input, output)
 	}
 }
 

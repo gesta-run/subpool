@@ -1,26 +1,28 @@
 package auth
 
 import (
+	"context"
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
+	"encoding/binary"
 	"net"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 )
 
 const SessionCookieName = "subpool_session"
 
-type session struct {
-	expiresAt time.Time
-}
+const sessionPayloadSize = 1 + 8 + 32
 
-type failureWindow struct {
-	count   int
-	resetAt time.Time
+type AdminSessionStore interface {
+	RecordAdminLoginAttempt(context.Context, []string, bool, time.Time) (bool, error)
+	CreateAdminSession(context.Context, []byte, time.Time) error
+	AdminSessionActive(context.Context, []byte, time.Time) (bool, error)
+	RevokeAdminSession(context.Context, []byte, time.Time) error
 }
 
 type AdminSessions struct {
@@ -28,91 +30,101 @@ type AdminSessions struct {
 	password string
 	ttl      time.Duration
 	secure   bool
-	mu       sync.Mutex
-	sessions map[string]session
-	failures map[string]failureWindow
+	signKey  []byte
+	store    AdminSessionStore
 	now      func() time.Time
 }
 
-func NewAdminSessions(username, password string, ttl time.Duration, secure bool) *AdminSessions {
+func NewAdminSessions(username, password string, ttl time.Duration, secure bool, signingSecret []byte, stores ...AdminSessionStore) *AdminSessions {
+	keyMAC := hmac.New(sha256.New, signingSecret)
+	_, _ = keyMAC.Write([]byte("subpool-admin-session-v1\x00" + username + "\x00" + password))
+	var backend AdminSessionStore = newMemoryAdminSessionStore()
+	if len(stores) > 0 && stores[0] != nil {
+		backend = stores[0]
+	}
 	return &AdminSessions{
 		username: username, password: password, ttl: ttl, secure: secure,
-		sessions: make(map[string]session), failures: make(map[string]failureWindow),
-		now: time.Now,
+		signKey: keyMAC.Sum(nil), store: backend, now: time.Now,
 	}
 }
 
-// Authenticate checks credentials in constant time and applies an in-memory failure limit.
-func (a *AdminSessions) Authenticate(username, password, source string) (string, bool) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
+func (a *AdminSessions) Authenticate(ctx context.Context, username, password, source string) (string, bool, error) {
 	now := a.now()
 	keys := []string{"ip:" + source, "credential:" + strings.ToLower(strings.TrimSpace(username)) + "|" + source}
-	if len(a.failures) >= 10000 {
-		for candidate, value := range a.failures {
-			if !now.Before(value.resetAt) {
-				delete(a.failures, candidate)
-			}
-		}
-		for len(a.failures) >= 9000 {
-			for candidate := range a.failures {
-				delete(a.failures, candidate)
-				break
-			}
-		}
-	}
-	for _, key := range keys {
-		window := a.failures[key]
-		if now.Before(window.resetAt) && window.count >= 5 {
-			return "", false
-		}
-	}
 	usernameHash, expectedUsernameHash := sha256.Sum256([]byte(username)), sha256.Sum256([]byte(a.username))
 	passwordHash, expectedPasswordHash := sha256.Sum256([]byte(password)), sha256.Sum256([]byte(a.password))
 	validUser := subtle.ConstantTimeCompare(usernameHash[:], expectedUsernameHash[:]) == 1
 	validPass := subtle.ConstantTimeCompare(passwordHash[:], expectedPasswordHash[:]) == 1
-	if !validUser || !validPass {
-		for _, key := range keys {
-			window := a.failures[key]
-			if !now.Before(window.resetAt) {
-				window = failureWindow{resetAt: now.Add(time.Minute)}
-			}
-			window.count++
-			a.failures[key] = window
-		}
-		return "", false
+	accepted, err := a.store.RecordAdminLoginAttempt(ctx, keys, validUser && validPass, now)
+	if err != nil || !accepted {
+		return "", false, err
 	}
-	for _, key := range keys {
-		delete(a.failures, key)
+	payload := make([]byte, sessionPayloadSize)
+	payload[0] = 1
+	expiresAt := now.Add(a.ttl)
+	binary.BigEndian.PutUint64(payload[1:9], uint64(expiresAt.Unix()))
+	if _, err := rand.Read(payload[9:]); err != nil {
+		return "", false, err
 	}
-	raw := make([]byte, 32)
-	if _, err := rand.Read(raw); err != nil {
-		return "", false
+	id := a.encode(payload)
+	if err = a.store.CreateAdminSession(ctx, sessionDigest(id), expiresAt); err != nil {
+		return "", false, err
 	}
-	id := base64.RawURLEncoding.EncodeToString(raw)
-	a.sessions[id] = session{expiresAt: now.Add(a.ttl)}
-	return id, true
+	return id, true, nil
 }
 
-func (a *AdminSessions) Valid(id string) bool {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	s, ok := a.sessions[id]
-	if !ok || !a.now().Before(s.expiresAt) {
-		delete(a.sessions, id)
-		return false
+func (a *AdminSessions) Valid(ctx context.Context, id string) (bool, error) {
+	expiresAt, ok := a.verify(id)
+	if !ok {
+		return false, nil
 	}
-	return true
+	now := a.now()
+	if !now.Before(expiresAt) {
+		return false, nil
+	}
+	return a.store.AdminSessionActive(ctx, sessionDigest(id), now)
 }
 
-func (a *AdminSessions) Revoke(id string) {
-	a.mu.Lock()
-	delete(a.sessions, id)
-	a.mu.Unlock()
+func (a *AdminSessions) Revoke(ctx context.Context, id string) error {
+	_, ok := a.verify(id)
+	if !ok {
+		return nil
+	}
+	return a.store.RevokeAdminSession(ctx, sessionDigest(id), a.now())
+}
+
+func (a *AdminSessions) encode(payload []byte) string {
+	mac := hmac.New(sha256.New, a.signKey)
+	_, _ = mac.Write(payload)
+	return base64.RawURLEncoding.EncodeToString(payload) + "." + base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+}
+
+func (a *AdminSessions) verify(id string) (time.Time, bool) {
+	parts := strings.Split(id, ".")
+	if len(parts) != 2 {
+		return time.Time{}, false
+	}
+	payload, payloadErr := base64.RawURLEncoding.DecodeString(parts[0])
+	signature, signatureErr := base64.RawURLEncoding.DecodeString(parts[1])
+	if payloadErr != nil || signatureErr != nil || len(payload) != sessionPayloadSize || payload[0] != 1 || len(signature) != sha256.Size {
+		return time.Time{}, false
+	}
+	mac := hmac.New(sha256.New, a.signKey)
+	_, _ = mac.Write(payload)
+	if !hmac.Equal(signature, mac.Sum(nil)) {
+		return time.Time{}, false
+	}
+	expiresAt := time.Unix(int64(binary.BigEndian.Uint64(payload[1:9])), 0)
+	return expiresAt, true
+}
+
+func sessionDigest(id string) []byte {
+	digest := sha256.Sum256([]byte(id))
+	return digest[:]
 }
 
 func (a *AdminSessions) SetCookie(w http.ResponseWriter, id string) {
-	http.SetCookie(w, &http.Cookie{Name: SessionCookieName, Value: id, Path: "/", HttpOnly: true, Secure: a.secure, SameSite: http.SameSiteStrictMode, MaxAge: int(a.ttl.Seconds())})
+	http.SetCookie(w, &http.Cookie{Name: SessionCookieName, Value: id, Path: "/", HttpOnly: true, Secure: a.secure, SameSite: http.SameSiteStrictMode, MaxAge: int(a.ttl.Seconds()), Expires: a.now().Add(a.ttl)})
 }
 
 func (a *AdminSessions) ClearCookie(w http.ResponseWriter) {

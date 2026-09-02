@@ -1,4 +1,5 @@
 import { RefreshIcon } from './Icons'
+import { Spinner } from './Spinner'
 
 interface StatePanelProps {
   kind: 'loading' | 'empty' | 'error'
@@ -12,7 +13,7 @@ export function StatePanel({ kind, title, description, actionLabel, onAction }: 
   return (
     <div className={`state-panel state-panel--${kind}`} role={kind === 'error' ? 'alert' : 'status'}>
       <span className="state-panel__mark" aria-hidden="true">
-        {kind === 'loading' ? <span className="spinner" /> : kind === 'error' ? '!' : '0'}
+        {kind === 'loading' ? <Spinner /> : kind === 'error' ? '!' : '0'}
       </span>
       <div>
         <h3>{title}</h3>

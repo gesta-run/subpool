@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 140" role="img" aria-labelledby="title">
+  <title id="title">Subpool by Gesta — editorial rule</title>
+  <style>
+    .ink{fill:#10141C}.muted{fill:#64748B}.rule{stroke:#CBD5E1}
+    @media (prefers-color-scheme:dark){.ink{fill:#F7F8FA}.muted{fill:#94A3B8}.rule{stroke:#475569}}
+  </style>
+  <text x="20" y="105" font-family="Avenir Next, Helvetica Neue, Arial, sans-serif" font-size="92" font-weight="700" letter-spacing="-5"><tspan class="ink">subp</tspan><tspan fill="#22A6F2">o</tspan><tspan fill="#4F46E5">o</tspan><tspan class="ink">l</tspan></text>
+  <line x1="580" y1="30" x2="580" y2="112" class="rule" stroke-width="2"/>
+  <text x="620" y="65" class="muted" font-family="Avenir Next, Helvetica Neue, Arial, sans-serif" font-size="14" font-weight="700" letter-spacing="4">A PRODUCT BY</text>
+  <text x="620" y="104" class="ink" font-family="Avenir Next, Helvetica Neue, Arial, sans-serif" font-size="36" font-weight="800" letter-spacing="5">GESTA</text>
+</svg>

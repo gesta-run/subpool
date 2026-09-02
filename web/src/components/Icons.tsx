@@ -22,6 +22,9 @@ function Icon({ children, ...props }: IconProps) {
 export const AccountIcon = (props: IconProps) => (
   <Icon {...props}><circle cx="12" cy="8" r="3.5" /><path d="M5.5 20c.5-4 2.7-6 6.5-6s6 2 6.5 6" /></Icon>
 )
+export const OverviewIcon = (props: IconProps) => (
+  <Icon {...props}><path d="M4 20V12h4v8M10 20V4h4v16M16 20V8h4v12" /></Icon>
+)
 export const PoolIcon = (props: IconProps) => (
   <Icon {...props}><circle cx="6" cy="6" r="2.5" /><circle cx="18" cy="6" r="2.5" /><circle cx="12" cy="18" r="2.5" /><path d="m8 8 2.7 7.4M16 8l-2.7 7.4M8.5 6h7" /></Icon>
 )
@@ -55,6 +58,15 @@ export const LogoutIcon = (props: IconProps) => (
 export const ChevronIcon = (props: IconProps) => (
   <Icon {...props}><path d="m9 6 6 6-6 6" /></Icon>
 )
+export const ChevronDownIcon = (props: IconProps) => (
+  <Icon {...props}><path d="m6 9 6 6 6-6" /></Icon>
+)
 export const CheckIcon = (props: IconProps) => (
   <Icon {...props}><path d="m5 12 4 4L19 6" /></Icon>
+)
+export const PowerIcon = (props: IconProps) => (
+  <Icon {...props}><path d="M12 3v9" /><path d="M7.1 5.7a8 8 0 1 0 9.8 0" /></Icon>
+)
+export const TrashIcon = (props: IconProps) => (
+  <Icon {...props}><path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5" /></Icon>
 )

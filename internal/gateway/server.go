@@ -1,32 +1,40 @@
 package gateway
 
 import (
-	"bufio"
 	"context"
-	"crypto/rand"
-	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/gesta-run/subpool/internal/auth"
+	"github.com/gesta-run/subpool/internal/catalog"
 	"github.com/gesta-run/subpool/internal/credential"
 	"github.com/gesta-run/subpool/internal/domain"
 	"github.com/gesta-run/subpool/internal/provider/codex"
+	"github.com/gesta-run/subpool/internal/provider/openaicompat"
 	"github.com/gesta-run/subpool/internal/store"
 )
 
 const (
-	maxRequestBody = 32 << 20
-	accountHeader  = "X-Subpool-Internal-Account-Id"
+	maxRequestBody      = 32 << 20
+	maxProviderAttempts = 8
+	accountHeader       = "X-Subpool-Internal-Account-Id"
+	formatHeader        = "X-Subpool-Internal-Response-Format"
+)
+
+type retryReason string
+
+const (
+	retryUnavailable retryReason = "unavailable"
+	retryAuth        retryReason = "authentication"
+	retryRefresh     retryReason = "refresh"
+	retryRateLimit   retryReason = "rate_limit"
 )
 
 type Cipher interface {
@@ -38,19 +46,37 @@ type CodexClient interface {
 	Responses(context.Context, []byte, http.Header, codex.Credentials) (*http.Response, error)
 }
 
-type Server struct {
-	store     store.Store
-	keys      *auth.APIKeys
-	cipher    Cipher
-	codex     CodexClient
-	refresher credential.AccountRefresher
-	limiter   *rateLimiter
-	now       func() time.Time
-	eventSeq  atomic.Uint64
+type OpenAICompatibleClient interface {
+	Responses(context.Context, []byte, http.Header, openaicompat.Credentials) (*http.Response, error)
+	ChatCompletions(context.Context, []byte, http.Header, openaicompat.Credentials) (*http.Response, error)
 }
 
-func New(st store.Store, keys *auth.APIKeys, cipher Cipher, client CodexClient, refresher credential.AccountRefresher) *Server {
-	return &Server{store: st, keys: keys, cipher: cipher, codex: client, refresher: refresher, limiter: newRateLimiter(), now: time.Now}
+type Server struct {
+	store      store.Store
+	keys       *auth.APIKeys
+	cipher     Cipher
+	codex      CodexClient
+	compatible OpenAICompatibleClient
+	refresher  credential.AccountRefresher
+	activity   *requestActivityThrottle
+	catalog    *catalog.Service
+	models     *modelCache
+	now        func() time.Time
+	eventSeq   atomic.Uint64
+}
+
+func New(st store.Store, keys *auth.APIKeys, cipher Cipher, client CodexClient, refresher credential.AccountRefresher, compatible ...OpenAICompatibleClient) *Server {
+	var compatibleClient OpenAICompatibleClient
+	if len(compatible) > 0 {
+		compatibleClient = compatible[0]
+	}
+	return &Server{store: st, keys: keys, cipher: cipher, codex: client, compatible: compatibleClient, refresher: refresher,
+		activity: newRequestActivityThrottle(), models: newModelCache(), now: time.Now}
+}
+
+func (s *Server) WithModelProviders(codexModels catalog.CodexModels, compatibleModels catalog.CompatibleModels) *Server {
+	s.catalog = catalog.New(s.cipher, s.refresher, codexModels, compatibleModels)
+	return s
 }
 
 func (s *Server) Register(mux *http.ServeMux) {
@@ -65,6 +91,12 @@ type requestMeta struct {
 	PreviousResponseID string `json:"previous_response_id"`
 }
 
+type upstreamRequest struct {
+	kind      string
+	body      []byte
+	codexBody []byte
+}
+
 func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
 	route, ok := s.authorize(w, r, "responses")
 	if !ok {
@@ -74,27 +106,25 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !modelAllowed(meta.Model, route.Pool.ModelAllowlist) {
-		writeOpenAIError(w, http.StatusBadRequest, "model is not allowed by this API key", "invalid_request_error")
-		return
-	}
-	body = forceStream(body)
-	resp, ok := s.call(w, r, route, body, meta.PreviousResponseID)
+	codexBody := forceStream(body)
+	compatibleBody := forceProviderStream(body)
+	resp, ok := s.call(w, r, route, upstreamRequest{kind: "responses", body: compatibleBody, codexBody: codexBody}, meta.PreviousResponseID)
 	if !ok {
 		return
 	}
 	defer resp.Body.Close()
 	accountID := resp.Header.Get(accountHeader)
 	resp.Header.Del(accountHeader)
+	resp.Header.Del(formatHeader)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		s.proxyUpstreamError(w, resp)
 		return
 	}
 	if meta.Stream {
-		s.proxyResponsesStream(w, r, route.Key.ID, route.Pool.ID, accountID, resp)
+		s.proxyResponsesStream(w, r, route.Key.ID, route.Pool.ID, accountID, meta.Model, resp)
 		return
 	}
-	s.proxyResponsesJSON(w, r, route.Key.ID, route.Pool.ID, accountID, resp)
+	s.proxyResponsesJSON(w, r, route.Key.ID, route.Pool.ID, accountID, meta.Model, resp)
 }
 
 func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
@@ -106,43 +136,36 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !modelAllowed(meta.Model, route.Pool.ModelAllowlist) {
-		writeOpenAIError(w, http.StatusBadRequest, "model is not allowed by this API key", "invalid_request_error")
-		return
-	}
 	responseBody, err := chatToResponses(body)
 	if err != nil {
 		writeOpenAIError(w, http.StatusBadRequest, err.Error(), "invalid_request_error")
 		return
 	}
-	resp, ok := s.call(w, r, route, responseBody, "")
+	resp, ok := s.call(w, r, route, upstreamRequest{kind: "chat_completions", body: body, codexBody: responseBody}, "")
 	if !ok {
 		return
 	}
 	defer resp.Body.Close()
+	format := resp.Header.Get(formatHeader)
 	resp.Header.Del(accountHeader)
+	resp.Header.Del(formatHeader)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		s.proxyUpstreamError(w, resp)
 		return
 	}
 	if meta.Stream {
+		if format == "chat_completions" {
+			s.proxyCompatibleChatStream(w, route.Key.ID, meta.Model, resp)
+			return
+		}
 		s.proxyChatStream(w, r, route.Key.ID, meta.Model, resp)
 		return
 	}
-	s.proxyChatJSON(w, r, route.Key.ID, meta.Model, resp)
-}
-
-func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
-	route, ok := s.authorize(w, r, "models")
-	if !ok {
+	if format == "chat_completions" {
+		s.proxyCompatibleChatJSON(w, route.Key.ID, meta.Model, resp)
 		return
 	}
-	models := route.Pool.ModelAllowlist
-	data := make([]map[string]any, 0, len(models))
-	for _, id := range models {
-		data = append(data, map[string]any{"id": id, "object": "model", "owned_by": "subpool"})
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"object": "list", "data": data})
+	s.proxyChatJSON(w, r, route.Key.ID, meta.Model, resp)
 }
 
 func (s *Server) authorize(w http.ResponseWriter, r *http.Request, requiredScope string) (domain.KeyRoute, bool) {
@@ -156,7 +179,12 @@ func (s *Server) authorize(w http.ResponseWriter, r *http.Request, requiredScope
 		writeOpenAIError(w, http.StatusUnauthorized, "invalid API key", "invalid_api_key")
 		return domain.KeyRoute{}, false
 	}
-	if !s.limiter.Allow(route.Key.ID, route.Key.RateLimit, s.now()) {
+	allowed, err := s.store.AllowAPIKeyRequest(r.Context(), route.Key.ID, route.Key.RateLimit, s.now())
+	if err != nil {
+		writeOpenAIError(w, http.StatusServiceUnavailable, "rate limit state is unavailable", "server_error")
+		return domain.KeyRoute{}, false
+	}
+	if !allowed {
 		writeOpenAIError(w, http.StatusTooManyRequests, "API key rate limit exceeded", "subpool_rate_limited")
 		return domain.KeyRoute{}, false
 	}
@@ -199,8 +227,21 @@ func forceStream(body []byte) []byte {
 		return body
 	}
 	value["stream"] = true
+	value["store"] = false
+	for _, unsupported := range []string{"temperature", "top_p", "logprobs", "top_logprobs"} {
+		delete(value, unsupported)
+	}
 	if instructions, ok := value["instructions"]; !ok || instructions == nil {
 		value["instructions"] = ""
+	}
+	if input, ok := value["input"].(string); ok {
+		value["input"] = []any{map[string]any{
+			"role": "user",
+			"content": []any{map[string]any{
+				"type": "input_text",
+				"text": input,
+			}},
+		}}
 	}
 	out, err := json.Marshal(value)
 	if err != nil {
@@ -209,166 +250,140 @@ func forceStream(body []byte) []byte {
 	return out
 }
 
-func (s *Server) call(w http.ResponseWriter, r *http.Request, route domain.KeyRoute, body []byte, previousResponseID string) (*http.Response, bool) {
+func forceProviderStream(body []byte) []byte {
+	var value map[string]any
+	if json.Unmarshal(body, &value) != nil {
+		return body
+	}
+	value["stream"] = true
+	out, err := json.Marshal(value)
+	if err != nil {
+		return body
+	}
+	return out
+}
+
+func (s *Server) call(w http.ResponseWriter, r *http.Request, route domain.KeyRoute, request upstreamRequest, previousResponseID string) (*http.Response, bool) {
 	account := route.Account
+	var err error
 	continuation := previousResponseID != ""
 	if continuation {
-		var err error
 		account, err = s.store.ResolveSessionAccount(r.Context(), route.Key.ID, sessionHash(previousResponseID))
 		if err != nil {
 			writeOpenAIError(w, http.StatusServiceUnavailable, "session account is unavailable", "subpool_session_account_unavailable")
 			return nil, false
 		}
 	}
+	if !continuation && route.Pool.Provider == domain.ProviderMixed && account.CredentialType == domain.CredentialAPIKey {
+		if preferred, reassignErr := s.store.ReassignAPIKey(r.Context(), route.Key.ID, route.Pool.ID, nil); reassignErr == nil {
+			account = preferred
+		}
+	}
+	attempted := make([]string, 0, maxProviderAttempts)
+	lastRetry := retryUnavailable
 	if (!continuation && !route.MembershipEnabled) || !accountHealthy(account, s.now()) {
 		if continuation {
 			writeOpenAIError(w, http.StatusServiceUnavailable, "session account is unavailable", "subpool_session_account_unavailable")
 			return nil, false
 		}
-		var err error
-		account, err = s.store.ReassignAPIKey(r.Context(), route.Key.ID, route.Pool.ID, account.ID)
+		attempted = append(attempted, account.ID)
+		account, err = s.store.ReassignAPIKey(r.Context(), route.Key.ID, route.Pool.ID, attempted)
 		if err != nil {
 			writeOpenAIError(w, http.StatusServiceUnavailable, "no eligible account", "subpool_no_eligible_account")
 			return nil, false
 		}
 	}
-	for accountAttempt := 0; accountAttempt < 2; accountAttempt++ {
-		credentials, err := s.credentials(account)
-		if err != nil {
-			writeOpenAIError(w, http.StatusInternalServerError, "failed to load provider credentials", "server_error")
+	for attempt := 0; attempt < maxProviderAttempts; attempt++ {
+		attempted = append(attempted, account.ID)
+		resp, retry, complete := s.attemptAccount(r, route, request, account)
+		if complete {
+			return resp, resp != nil
+		}
+		lastRetry = retry
+		if continuation {
+			writeRetryFailure(w, lastRetry)
 			return nil, false
 		}
-		resp, err := s.codex.Responses(r.Context(), body, r.Header, credentials)
+		if attempt == maxProviderAttempts-1 {
+			break
+		}
+		account, err = s.store.ReassignAPIKey(r.Context(), route.Key.ID, route.Pool.ID, attempted)
 		if err != nil {
-			writeOpenAIError(w, http.StatusBadGateway, "provider request failed", "provider_error")
+			writeRetryFailure(w, lastRetry)
 			return nil, false
 		}
-		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-			_ = s.store.MarkProviderSuccess(r.Context(), account.ID)
-			_ = s.store.TouchAPIKey(r.Context(), route.Key.ID)
-			resp.Header.Set(accountHeader, account.ID)
-			return resp, true
-		}
-		if resp.StatusCode == http.StatusUnauthorized {
-			drainAndClose(resp)
-			refreshed, refreshErr := s.refresh(r.Context(), account, credentials)
-			definitive := false
-			if refreshErr == nil {
-				account = refreshed
-				refreshedCredentials, credentialsErr := s.credentials(account)
-				if credentialsErr != nil {
-					writeOpenAIError(w, http.StatusInternalServerError, "failed to load provider credentials", "server_error")
-					return nil, false
-				}
-				resp, err = s.codex.Responses(r.Context(), body, r.Header, refreshedCredentials)
-				if err != nil {
-					writeOpenAIError(w, http.StatusBadGateway, "provider request failed", "provider_error")
-					return nil, false
-				}
-				if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-					_ = s.store.MarkProviderSuccess(r.Context(), account.ID)
-					_ = s.store.TouchAPIKey(r.Context(), route.Key.ID)
-					resp.Header.Set(accountHeader, account.ID)
-					return resp, true
-				}
-				if resp.StatusCode != http.StatusUnauthorized {
-					return s.handleRetryableStatus(w, r, route, account, body, continuation, accountAttempt, resp)
-				}
-				drainAndClose(resp)
-				_ = s.store.UpdateProviderStatus(r.Context(), account.ID, domain.AccountAuthFailed, nil)
-				definitive = true
-			} else {
-				definitive = s.recordRefreshFailure(r.Context(), account.ID, refreshErr)
-			}
-			if continuation || accountAttempt == 1 {
-				writeRefreshFailure(w, definitive)
-				return nil, false
-			}
-			account, err = s.store.ReassignAPIKey(r.Context(), route.Key.ID, route.Pool.ID, account.ID)
-			if err != nil {
-				writeRefreshFailure(w, definitive)
-				return nil, false
-			}
-			continue
-		}
-		return s.handleRetryableStatus(w, r, route, account, body, continuation, accountAttempt, resp)
 	}
-	writeOpenAIError(w, http.StatusServiceUnavailable, "no eligible account", "subpool_no_eligible_account")
+	writeRetryFailure(w, lastRetry)
 	return nil, false
 }
 
-func (s *Server) handleRetryableStatus(w http.ResponseWriter, r *http.Request, route domain.KeyRoute, account domain.ProviderAccount, body []byte, continuation bool, attempt int, resp *http.Response) (*http.Response, bool) {
-	if resp.StatusCode != http.StatusTooManyRequests {
-		resp.Header.Set(accountHeader, account.ID)
-		return resp, true
+func (s *Server) attemptAccount(r *http.Request, route domain.KeyRoute, request upstreamRequest, account domain.ProviderAccount) (*http.Response, retryReason, bool) {
+	credentials, err := s.credentials(account)
+	if err != nil {
+		s.recordHealthFailure(r.Context(), account.ID, "credential_unavailable")
+		return nil, retryUnavailable, false
 	}
-	retryAt := retryAfter(resp.Header, s.now())
+	resp, err := s.providerAccountResponse(r.Context(), request, r.Header, credentials, account)
+	if err != nil {
+		s.recordHealthFailure(r.Context(), account.ID, "connection_failed")
+		return nil, retryUnavailable, false
+	}
+	if !isAuthenticationStatus(resp.StatusCode) {
+		return s.evaluateResponse(r.Context(), route.Key.ID, account.ID, resp)
+	}
 	drainAndClose(resp)
-	_ = s.store.UpdateProviderStatus(r.Context(), account.ID, domain.AccountCoolingDown, &retryAt)
-	if continuation || attempt == 1 {
-		writeOpenAIError(w, http.StatusTooManyRequests, "all eligible accounts are rate limited", "subpool_rate_limited")
-		return nil, false
+	if !refreshableCredentials(account) {
+		_ = s.store.UpdateProviderStatus(r.Context(), account.ID, domain.AccountAuthFailed, nil)
+		return nil, retryAuth, false
 	}
-	next, err := s.store.ReassignAPIKey(r.Context(), route.Key.ID, route.Pool.ID, account.ID)
+	return s.retryRefreshedAccount(r, route, request, account)
+}
+
+func (s *Server) retryRefreshedAccount(r *http.Request, route domain.KeyRoute, request upstreamRequest, account domain.ProviderAccount) (*http.Response, retryReason, bool) {
+	refreshed, err := s.refresh(r.Context(), account)
 	if err != nil {
-		writeOpenAIError(w, http.StatusTooManyRequests, "all eligible accounts are rate limited", "subpool_rate_limited")
-		return nil, false
+		if s.recordRefreshFailure(r.Context(), account.ID, err) {
+			return nil, retryAuth, false
+		}
+		return nil, retryRefresh, false
 	}
-	credentials, err := s.credentials(next)
+	credentials, err := s.credentials(refreshed)
 	if err != nil {
-		writeOpenAIError(w, http.StatusInternalServerError, "failed to load provider credentials", "server_error")
-		return nil, false
+		s.recordHealthFailure(r.Context(), refreshed.ID, "credential_unavailable")
+		return nil, retryUnavailable, false
 	}
-	nextResp, err := s.codex.Responses(r.Context(), body, r.Header, credentials)
+	resp, err := s.providerAccountResponse(r.Context(), request, r.Header, credentials, refreshed)
 	if err != nil {
-		writeOpenAIError(w, http.StatusBadGateway, "provider request failed", "provider_error")
-		return nil, false
+		s.recordHealthFailure(r.Context(), refreshed.ID, "connection_failed")
+		return nil, retryUnavailable, false
 	}
-	if nextResp.StatusCode == http.StatusTooManyRequests {
-		nextAt := retryAfter(nextResp.Header, s.now())
-		drainAndClose(nextResp)
-		_ = s.store.UpdateProviderStatus(r.Context(), next.ID, domain.AccountCoolingDown, &nextAt)
-		writeOpenAIError(w, http.StatusTooManyRequests, "all eligible accounts are rate limited", "subpool_rate_limited")
-		return nil, false
+	if isAuthenticationStatus(resp.StatusCode) {
+		drainAndClose(resp)
+		_ = s.store.UpdateProviderStatus(r.Context(), refreshed.ID, domain.AccountAuthFailed, nil)
+		return nil, retryAuth, false
 	}
-	if nextResp.StatusCode == http.StatusUnauthorized {
-		drainAndClose(nextResp)
-		refreshed, refreshErr := s.refresh(r.Context(), next, credentials)
-		if refreshErr != nil {
-			writeRefreshFailure(w, s.recordRefreshFailure(r.Context(), next.ID, refreshErr))
-			return nil, false
-		}
-		next = refreshed
-		refreshedCredentials, credentialsErr := s.credentials(next)
-		if credentialsErr != nil {
-			writeOpenAIError(w, http.StatusInternalServerError, "failed to load provider credentials", "server_error")
-			return nil, false
-		}
-		nextResp, err = s.codex.Responses(r.Context(), body, r.Header, refreshedCredentials)
-		if err != nil {
-			writeOpenAIError(w, http.StatusBadGateway, "provider request failed", "provider_error")
-			return nil, false
-		}
-		if nextResp.StatusCode == http.StatusUnauthorized {
-			drainAndClose(nextResp)
-			_ = s.store.UpdateProviderStatus(r.Context(), next.ID, domain.AccountAuthFailed, nil)
-			writeOpenAIError(w, http.StatusUnauthorized, "provider authentication failed", "provider_authentication_error")
-			return nil, false
-		}
-		if nextResp.StatusCode == http.StatusTooManyRequests {
-			nextAt := retryAfter(nextResp.Header, s.now())
-			drainAndClose(nextResp)
-			_ = s.store.UpdateProviderStatus(r.Context(), next.ID, domain.AccountCoolingDown, &nextAt)
-			writeOpenAIError(w, http.StatusTooManyRequests, "all eligible accounts are rate limited", "subpool_rate_limited")
-			return nil, false
+	return s.evaluateResponse(r.Context(), route.Key.ID, refreshed.ID, resp)
+}
+
+func (s *Server) evaluateResponse(ctx context.Context, keyID, accountID string, resp *http.Response) (*http.Response, retryReason, bool) {
+	if resp.StatusCode == http.StatusTooManyRequests {
+		retryAt := retryAfter(resp.Header, s.now())
+		drainAndClose(resp)
+		_ = s.store.UpdateProviderStatus(ctx, accountID, domain.AccountCoolingDown, &retryAt)
+		return nil, retryRateLimit, false
+	}
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		if s.activity.ShouldRecord(accountID, keyID, s.now()) {
+			_ = s.store.RecordRequestSuccess(ctx, accountID, keyID, s.now())
 		}
 	}
-	if nextResp.StatusCode >= 200 && nextResp.StatusCode < 300 {
-		_ = s.store.MarkProviderSuccess(r.Context(), next.ID)
-		_ = s.store.TouchAPIKey(r.Context(), route.Key.ID)
+	if resp.StatusCode >= 500 {
+		s.recordHealthFailure(ctx, accountID, "provider_5xx")
+		drainAndClose(resp)
+		return nil, retryUnavailable, false
 	}
-	nextResp.Header.Set(accountHeader, next.ID)
-	return nextResp, true
+	resp.Header.Set(accountHeader, accountID)
+	return resp, "", true
 }
 
 func (s *Server) recordRefreshFailure(ctx context.Context, accountID string, err error) bool {
@@ -381,12 +396,26 @@ func (s *Server) recordRefreshFailure(ctx context.Context, accountID string, err
 	return false
 }
 
-func writeRefreshFailure(w http.ResponseWriter, definitive bool) {
-	if definitive {
+func (s *Server) recordHealthFailure(ctx context.Context, accountID, code string) {
+	now := s.now()
+	_ = s.store.RecordProviderHealthFailure(ctx, accountID, code, now, now.Add(5*time.Minute))
+}
+
+func isAuthenticationStatus(status int) bool {
+	return status == http.StatusUnauthorized || status == http.StatusForbidden
+}
+
+func writeRetryFailure(w http.ResponseWriter, reason retryReason) {
+	switch reason {
+	case retryAuth:
 		writeOpenAIError(w, http.StatusUnauthorized, "provider authentication failed", "provider_authentication_error")
-		return
+	case retryRefresh:
+		writeOpenAIError(w, http.StatusServiceUnavailable, "provider credential refresh is temporarily unavailable", "provider_error")
+	case retryRateLimit:
+		writeOpenAIError(w, http.StatusTooManyRequests, "all eligible accounts are rate limited", "subpool_rate_limited")
+	default:
+		writeOpenAIError(w, http.StatusServiceUnavailable, "no eligible account", "subpool_no_eligible_account")
 	}
-	writeOpenAIError(w, http.StatusServiceUnavailable, "provider credential refresh is temporarily unavailable", "provider_error")
 }
 
 func (s *Server) credentials(account domain.ProviderAccount) (codex.Credentials, error) {
@@ -400,11 +429,18 @@ func (s *Server) credentials(account domain.ProviderAccount) (codex.Credentials,
 	}
 	return credentials, nil
 }
-func (s *Server) refresh(ctx context.Context, account domain.ProviderAccount, _ codex.Credentials) (domain.ProviderAccount, error) {
+func (s *Server) refresh(ctx context.Context, account domain.ProviderAccount) (domain.ProviderAccount, error) {
 	return s.refresher.RefreshAccount(ctx, account.ID, account.CredentialVersion)
 }
 
+func refreshableCredentials(account domain.ProviderAccount) bool {
+	return account.CredentialType == "" || account.CredentialType == domain.CredentialSubscription
+}
+
 func accountHealthy(account domain.ProviderAccount, now time.Time) bool {
+	if account.HealthStatus == domain.HealthUnhealthy {
+		return false
+	}
 	switch account.Status {
 	case domain.AccountActive:
 		return true
@@ -413,14 +449,6 @@ func accountHealthy(account domain.ProviderAccount, now time.Time) bool {
 	default:
 		return false
 	}
-}
-func modelAllowed(model string, allowlist []string) bool {
-	for _, allowed := range allowlist {
-		if model == allowed {
-			return true
-		}
-	}
-	return false
 }
 func retryAfter(header http.Header, now time.Time) time.Time {
 	value := strings.TrimSpace(header.Get("Retry-After"))
@@ -437,6 +465,49 @@ func drainAndClose(resp *http.Response) {
 	_ = resp.Body.Close()
 }
 
+func (s *Server) providerAccountResponse(ctx context.Context, request upstreamRequest, header http.Header, codexCredentials codex.Credentials, account domain.ProviderAccount) (*http.Response, error) {
+	var (
+		resp           *http.Response
+		err            error
+		responseFormat = request.kind
+	)
+	switch account.Provider {
+	case "", domain.ProviderCodex:
+		resp, err = s.codex.Responses(ctx, request.codexBody, header, codexCredentials)
+		responseFormat = "responses"
+	case domain.ProviderOpenAICompatible:
+		if s.compatible == nil {
+			err = errors.New("OpenAI-compatible provider client is unavailable")
+			break
+		}
+		plaintext, decryptErr := s.cipher.Decrypt(account.CredentialCiphertext)
+		if decryptErr != nil {
+			err = decryptErr
+			break
+		}
+		var credentials openaicompat.Credentials
+		if unmarshalErr := json.Unmarshal(plaintext, &credentials); unmarshalErr != nil {
+			err = unmarshalErr
+			break
+		}
+		if request.kind == "chat_completions" {
+			resp, err = s.compatible.ChatCompletions(ctx, request.body, header, credentials)
+		} else {
+			resp, err = s.compatible.Responses(ctx, request.body, header, credentials)
+		}
+	default:
+		err = fmt.Errorf("unsupported provider %q", account.Provider)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if resp == nil || resp.Body == nil {
+		return nil, errors.New("provider returned an empty response")
+	}
+	resp.Header.Set(formatHeader, responseFormat)
+	return resp, nil
+}
+
 func writeOpenAIError(w http.ResponseWriter, status int, message, code string) {
 	writeJSON(w, status, map[string]any{"error": map[string]any{"message": message, "type": code, "code": code}})
 }
@@ -444,35 +515,6 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(value)
-}
-
-type windowCounter struct {
-	start time.Time
-	count int
-}
-type rateLimiter struct {
-	mu     sync.Mutex
-	values map[string]windowCounter
-}
-
-func newRateLimiter() *rateLimiter { return &rateLimiter{values: make(map[string]windowCounter)} }
-func (l *rateLimiter) Allow(key string, limit int, now time.Time) bool {
-	if limit <= 0 {
-		return true
-	}
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	v := l.values[key]
-	if now.Sub(v.start) >= time.Minute || v.start.IsZero() {
-		v = windowCounter{start: now}
-	}
-	if v.count >= limit {
-		l.values[key] = v
-		return false
-	}
-	v.count++
-	l.values[key] = v
-	return true
 }
 
 func copyResponseHeaders(dst, src http.Header) {
@@ -485,255 +527,4 @@ func copyResponseHeaders(dst, src http.Header) {
 			dst.Add(name, value)
 		}
 	}
-}
-func (s *Server) proxyUpstreamError(w http.ResponseWriter, resp *http.Response) {
-	copyResponseHeaders(w.Header(), resp.Header)
-	w.WriteHeader(resp.StatusCode)
-	_, _ = io.Copy(w, io.LimitReader(resp.Body, 1<<20))
-}
-
-func (s *Server) proxyResponsesStream(w http.ResponseWriter, r *http.Request, keyID, poolID, accountID string, resp *http.Response) {
-	copyResponseHeaders(w.Header(), resp.Header)
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.WriteHeader(resp.StatusCode)
-	responseID := ""
-	fallbackEventHash := s.randomUsageEventHash()
-	terminal := false
-	input, output, err := copySSE(w, resp.Body, func(data []byte) {
-		if id := responseIDFromEvent(data); id != "" {
-			responseID = id
-		}
-		if event := eventType(data); event == "response.completed" || event == "response.incomplete" {
-			terminal = true
-		}
-	})
-	if err != nil || !terminal {
-		return
-	}
-	if input > 0 || output > 0 {
-		s.addUsage(keyID, s.usageEventHash(responseID, fallbackEventHash), input, output)
-	}
-	if responseID != "" && accountID != "" {
-		s.saveSession(keyID, poolID, responseID, accountID)
-	}
-}
-
-func (s *Server) proxyResponsesJSON(w http.ResponseWriter, r *http.Request, keyID, poolID, accountID string, resp *http.Response) {
-	fallbackEventHash := s.randomUsageEventHash()
-	value, input, output, _, err := completedResponse(resp)
-	if err != nil {
-		writeOpenAIError(w, http.StatusBadGateway, "invalid provider response", "provider_error")
-		return
-	}
-	responseID := ""
-	if response, ok := value.(map[string]any); ok {
-		responseID, _ = response["id"].(string)
-		if responseID != "" && accountID != "" {
-			s.saveSession(keyID, poolID, responseID, accountID)
-		}
-	}
-	if input > 0 || output > 0 {
-		s.addUsage(keyID, s.usageEventHash(responseID, fallbackEventHash), input, output)
-	}
-	writeJSON(w, http.StatusOK, value)
-}
-
-func copySSE(w http.ResponseWriter, reader io.Reader, observe func([]byte)) (int64, int64, error) {
-	buffered := bufio.NewReaderSize(reader, 32<<10)
-	var input, output int64
-	for {
-		line, err := buffered.ReadBytes('\n')
-		if len(line) > 0 {
-			if _, writeErr := w.Write(line); writeErr != nil {
-				return input, output, writeErr
-			}
-			if data := sseData(line); len(data) > 0 {
-				observe(data)
-				i, o := usageFromEvent(data)
-				if i > input {
-					input = i
-				}
-				if o > output {
-					output = o
-				}
-			}
-			if flusher, ok := w.(http.Flusher); ok {
-				flusher.Flush()
-			}
-		}
-		if err != nil {
-			if errors.Is(err, io.EOF) {
-				return input, output, nil
-			}
-			return input, output, err
-		}
-	}
-}
-
-func sseData(line []byte) []byte {
-	trimmed := strings.TrimSpace(string(line))
-	if !strings.HasPrefix(trimmed, "data:") {
-		return nil
-	}
-	return []byte(strings.TrimSpace(strings.TrimPrefix(trimmed, "data:")))
-}
-
-func completedResponse(resp *http.Response) (any, int64, int64, string, error) {
-	contentType := resp.Header.Get("Content-Type")
-	if strings.Contains(contentType, "application/json") {
-		var value any
-		err := json.NewDecoder(io.LimitReader(resp.Body, 32<<20)).Decode(&value)
-		raw, _ := json.Marshal(value)
-		i, o := usageFromEvent(raw)
-		status := ""
-		if response, ok := value.(map[string]any); ok {
-			status, _ = response["status"].(string)
-		}
-		if err == nil && status != "completed" && status != "incomplete" {
-			err = fmt.Errorf("provider response is not terminal")
-		}
-		return value, i, o, status, err
-	}
-	scanner := bufio.NewScanner(resp.Body)
-	scanner.Buffer(make([]byte, 64<<10), 32<<20)
-	var completed any
-	status := ""
-	var input, output int64
-	for scanner.Scan() {
-		data := sseData(scanner.Bytes())
-		if len(data) == 0 || string(data) == "[DONE]" {
-			continue
-		}
-		i, o := usageFromEvent(data)
-		if i > input {
-			input = i
-		}
-		if o > output {
-			output = o
-		}
-		var event struct {
-			Type     string `json:"type"`
-			Response any    `json:"response"`
-		}
-		if json.Unmarshal(data, &event) == nil && (event.Type == "response.completed" || event.Type == "response.incomplete") {
-			completed = event.Response
-			status = strings.TrimPrefix(event.Type, "response.")
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, 0, 0, "", err
-	}
-	if completed == nil {
-		return nil, 0, 0, "", fmt.Errorf("provider stream did not contain a terminal response")
-	}
-	return completed, input, output, status, nil
-}
-
-func usageFromEvent(data []byte) (int64, int64) {
-	var value map[string]any
-	if json.Unmarshal(data, &value) != nil {
-		return 0, 0
-	}
-	usage, _ := value["usage"].(map[string]any)
-	if response, ok := value["response"].(map[string]any); ok {
-		if nested, ok := response["usage"].(map[string]any); ok {
-			usage = nested
-		}
-	}
-	if usage == nil {
-		return 0, 0
-	}
-	return number(usage["input_tokens"]), number(usage["output_tokens"])
-}
-
-func eventType(data []byte) string {
-	var value struct {
-		Type string `json:"type"`
-	}
-	_ = json.Unmarshal(data, &value)
-	return value.Type
-}
-
-func responseIDFromEvent(data []byte) string {
-	var value map[string]any
-	if json.Unmarshal(data, &value) != nil {
-		return ""
-	}
-	if id, ok := value["response_id"].(string); ok {
-		return id
-	}
-	if response, ok := value["response"].(map[string]any); ok {
-		if id, ok := response["id"].(string); ok {
-			return id
-		}
-	}
-	return ""
-}
-func sessionHash(value string) []byte { sum := sha256.Sum256([]byte(value)); return sum[:] }
-func (s *Server) addUsage(keyID string, eventHash []byte, input, output int64) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	var err error
-	for attempt := 1; attempt <= 3; attempt++ {
-		err = s.store.AddUsage(ctx, keyID, eventHash, s.now(), input, output)
-		if err == nil {
-			return
-		}
-		if attempt < 3 && !waitRetry(ctx, time.Duration(attempt)*25*time.Millisecond) {
-			break
-		}
-	}
-	slog.Error("usage aggregation failed", "api_key_id", keyID, "attempts", 3, "error", err)
-}
-
-func (s *Server) usageEventHash(responseID string, fallback []byte) []byte {
-	if responseID == "" {
-		return fallback
-	}
-	return s.keys.Digest("usage-event:" + responseID)
-}
-
-func (s *Server) randomUsageEventHash() []byte {
-	random := make([]byte, 32)
-	if _, err := rand.Read(random); err == nil {
-		return s.keys.Digest("usage-event-fallback:" + string(random))
-	}
-	sequence := s.eventSeq.Add(1)
-	return s.keys.Digest(fmt.Sprintf("usage-event-fallback:%d:%d", s.now().UnixNano(), sequence))
-}
-func (s *Server) saveSession(keyID, poolID, responseID, accountID string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	var err error
-	for attempt := 1; attempt <= 3; attempt++ {
-		err = s.store.SaveSessionBinding(ctx, keyID, poolID, sessionHash(responseID), accountID, s.now().Add(24*time.Hour))
-		if err == nil {
-			return
-		}
-		if attempt < 3 && !waitRetry(ctx, time.Duration(attempt)*25*time.Millisecond) {
-			break
-		}
-	}
-	slog.Error("session binding failed", "api_key_id", keyID, "attempts", 3, "error", err)
-}
-
-func waitRetry(ctx context.Context, delay time.Duration) bool {
-	timer := time.NewTimer(delay)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return false
-	case <-timer.C:
-		return true
-	}
-}
-func number(value any) int64 {
-	switch v := value.(type) {
-	case float64:
-		return int64(v)
-	case json.Number:
-		n, _ := v.Int64()
-		return n
-	}
-	return 0
 }

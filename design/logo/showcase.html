@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Subpool — Logo Exploration</title>
+    <style>
+      :root { color-scheme: light; font-family: "Aptos", "Helvetica Neue", sans-serif; background: #ececea; color: #10141c; }
+      * { box-sizing: border-box; }
+      body { margin: 0; }
+      main { width: min(1180px, calc(100% - 32px)); margin: auto; padding: 56px 0 80px; }
+      header { margin-bottom: 30px; display: flex; align-items: end; justify-content: space-between; gap: 32px; }
+      h1 { margin: 0; font-size: clamp(48px, 8vw, 92px); font-weight: 560; letter-spacing: -.065em; line-height: .88; }
+      header p { max-width: 390px; margin: 0; color: #6c6d72; font-size: 14px; line-height: 1.55; }
+      .controls { margin-bottom: 18px; display: flex; gap: 8px; }
+      button { min-height: 36px; border: 1px solid #c8c8c3; border-radius: 7px; padding: 0 13px; background: #f8f8f5; color: #10141c; cursor: pointer; }
+      button[aria-pressed="true"] { background: #10141c; color: white; border-color: #10141c; }
+      .grid { display: grid; grid-template-columns: repeat(3, 1fr); border: 1px solid #c8c8c3; border-right: 0; border-bottom: 0; }
+      article { min-width: 0; background: #f8f8f5; border-right: 1px solid #c8c8c3; border-bottom: 1px solid #c8c8c3; transition: background .2s ease, transform .2s ease; }
+      article:hover { transform: translateY(-3px); background: white; }
+      .art { min-height: 290px; display: grid; place-items: center; }
+      .art img { width: var(--mark-size, 132px); height: var(--mark-size, 132px); transition: width .2s ease, height .2s ease; }
+      .meta { min-height: 150px; padding: 18px; border-top: 1px solid #ddddda; }
+      .meta span { color: #145bff; font: 10px/1 monospace; }
+      h2 { margin: 8px 0; font-size: 16px; }
+      .meta p { margin: 0; color: #6c6d72; font-size: 12px; line-height: 1.5; }
+      .recommended { position: relative; }
+      .recommended::after { content: "RECOMMENDED"; position: absolute; top: 14px; right: 14px; border-radius: 999px; padding: 6px 8px; color: white; background: #145bff; font: 9px/1 monospace; }
+      footer { margin-top: 24px; color: #77787c; font: 11px/1.5 monospace; }
+      @media (max-width: 850px) { .grid { grid-template-columns: repeat(2, 1fr); } }
+      @media (max-width: 600px) { header { align-items: start; flex-direction: column; } .grid { grid-template-columns: 1fr; } }
+      @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header><h1>Subpool<br />Logo Study</h1><p>A CoLnk-family identity for pooling subscription accounts behind one routing core. Ink #10141C · Cobalt #145BFF.</p></header>
+      <div class="controls" role="group" aria-label="Logo preview size"><button type="button" data-size="96">Small</button><button type="button" data-size="132" aria-pressed="true">Default</button><button type="button" data-size="176">Large</button></div>
+      <section class="grid" aria-label="Logo concepts">
+        <article class="recommended"><div class="art"><img src="variants/pool-core.svg" alt="Pool Core concept" /></div><div class="meta"><span>01 / POOL CORE</span><h2>Accounts orbit one router</h2><p>Six quiet account modules surround a cobalt routing core. Closest to CoLnk's visual family while remaining a distinct topology.</p></div></article>
+        <article><div class="art"><img src="variants/capacity-stack.svg" alt="Capacity Stack concept" /></div><div class="meta"><span>02 / CAPACITY STACK</span><h2>Seats as infrastructure</h2><p>Staggered capacity bands make allocation and available slots the primary metaphor.</p></div></article>
+        <article><div class="art"><img src="variants/routed-s.svg" alt="Routed S concept" /></div><div class="meta"><span>03 / ROUTED S</span><h2>Matrix monogram</h2><p>A denser S-shaped module field with the router highlighted at its center.</p></div></article>
+        <article><div class="art"><img src="variants/router-fanout.svg" alt="Router Fanout concept" /></div><div class="meta"><span>04 / ROUTER FANOUT</span><h2>Explicit distribution</h2><p>The central node visibly fans requests out to four subscription accounts.</p></div></article>
+        <article><div class="art"><img src="variants/pool-ring.svg" alt="Pool Ring concept" /></div><div class="meta"><span>05 / POOL RING</span><h2>Continuous availability</h2><p>Six account capsules form a rotation loop around a stable cobalt core.</p></div></article>
+        <article><div class="art"><img src="variants/token-weave.svg" alt="Token Weave concept" /></div><div class="meta"><span>06 / TOKEN WEAVE</span><h2>Two-way token flow</h2><p>Interwoven paths express input and output moving through a shared gateway.</p></div></article>
+      </section>
+      <footer>Recommended direction: Pool Core · SVG master assets are stored beside this showcase.</footer>
+    </main>
+    <script>
+      const buttons = document.querySelectorAll('[data-size]');
+      buttons.forEach((button) => button.addEventListener('click', () => {
+        document.documentElement.style.setProperty('--mark-size', `${button.dataset.size}px`);
+        buttons.forEach((candidate) => candidate.setAttribute('aria-pressed', String(candidate === button)));
+      }));
+    </script>
+  </body>
+</html>
