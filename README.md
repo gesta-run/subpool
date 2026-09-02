@@ -68,17 +68,16 @@ Codex subscriptions use [device-code authorization](https://developers.openai.co
 Configure Codex CLI:
 
 ```toml
+model = "gpt-5.6-sol"
 model_provider = "subpool"
+model_reasoning_effort = "xhigh"
 
 [model_providers.subpool]
 name = "Subpool"
 base_url = "https://subpool.example.com/v1"
-env_key = "SUBPOOL_API_KEY"
 wire_api = "responses"
-```
-
-```bash
-export SUBPOOL_API_KEY="sk-example-not-a-real-key"
+experimental_bearer_token = "sk-example-not-a-real-key"
+requires_openai_auth = false
 ```
 
 Available endpoints include `POST /v1/responses`, `POST /v1/chat/completions`, `GET /v1/models`, `GET /healthz`, `GET /readyz`, and `GET /metrics`.
