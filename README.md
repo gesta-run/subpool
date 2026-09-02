@@ -108,4 +108,4 @@ go test ./...
 
 ## Terms
 
-Subpool is independent and self-hosted. Use only accounts you are authorized to manage, and review each upstream provider's terms before sharing access.
+Subpool is licensed under the [Apache License 2.0](LICENSE). It is independent and self-hosted. Use only accounts you are authorized to manage, and review each upstream provider's terms before sharing access.
