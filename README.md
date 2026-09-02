@@ -6,7 +6,7 @@
 </p>
 
 <p align="center">
-  Enterprise AI subscription quota allocation and governance, self-hosted.
+  A lightweight, self-hosted AI subscription pool for teams.
 </p>
 
 <p align="center">
@@ -16,7 +16,7 @@
   <img alt="Docker Compose" src="https://img.shields.io/badge/Deploy-Docker_Compose-2496ED?logo=docker&logoColor=white">
 </p>
 
-Subpool is a self-hosted control plane for allocating, governing, and auditing AI subscription capacity across teams. Administrators combine authorized subscription and API accounts into pools, distribute employee-specific keys, monitor remaining quota, and expose one consistent API without storing conversation content.
+Subpool is a lightweight, self-hosted service that pools AI subscriptions and API accounts behind one consistent team API. Administrators combine authorized subscription and API accounts into pools, distribute employee-specific keys, monitor remaining quota, and expose one consistent API without storing conversation content.
 
 <p align="center">
   <img src="docs/images/subpool-accounts-console.png" alt="Subpool provider accounts console">
