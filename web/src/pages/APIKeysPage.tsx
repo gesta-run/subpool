@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import { errorMessage, request } from '../api'
+import { copyText } from '../clipboard'
 import { ConfirmDialog } from '../components/ConfirmDialog'
-import { CopyIcon, KeyIcon, PlusIcon } from '../components/Icons'
+import { CheckIcon, CopyIcon, KeyIcon, PlusIcon } from '../components/Icons'
 import { Modal } from '../components/Modal'
 import { PageSkeleton } from '../components/PageSkeleton'
 import { SelectMenu } from '../components/SelectMenu'
@@ -54,11 +55,12 @@ function CreateKeyDialog(props: { actionError: string; employee: string; expiryD
   </Modal>
 }
 
-function CreatedKeyDialog({ copied, secret, onClose, onCopy }: { copied: boolean; secret: string; onClose: () => void; onCopy: () => void }) {
+function CreatedKeyDialog({ copied, copyError, secret, onClose, onCopy }: { copied: boolean; copyError: string; secret: string; onClose: () => void; onCopy: () => void }) {
   return <Modal title="Copy this key now" description="For security, Subpool will not show the complete key again." onClose={onClose}>
     <div className="secret-box"><KeyIcon /><code data-testid="created-key">{secret}</code></div>
+    {copyError ? <div className="inline-alert" role="alert">{copyError}</div> : null}
     <div className="inline-alert inline-alert--warning" role="status"><strong>Store it securely.</strong><span>Closing this window permanently hides the complete value.</span></div>
-    <div className="form-actions"><button className="button button--secondary" type="button" onClick={onClose}>I have saved it</button><button className="button button--primary" type="button" onClick={onCopy}>{copied ? 'Copied' : <><CopyIcon className="button__icon" /> Copy API key</>}</button></div>
+    <div className="form-actions"><button className="button button--secondary" type="button" onClick={onClose}>I have saved it</button><button className="button button--primary" type="button" onClick={onCopy} aria-live="polite">{copied ? <><CheckIcon className="button__icon" /> Copied</> : <><CopyIcon className="button__icon" /> Copy API key</>}</button></div>
   </Modal>
 }
 
@@ -72,6 +74,7 @@ export function APIKeysPage() {
   const [expiryDays, setExpiryDays] = useState('never')
   const [createdKey, setCreatedKey] = useState('')
   const [copied, setCopied] = useState(false)
+  const [copyError, setCopyError] = useState('')
   const [saving, setSaving] = useState(false)
   const [actionError, setActionError] = useState('')
   const [pendingRemove, setPendingRemove] = useState<APIKeyRecord | null>(null)
@@ -122,8 +125,13 @@ export function APIKeysPage() {
   }
 
   async function copyCreatedKey() {
-    await navigator.clipboard.writeText(createdKey)
-    setCopied(true)
+    setCopyError('')
+    try {
+      await copyText(createdKey)
+      setCopied(true)
+    } catch {
+      setCopyError('Copy failed. Select the key above and copy it manually.')
+    }
   }
 
   function closeSecret() {
@@ -131,6 +139,7 @@ export function APIKeysPage() {
     setEmployee('')
     setExpiryDays('never')
     setCopied(false)
+    setCopyError('')
   }
 
   return (
@@ -141,7 +150,7 @@ export function APIKeysPage() {
       </header>
       <APIKeysBody accounts={accounts.items} actionError={!showCreate ? actionError : ''} activeKeys={activeKeys} loadError={loadError} loading={loading} pools={pools.items} usedKeys={usedKeys} onCreate={() => setShowCreate(true)} onReload={() => { void keys.reload(); void pools.reload(); void accounts.reload() }} onRemove={setPendingRemove} />
       {showCreate ? <CreateKeyDialog actionError={actionError} employee={employee} expiryDays={expiryDays} poolID={poolID} pools={pools.items} poolsLoading={pools.loading} saving={saving} onClose={() => setShowCreate(false)} onCreate={() => void createKey()} onEmployeeChange={setEmployee} onExpiryChange={setExpiryDays} onPoolChange={setPoolID} /> : null}
-      {createdKey ? <CreatedKeyDialog copied={copied} secret={createdKey} onClose={closeSecret} onCopy={() => void copyCreatedKey()} /> : null}
+      {createdKey ? <CreatedKeyDialog copied={copied} copyError={copyError} secret={createdKey} onClose={closeSecret} onCopy={() => void copyCreatedKey()} /> : null}
       {pendingRemove ? <ConfirmDialog
         title={`Remove ${pendingRemove.employee_name}'s API key?`}
         description="This key will stop working immediately. Historical token usage will be retained."

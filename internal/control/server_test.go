@@ -26,6 +26,8 @@ type controlStore struct {
 	createdKey       domain.APIKey
 	capacityErr      bool
 	createAccountErr error
+	createStarted    chan struct{}
+	createFinished   chan struct{}
 	deleteAccountErr error
 	deletedAccountID string
 	audits           []domain.AuditEvent
@@ -40,7 +42,15 @@ type controlStore struct {
 	resetCheckedAt   *time.Time
 }
 
-func (f *controlStore) CreateProviderAccount(_ context.Context, account domain.ProviderAccount) error {
+func (f *controlStore) CreateProviderAccount(ctx context.Context, account domain.ProviderAccount) error {
+	if f.createStarted != nil {
+		close(f.createStarted)
+		<-ctx.Done()
+		if f.createFinished != nil {
+			close(f.createFinished)
+		}
+		return ctx.Err()
+	}
 	if f.createAccountErr != nil {
 		return f.createAccountErr
 	}
@@ -121,16 +131,20 @@ func (f *controlStore) ClaimProviderResetCreditRefresh(context.Context, string, 
 }
 func (f *controlStore) ReleaseProviderResetCreditRefresh(context.Context, string) error { return nil }
 
-type controlOAuth struct{ credentials codex.Credentials }
+type controlDeviceAuth struct {
+	credentials codex.Credentials
+	err         error
+	canceled    string
+}
 
-func (f *controlOAuth) Start(string) (string, error) {
-	return "https://auth.example/authorize", nil
+func (f *controlDeviceAuth) Start(context.Context) (codex.DeviceAuthorization, <-chan codex.DeviceAuthorizationResult, error) {
+	result := make(chan codex.DeviceAuthorizationResult, 1)
+	result <- codex.DeviceAuthorizationResult{Credentials: f.credentials, Err: f.err}
+	close(result)
+	return codex.DeviceAuthorization{LoginID: "device-login", UserCode: "ABCD-EFGH", VerificationURL: "https://auth.openai.com/device", ExpiresAt: time.Now().Add(10 * time.Minute)}, result, nil
 }
-func (f *controlOAuth) Exchange(context.Context, string, string) (codex.Credentials, string, error) {
-	return f.credentials, "Imported account", nil
-}
-func (f *controlOAuth) Refresh(context.Context, string) (codex.Credentials, error) {
-	return f.credentials, nil
+func (f *controlDeviceAuth) Cancel(loginID string) {
+	f.canceled = loginID
 }
 
 type controlRefresher struct {
@@ -252,14 +266,21 @@ func TestSessionEndpointRestoresAuthenticatedAdmin(t *testing.T) {
 	}
 }
 
-func TestOAuthCallbackEncryptsCredentialsAndRedirects(t *testing.T) {
+func TestDeviceLoginEncryptsCredentialsAndCreatesAccount(t *testing.T) {
 	server, st, cipher := newControlServer(t)
 	mux := http.NewServeMux()
 	server.Register(mux)
+	cookie := loginCookie(t, mux)
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/provider-accounts/codex/device-login", strings.NewReader(`{"display_name":"Imported account"}`))
+	request.AddCookie(cookie)
 	recorder := httptest.NewRecorder()
-	mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/v1/provider-accounts/oauth/callback?state=state&code=code", nil))
-	if recorder.Code != http.StatusSeeOther || recorder.Header().Get("Location") != "/#/accounts" {
-		t.Fatalf("callback = %d %q", recorder.Code, recorder.Header().Get("Location"))
+	mux.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusCreated || !strings.Contains(recorder.Body.String(), `"user_code":"ABCD-EFGH"`) {
+		t.Fatalf("start = %d %s", recorder.Code, recorder.Body.String())
+	}
+	status := waitForDeviceLogin(t, mux, cookie)
+	if status != "completed" {
+		t.Fatalf("status = %s", status)
 	}
 	if st.account.ID == "" || st.account.Status != domain.AccountActive {
 		t.Fatalf("account = %#v", st.account)
@@ -281,31 +302,81 @@ func TestOAuthCallbackEncryptsCredentialsAndRedirects(t *testing.T) {
 	}
 }
 
-func TestOAuthCallbackRejectsDuplicateSubject(t *testing.T) {
+func TestDeviceLoginReportsDuplicateSubject(t *testing.T) {
 	server, st, _ := newControlServer(t)
 	st.createAccountErr = store.ErrConflict
 	mux := http.NewServeMux()
 	server.Register(mux)
-	recorder := httptest.NewRecorder()
-	mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/v1/provider-accounts/oauth/callback?state=state&code=code", nil))
-	if recorder.Code != http.StatusConflict {
-		t.Fatalf("status = %d body=%s", recorder.Code, recorder.Body.String())
+	cookie := loginCookie(t, mux)
+	startDeviceLogin(t, mux, cookie)
+	if status := waitForDeviceLogin(t, mux, cookie); status != "failed" {
+		t.Fatalf("status = %s", status)
 	}
 }
 
-func TestOAuthCallbackRejectsMissingAccountID(t *testing.T) {
+func TestDeviceLoginRejectsMissingAccountID(t *testing.T) {
 	server, st, _ := newControlServer(t)
-	server.oauth.(*controlOAuth).credentials.AccountID = ""
+	server.deviceAuth.(*controlDeviceAuth).credentials.AccountID = ""
 	mux := http.NewServeMux()
 	server.Register(mux)
-	recorder := httptest.NewRecorder()
-	mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/v1/provider-accounts/oauth/callback?state=state&code=code", nil))
-	if recorder.Code != http.StatusBadGateway {
-		t.Fatalf("status = %d body=%s", recorder.Code, recorder.Body.String())
+	cookie := loginCookie(t, mux)
+	startDeviceLogin(t, mux, cookie)
+	if status := waitForDeviceLogin(t, mux, cookie); status != "failed" {
+		t.Fatalf("status = %s", status)
 	}
 	if st.account.ID != "" {
 		t.Fatal("account without subject was stored")
 	}
+}
+
+func TestCancelDeviceLoginPreventsAccountPersistence(t *testing.T) {
+	server, st, _ := newControlServer(t)
+	st.createStarted = make(chan struct{})
+	st.createFinished = make(chan struct{})
+	mux := http.NewServeMux()
+	server.Register(mux)
+	cookie := loginCookie(t, mux)
+	startDeviceLogin(t, mux, cookie)
+	select {
+	case <-st.createStarted:
+	case <-time.After(time.Second):
+		t.Fatal("account persistence did not start")
+	}
+	request := httptest.NewRequest(http.MethodDelete, "/api/v1/provider-accounts/codex/device-login/device-login", nil)
+	request.SetPathValue("id", "device-login")
+	request.AddCookie(cookie)
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusNoContent {
+		t.Fatalf("cancel status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	select {
+	case <-st.createFinished:
+	case <-time.After(time.Second):
+		t.Fatal("canceled account persistence did not stop")
+	}
+	if st.account.ID != "" {
+		t.Fatal("canceled device login persisted an account")
+	}
+}
+
+func TestDeviceLoginTerminalStateIsRemovedAfterRetention(t *testing.T) {
+	server, _, _ := newControlServer(t)
+	attempt := &deviceLoginAttempt{status: "completed", expiresAt: time.Now()}
+	server.loginMu.Lock()
+	server.logins["finished-login"] = attempt
+	server.scheduleDeviceLoginRemovalLocked("finished-login", attempt)
+	server.loginMu.Unlock()
+	for range 100 {
+		server.loginMu.Lock()
+		_, exists := server.logins["finished-login"]
+		server.loginMu.Unlock()
+		if !exists {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("terminal device login was not removed")
 }
 
 func TestListProviderAccountsUsesCachedSubscriptionUsage(t *testing.T) {
@@ -659,12 +730,48 @@ func newControlServer(t *testing.T) (*Server, *controlStore, *credential.Cipher)
 	st := &controlStore{}
 	sessions := auth.NewAdminSessions("admin", "secret", time.Hour, false, bytes.Repeat([]byte{3}, 32))
 	keys := auth.NewAPIKeys(bytes.Repeat([]byte{2}, 32))
-	oauth := &controlOAuth{credentials: codex.Credentials{AccessToken: "access-token", RefreshToken: "refresh-token", AccountID: "upstream-account"}}
+	deviceAuth := &controlDeviceAuth{credentials: codex.Credentials{AccessToken: "access-token", RefreshToken: "refresh-token", AccountID: "upstream-account"}}
 	sources, err := auth.NewSourceResolver(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return New(st, sessions, keys, cipher, oauth, &controlRefresher{}, sources).WithResetCredits(&controlResetCredits{}), st, cipher
+	return New(st, sessions, keys, cipher, deviceAuth, &controlRefresher{}, sources).WithResetCredits(&controlResetCredits{}), st, cipher
+}
+
+func startDeviceLogin(t *testing.T, mux *http.ServeMux, cookie *http.Cookie) {
+	t.Helper()
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/provider-accounts/codex/device-login", strings.NewReader(`{"display_name":"Imported account"}`))
+	request.AddCookie(cookie)
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("start status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func waitForDeviceLogin(t *testing.T, mux *http.ServeMux, cookie *http.Cookie) string {
+	t.Helper()
+	for range 100 {
+		request := httptest.NewRequest(http.MethodGet, "/api/v1/provider-accounts/codex/device-login/device-login", nil)
+		request.AddCookie(cookie)
+		recorder := httptest.NewRecorder()
+		mux.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("status request=%d body=%s", recorder.Code, recorder.Body.String())
+		}
+		var response struct {
+			Status string `json:"status"`
+		}
+		if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+			t.Fatal(err)
+		}
+		if response.Status != "pending" {
+			return response.Status
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("device login did not complete")
+	return ""
 }
 func loginCookie(t *testing.T, mux *http.ServeMux) *http.Cookie {
 	t.Helper()

@@ -69,7 +69,7 @@ export function AccountsPage() {
         onToggle={toggle} onRemove={(account) => setPending({ type: 'remove', account })}
       />}
     </>}
-    {connect.open ? <ConnectAccountDialog apiKey={connect.apiKey} baseURL={connect.baseURL} busy={connect.busy} displayName={connect.displayName} error={connect.error} fieldErrors={connect.fieldErrors} provider={connect.provider} onAPIKeyChange={connect.setAPIKey} onBaseURLChange={connect.setBaseURL} onClose={connect.close} onDisplayNameChange={connect.setDisplayName} onFieldErrorsChange={connect.setFieldErrors} onProviderChange={connect.changeProvider} onSubmit={() => void connect.submit()} /> : null}
+    {connect.open ? <ConnectAccountDialog apiKey={connect.apiKey} baseURL={connect.baseURL} busy={connect.busy} displayName={connect.displayName} deviceLogin={connect.deviceLogin} error={connect.error} fieldErrors={connect.fieldErrors} provider={connect.provider} copyStatus={connect.copyStatus} onAPIKeyChange={connect.setAPIKey} onBaseURLChange={connect.setBaseURL} onClose={connect.close} onContinueToOpenAI={() => void connect.continueToOpenAI()} onDisplayNameChange={connect.setDisplayName} onFieldErrorsChange={connect.setFieldErrors} onProviderChange={connect.changeProvider} onSubmit={() => void connect.submit()} /> : null}
     {models.account ? <ModelsDialog account={models.account} models={models.models} loading={models.loading} error={models.error} onClose={models.close} onReload={() => void models.reload()} /> : null}
     {pending ? <ConfirmDialog
       title={pending.type === 'remove' ? `Remove ${pending.account.display_name}?` : pending.type === 'reset' ? `Reset ${pending.account.display_name} quota?` : `Disable ${pending.account.display_name}?`}

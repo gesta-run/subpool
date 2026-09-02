@@ -145,6 +145,60 @@ describe('Subpool console', () => {
     expect(input).toHaveFocus()
   })
 
+  it('starts Codex device authorization without navigating to localhost', async () => {
+    const open = vi.spyOn(window, 'open').mockImplementation(() => null)
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const path = String(input)
+      if (path === '/api/v1/provider-accounts') return json({ data: [] })
+      if (path === '/api/v1/provider-accounts/codex/device-login' && init?.method === 'POST') return json({
+        login_id: 'device-login', user_code: 'ABCD-EFGH', verification_url: 'https://auth.openai.com/device', expires_at: '2026-09-02T12:00:00Z',
+      }, 201)
+      if (path === '/api/v1/provider-accounts/codex/device-login/device-login') return json({ status: 'pending' })
+      throw new Error(`Unexpected request: ${path}`)
+    })
+
+    render(<AccountsPage />)
+    const user = userEvent.setup()
+    await user.click(await screen.findByRole('button', { name: /connect account/i }))
+    await user.type(screen.getByLabelText(/display name/i), 'Primary Codex')
+    await user.click(screen.getByRole('button', { name: /generate code/i }))
+
+    expect(await screen.findByTestId('device-code')).toHaveTextContent('ABCD-EFGH')
+    expect(screen.getByText(/no localhost callback is required/i)).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /copy code and continue/i }))
+    expect(open).toHaveBeenCalledWith('https://auth.openai.com/device', '_blank', 'noopener,noreferrer')
+    const start = vi.mocked(fetch).mock.calls.find(([path, options]) => String(path).endsWith('/codex/device-login') && options?.method === 'POST')
+    expect(JSON.parse(String(start?.[1]?.body))).toEqual({ display_name: 'Primary Codex' })
+  })
+
+  it('recovers Codex authorization after a transient polling failure', async () => {
+    let polls = 0
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const path = String(input)
+      if (path === '/api/v1/provider-accounts') return json({ data: [] })
+      if (path === '/api/v1/provider-accounts/codex/device-login' && init?.method === 'POST') return json({
+        login_id: 'device-login', user_code: 'ABCD-EFGH', verification_url: 'https://auth.openai.com/device', expires_at: '2099-09-02T12:00:00Z',
+      }, 201)
+      if (path === '/api/v1/provider-accounts/codex/device-login/device-login') {
+        polls++
+        return polls === 1 ? json({ message: 'temporary failure' }, 503) : json({ status: 'completed' })
+      }
+      throw new Error(`Unexpected request: ${path}`)
+    })
+
+    render(<AccountsPage />)
+    const user = userEvent.setup()
+    await user.click(await screen.findByRole('button', { name: /connect account/i }))
+    await user.type(screen.getByLabelText(/display name/i), 'Primary Codex')
+    await user.click(screen.getByRole('button', { name: /generate code/i }))
+
+    expect(await screen.findByTestId('device-code')).toHaveTextContent('ABCD-EFGH')
+    expect(await screen.findByText(/connection interrupted.*retrying/i, {}, { timeout: 2_000 })).toBeInTheDocument()
+    expect(screen.getByTestId('device-code')).toHaveTextContent('ABCD-EFGH')
+    await waitFor(() => expect(screen.queryByTestId('device-code')).not.toBeInTheDocument(), { timeout: 4_000 })
+    expect(polls).toBe(2)
+  })
+
   it('removes an unassigned account after confirmation', async () => {
     let accounts = [{ id: 'account-1', display_name: 'Primary Codex', provider: 'codex', status: 'active', assigned_api_keys: 0 }]
     vi.mocked(fetch).mockImplementation(async (input, init) => {

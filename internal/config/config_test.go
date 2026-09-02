@@ -22,12 +22,6 @@ func TestLoad(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.CodexRedirectURL != "http://localhost:1455/auth/callback" {
-		t.Fatalf("redirect = %s", cfg.CodexRedirectURL)
-	}
-	if cfg.CodexCallbackAddress != ":1455" {
-		t.Fatalf("callback address = %s", cfg.CodexCallbackAddress)
-	}
 	if cfg.CodexUpstreamURL != "https://chatgpt.com/backend-api/codex" {
 		t.Fatalf("upstream = %s", cfg.CodexUpstreamURL)
 	}

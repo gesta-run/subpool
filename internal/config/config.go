@@ -12,36 +12,31 @@ import (
 )
 
 type Config struct {
-	ListenAddress        string
-	DatabaseURL          string
-	PublicURL            string
-	AdminUsername        string
-	AdminPassword        string
-	CredentialKey        []byte
-	APIKeyHMACKey        []byte
-	SessionTTL           time.Duration
-	CodexClientID        string
-	CodexAuthURL         string
-	CodexTokenURL        string
-	CodexUpstreamURL     string
-	CodexRedirectURL     string
-	CodexCallbackAddress string
-	TrustedProxyCIDRs    []string
+	ListenAddress     string
+	DatabaseURL       string
+	PublicURL         string
+	AdminUsername     string
+	AdminPassword     string
+	CredentialKey     []byte
+	APIKeyHMACKey     []byte
+	SessionTTL        time.Duration
+	CodexClientID     string
+	CodexTokenURL     string
+	CodexUpstreamURL  string
+	TrustedProxyCIDRs []string
 }
 
 func Load() (Config, error) {
 	cfg := Config{
-		ListenAddress:        envOr("SUBPOOL_LISTEN_ADDRESS", ":8080"),
-		DatabaseURL:          strings.TrimSpace(os.Getenv("SUBPOOL_DATABASE_URL")),
-		PublicURL:            strings.TrimRight(strings.TrimSpace(os.Getenv("SUBPOOL_PUBLIC_URL")), "/"),
-		AdminUsername:        strings.TrimSpace(os.Getenv("SUBPOOL_ADMIN_USERNAME")),
-		AdminPassword:        os.Getenv("SUBPOOL_ADMIN_PASSWORD"),
-		SessionTTL:           12 * time.Hour,
-		CodexClientID:        envOr("SUBPOOL_CODEX_CLIENT_ID", "app_EMoamEEZ73f0CkXaXp7hrann"),
-		CodexAuthURL:         envOr("SUBPOOL_CODEX_AUTH_URL", "https://auth.openai.com/oauth/authorize"),
-		CodexTokenURL:        envOr("SUBPOOL_CODEX_TOKEN_URL", "https://auth.openai.com/oauth/token"),
-		CodexUpstreamURL:     strings.TrimRight(envOr("SUBPOOL_CODEX_UPSTREAM_URL", "https://chatgpt.com/backend-api/codex"), "/"),
-		CodexCallbackAddress: envOr("SUBPOOL_CODEX_CALLBACK_ADDRESS", ":1455"),
+		ListenAddress:    envOr("SUBPOOL_LISTEN_ADDRESS", ":8080"),
+		DatabaseURL:      strings.TrimSpace(os.Getenv("SUBPOOL_DATABASE_URL")),
+		PublicURL:        strings.TrimRight(strings.TrimSpace(os.Getenv("SUBPOOL_PUBLIC_URL")), "/"),
+		AdminUsername:    strings.TrimSpace(os.Getenv("SUBPOOL_ADMIN_USERNAME")),
+		AdminPassword:    os.Getenv("SUBPOOL_ADMIN_PASSWORD"),
+		SessionTTL:       12 * time.Hour,
+		CodexClientID:    envOr("SUBPOOL_CODEX_CLIENT_ID", "app_EMoamEEZ73f0CkXaXp7hrann"),
+		CodexTokenURL:    envOr("SUBPOOL_CODEX_TOKEN_URL", "https://auth.openai.com/oauth/token"),
+		CodexUpstreamURL: strings.TrimRight(envOr("SUBPOOL_CODEX_UPSTREAM_URL", "https://chatgpt.com/backend-api/codex"), "/"),
 	}
 
 	var err error
@@ -79,7 +74,6 @@ func Load() (Config, error) {
 	if (parsedURL.Path != "" && parsedURL.Path != "/") || parsedURL.RawQuery != "" || parsedURL.Fragment != "" || parsedURL.User != nil {
 		return Config{}, errors.New("SUBPOOL_PUBLIC_URL must be an origin without credentials, path, query, or fragment")
 	}
-	cfg.CodexRedirectURL = envOr("SUBPOOL_CODEX_REDIRECT_URL", "http://localhost:1455/auth/callback")
 	if raw := strings.TrimSpace(os.Getenv("SUBPOOL_TRUSTED_PROXY_CIDRS")); raw != "" {
 		for _, value := range strings.Split(raw, ",") {
 			value = strings.TrimSpace(value)

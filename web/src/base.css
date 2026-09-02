@@ -223,6 +223,13 @@ th.number, td.number { text-align: right; font-variant-numeric: tabular-nums; }
 .modal--confirm .modal__body { padding-top: 0; }
 .confirm-dialog__actions { display: flex; justify-content: flex-end; gap: 10px; }
 .form-stack { display: grid; gap: 19px; }
+.device-login { display: grid; gap: 17px; }
+.device-login > p { margin: 0; color: var(--ink-muted); font-size: 16px; line-height: 1.5; }
+.device-login__code { width: fit-content; border: 1px solid var(--line-strong); border-radius: var(--radius-nested); padding: 14px 18px; color: var(--ink); background: var(--paper); font-size: 24px; font-weight: 800; letter-spacing: .18em; }
+.device-login__continue { width: fit-content; }
+.device-login__waiting { min-height: 22px; display: flex; align-items: center; gap: 9px; color: var(--ink-muted); font-size: 12px; }
+.device-login__waiting small { margin-left: auto; color: var(--green); font-weight: 700; }
+.device-login .device-login__help { border-top: 1px solid var(--line); padding-top: 15px; font-size: 13px; }
 .field { display: grid; gap: 7px; }
 .field label { color: var(--ink); font-size: 12px; font-weight: 800; letter-spacing: .03em; }
 .field input, .field select { width: 100%; min-height: 46px; border: 1px solid var(--line-strong); border-radius: var(--radius); padding: 0 13px; color: var(--ink); background: var(--panel); }
@@ -434,4 +441,3 @@ th.number, td.number { text-align: right; font-variant-numeric: tabular-nums; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 }
-
