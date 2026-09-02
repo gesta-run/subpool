@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
 import { AccountsPage } from './pages/AccountsPage'
 import { APIKeysPage } from './pages/APIKeysPage'
+import { OverviewPage } from './pages/OverviewPage'
 import { PoolsPage } from './pages/PoolsPage'
 import { UsagePage } from './pages/UsagePage'
 import { SettingsPage } from './pages/SettingsPage'
@@ -356,6 +357,21 @@ describe('Subpool console', () => {
     expect(screen.getAllByText('500,000').length).toBeGreaterThan(0)
     expect(screen.getAllByText('2.50M').length).toBeGreaterThan(0)
     await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([path]) => String(path).startsWith('/api/v1/usage?from='))).toBe(true))
+  })
+
+  it('shows usage totals in recent key activity', async () => {
+    vi.mocked(fetch).mockImplementation(async (input) => {
+      const path = String(input)
+      if (path === '/api/v1/provider-accounts') return json({ data: [{ id: 'account-1', display_name: 'Example account', provider: 'codex', status: 'active' }] })
+      if (path === '/api/v1/pools') return json({ data: [{ id: 'pool-1', name: 'Example pool', provider: 'codex' }] })
+      if (path === '/api/v1/api-keys') return json({ data: [{ id: 'key-1', pool_id: 'pool-1', provider_account_id: 'account-1', employee_name: 'Example employee', key_hint: '1234', created_at: '2026-09-01T00:00:00Z', last_used_at: '2026-09-02T00:00:00Z' }] })
+      if (path === '/api/v1/usage') return json({ data: [{ api_key_id: 'key-1', employee_name: 'Example employee', key_hint: '1234', model: 'example-model', usage_date: '2026-09-02', input_tokens: 1_200, output_tokens: 300 }] })
+      throw new Error(`Unexpected request: ${path}`)
+    })
+
+    render(<OverviewPage />)
+
+    expect(await screen.findByRole('row', { name: /Example employee.*1\.2K.*300/i })).toBeInTheDocument()
   })
 
   it('updates the employee key capacity setting', async () => {

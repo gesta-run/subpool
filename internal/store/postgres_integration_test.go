@@ -112,20 +112,37 @@ func TestPostgresAssignmentAndUsage(t *testing.T) {
 	if err = database.AddPoolAccount(ctx, domain.PoolAccount{PoolID: pool.ID, ProviderAccountID: account.ID, Weight: 1, Enabled: true}); err != nil {
 		t.Fatal(err)
 	}
+	assertUsageActivity(t, ctx, database, account, keys[2])
+}
+
+func assertUsageActivity(t *testing.T, ctx context.Context, database *Postgres, account domain.ProviderAccount, key domain.APIKey) {
+	t.Helper()
 	day := time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)
 	firstUsageEvent := bytes.Repeat([]byte{10}, 32)
-	if err = database.AddUsage(ctx, keys[2].ID, firstUsageEvent, "test-model", day, 10, 4); err != nil {
+	if err := database.AddUsage(ctx, key.ID, firstUsageEvent, "test-model", day, 10, 4); err != nil {
 		t.Fatal(err)
 	}
-	if err = database.AddUsage(ctx, keys[2].ID, firstUsageEvent, "test-model", day, 10, 4); err != nil {
+	if err := database.AddUsage(ctx, key.ID, firstUsageEvent, "test-model", day, 10, 4); err != nil {
 		t.Fatal(err)
 	}
-	if err = database.AddUsage(ctx, keys[2].ID, bytes.Repeat([]byte{11}, 32), "test-model", day, 2, 1); err != nil {
+	if err := database.AddUsage(ctx, key.ID, bytes.Repeat([]byte{11}, 32), "test-model", day, 2, 1); err != nil {
 		t.Fatal(err)
 	}
-	rows, err := database.ListUsage(ctx, domain.UsageFilter{APIKeyID: keys[2].ID})
+	rows, err := database.ListUsage(ctx, domain.UsageFilter{APIKeyID: key.ID})
 	if err != nil || len(rows) != 1 || rows[0].InputTokens != 12 || rows[0].OutputTokens != 5 {
 		t.Fatalf("usage = %#v, %v", rows, err)
+	}
+	listedKeys, err := database.ListAPIKeys(ctx)
+	if err != nil || len(listedKeys) == 0 || listedKeys[0].ID != key.ID || listedKeys[0].LastUsedAt == nil || !listedKeys[0].LastUsedAt.Equal(day) {
+		t.Fatalf("API keys with activity = %#v, %v", listedKeys, err)
+	}
+	requestAt := day.Add(time.Hour)
+	if err = database.RecordRequestSuccess(ctx, account.ID, key.ID, requestAt); err != nil {
+		t.Fatal(err)
+	}
+	listedKeys, err = database.ListAPIKeys(ctx)
+	if err != nil || listedKeys[0].LastUsedAt == nil || !listedKeys[0].LastUsedAt.Equal(requestAt) {
+		t.Fatalf("API key last used = %#v, %v", listedKeys, err)
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -374,7 +375,9 @@ func (s *Server) evaluateResponse(ctx context.Context, keyID, accountID string, 
 	}
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		if s.activity.ShouldRecord(accountID, keyID, s.now()) {
-			_ = s.store.RecordRequestSuccess(ctx, accountID, keyID, s.now())
+			if err := s.store.RecordRequestSuccess(ctx, accountID, keyID, s.now()); err != nil {
+				slog.Error("request activity update failed", "account_id", accountID, "api_key_id", keyID, "error", err)
+			}
 		}
 	}
 	if resp.StatusCode >= 500 {
