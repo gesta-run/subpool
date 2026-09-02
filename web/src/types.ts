@@ -104,8 +104,6 @@ export interface APIKeyRecord {
   revoked_at?: string | null
   last_used_at?: string | null
   created_at: string
-  input_tokens?: number
-  output_tokens?: number
 }
 
 export interface UsageRecord {

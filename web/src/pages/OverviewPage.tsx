@@ -59,17 +59,19 @@ function UsagePanel({ items, error, onReload }: { items: UsageRecord[]; error: s
   </section>
 }
 
-function RecentKeysPanel({ accounts, keys, pools, error, onReload }: { accounts: ProviderAccount[]; keys: APIKeyRecord[]; pools: Pool[]; error: string; onReload: () => void }) {
+function RecentKeysPanel({ accounts, keys, pools, usageByKey, error, onReload }: { accounts: ProviderAccount[]; keys: APIKeyRecord[]; pools: Pool[]; usageByKey: Map<string, UsageRecord>; error: string; onReload: () => void }) {
   return <section className="overview-panel overview-panel--table" aria-labelledby="recent-keys-heading">
     <header><div><h3 id="recent-keys-heading">Recent key activity</h3><p>Usage totals only; request content is never stored</p></div><a href="#/api-keys">Manage keys</a></header>
     {error ? <StatePanel kind="error" title="API keys unavailable" description={error} actionLabel="Try again" onAction={onReload} /> : keys.length === 0 ? <StatePanel kind="empty" title="No API keys issued" description="Create an employee key after a routing pool is ready." /> : <div className="table-frame"><table><thead><tr><th>Employee</th><th>Pool</th><th>Bound account</th><th className="number">Input</th><th className="number">Output</th><th>Last used</th></tr></thead><tbody>
-      {keys.slice(0, 5).map((key) => <tr key={key.id}>
+      {keys.slice(0, 5).map((key) => {
+        const usage = usageByKey.get(key.id)
+        return <tr key={key.id}>
         <td data-label="Employee"><strong>{key.employee_name}</strong><small><code>••••{key.key_hint}</code></small></td>
         <td data-label="Pool">{key.pool_name ?? pools.find((pool) => pool.id === key.pool_id)?.name ?? key.pool_id}</td>
         <td data-label="Bound account">{accounts.find((account) => account.id === key.provider_account_id)?.display_name ?? 'Pending assignment'}</td>
-        <td data-label="Input" className="number">{compact(key.input_tokens ?? 0)}</td><td data-label="Output" className="number">{compact(key.output_tokens ?? 0)}</td>
+        <td data-label="Input" className="number">{compact(usage?.input_tokens ?? 0)}</td><td data-label="Output" className="number">{compact(usage?.output_tokens ?? 0)}</td>
         <td data-label="Last used">{relativeTime(key.last_used_at)}</td>
-      </tr>)}
+      </tr>})}
     </tbody></table></div>}
   </section>
 }
@@ -96,10 +98,12 @@ export function OverviewPage() {
         result.set(item.api_key_id, { ...item })
       }
     }
-    return [...result.values()]
-      .sort((a, b) => b.input_tokens + b.output_tokens - a.input_tokens - a.output_tokens)
-      .slice(0, 5)
+    return result
   }, [usage.items])
+
+  const topUsage = useMemo(() => [...usageByKey.values()]
+    .sort((a, b) => b.input_tokens + b.output_tokens - a.input_tokens - a.output_tokens)
+    .slice(0, 5), [usageByKey])
 
   const activeKeys = keys.items.filter((key) => !key.revoked_at)
   const loading = accounts.loading || pools.loading || keys.loading || usage.loading
@@ -118,9 +122,9 @@ export function OverviewPage() {
           <OverviewMetrics accounts={accounts.items} pools={pools.items} keys={activeKeys} input={summary.input} output={summary.output} />
           <div className="overview-grid">
             <AssignmentsPanel accounts={accounts.items} error={accounts.error} onReload={() => void accounts.reload()} />
-            <UsagePanel items={usageByKey} error={usage.error} onReload={() => void usage.reload()} />
+            <UsagePanel items={topUsage} error={usage.error} onReload={() => void usage.reload()} />
           </div>
-          <RecentKeysPanel accounts={accounts.items} keys={activeKeys} pools={pools.items} error={keys.error} onReload={() => void keys.reload()} />
+          <RecentKeysPanel accounts={accounts.items} keys={activeKeys} pools={pools.items} usageByKey={usageByKey} error={keys.error} onReload={() => void keys.reload()} />
         </>
       )}
     </section>

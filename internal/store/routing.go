@@ -162,7 +162,8 @@ func selectAccountForUpdate(ctx context.Context, tx pgx.Tx, poolID string, exclu
 
 func (p *Postgres) ListAPIKeys(ctx context.Context) ([]domain.APIKey, error) {
 	rows, err := p.pool.Query(ctx, `SELECT k.id,k.pool_id,COALESCE(b.provider_account_id::text,''),k.employee_name,k.key_hint,k.scopes,k.rate_limit,k.expires_at,k.revoked_at,k.last_used_at,k.created_at
-		FROM api_keys k LEFT JOIN api_key_account_bindings b ON b.api_key_id=k.id ORDER BY k.created_at DESC`)
+		FROM api_keys k LEFT JOIN api_key_account_bindings b ON b.api_key_id=k.id
+		ORDER BY k.last_used_at DESC NULLS LAST,k.created_at DESC`)
 	if err != nil {
 		return nil, wrapDB("list API keys", err)
 	}
@@ -251,7 +252,7 @@ func (p *Postgres) RecordRequestSuccess(ctx context.Context, accountID, keyID st
 	_, err := p.pool.Exec(ctx, `WITH account AS (
 		UPDATE provider_accounts SET status='active',cooldown_until=NULL,last_success_at=$3,
 			health_status='healthy',last_checked_at=$3,last_health_error_code=NULL,consecutive_health_failures=0,
-			next_health_check_at=$3+interval '5 minutes',updated_at=now() WHERE id=$1 RETURNING id
+		next_health_check_at=$3::timestamptz+interval '5 minutes',updated_at=now() WHERE id=$1 RETURNING id
 	) UPDATE api_keys SET last_used_at=$3 WHERE id=$2 AND EXISTS(SELECT 1 FROM account)`, accountID, keyID, occurredAt)
 	return wrapDB("record request success", err)
 }
@@ -288,6 +289,10 @@ func (p *Postgres) AddUsage(ctx context.Context, keyID string, eventHash []byte,
 		output_tokens=api_key_usage_daily.output_tokens+excluded.output_tokens,updated_at=now()`, keyID, day.UTC(), model, input, output)
 	if err != nil {
 		return wrapDB("add usage", err)
+	}
+	_, err = tx.Exec(ctx, `UPDATE api_keys SET last_used_at=GREATEST(COALESCE(last_used_at,$2),$2) WHERE id=$1`, keyID, day.UTC())
+	if err != nil {
+		return wrapDB("update API key activity", err)
 	}
 	if err = tx.Commit(ctx); err != nil {
 		return wrapDB("commit usage transaction", err)
