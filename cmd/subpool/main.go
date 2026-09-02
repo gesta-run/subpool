@@ -47,7 +47,7 @@ func main() {
 	sessions := auth.NewAdminSessions(cfg.AdminUsername, cfg.AdminPassword, cfg.SessionTTL, publicURL.Scheme == "https", cfg.APIKeyHMACKey, database)
 	oauth := codex.NewOAuth(codex.OAuthConfig{ClientID: cfg.CodexClientID, AuthURL: cfg.CodexAuthURL, TokenURL: cfg.CodexTokenURL, RedirectURL: cfg.CodexRedirectURL})
 	provider := codex.NewClient(cfg.CodexUpstreamURL, nil)
-	resetCredits := codex.NewAppServer(cfg.CodexExecutable)
+	resetCredits := codex.NewAppServer()
 	compatibleProvider := openaicompat.NewClient(nil)
 	refreshManager := credential.NewRefreshManager(database, cipher, oauth)
 	healthChecker := providerhealth.NewChecker(database, cipher, provider, compatibleProvider)

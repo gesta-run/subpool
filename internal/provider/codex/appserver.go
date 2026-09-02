@@ -55,11 +55,8 @@ type AppServer struct {
 	executable string
 }
 
-func NewAppServer(executable string) *AppServer {
-	if strings.TrimSpace(executable) == "" {
-		executable = defaultCodexExecutable
-	}
-	return &AppServer{executable: executable}
+func NewAppServer() *AppServer {
+	return &AppServer{executable: defaultCodexExecutable}
 }
 
 func (a *AppServer) ReadResetCredits(ctx context.Context, credentials Credentials) (*ResetCreditsSummary, error) {
