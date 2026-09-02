@@ -36,6 +36,7 @@ const (
 	retryAuth        retryReason = "authentication"
 	retryRefresh     retryReason = "refresh"
 	retryRateLimit   retryReason = "rate_limit"
+	retryInvalid     retryReason = "invalid_request"
 )
 
 type Cipher interface {
@@ -107,9 +108,8 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	codexBody := forceStream(body)
 	compatibleBody := forceProviderStream(body)
-	resp, ok := s.call(w, r, route, upstreamRequest{kind: "responses", body: compatibleBody, codexBody: codexBody}, meta.PreviousResponseID)
+	resp, ok := s.call(w, r, route, upstreamRequest{kind: "responses", body: compatibleBody, codexBody: body}, meta.PreviousResponseID)
 	if !ok {
 		return
 	}
@@ -222,10 +222,10 @@ func readRequest(w http.ResponseWriter, r *http.Request) ([]byte, requestMeta, b
 	return body, meta, true
 }
 
-func forceStream(body []byte) []byte {
+func normalizeCodexRequest(body []byte, installationID string) ([]byte, error) {
 	var value map[string]any
-	if json.Unmarshal(body, &value) != nil {
-		return body
+	if err := json.Unmarshal(body, &value); err != nil {
+		return nil, fmt.Errorf("decode Codex request: %w", err)
 	}
 	value["stream"] = true
 	value["store"] = false
@@ -244,11 +244,14 @@ func forceStream(body []byte) []byte {
 			}},
 		}}
 	}
+	if err := codex.ApplyDeviceIdentity(value, installationID); err != nil {
+		return nil, err
+	}
 	out, err := json.Marshal(value)
 	if err != nil {
-		return body
+		return nil, fmt.Errorf("encode Codex request: %w", err)
 	}
-	return out
+	return out, nil
 }
 
 func forceProviderStream(body []byte) []byte {
@@ -300,6 +303,10 @@ func (s *Server) call(w http.ResponseWriter, r *http.Request, route domain.KeyRo
 		if complete {
 			return resp, resp != nil
 		}
+		if retry == retryInvalid {
+			writeOpenAIError(w, http.StatusBadRequest, "client_metadata must be an object", "invalid_request_error")
+			return nil, false
+		}
 		lastRetry = retry
 		if continuation {
 			writeRetryFailure(w, lastRetry)
@@ -326,6 +333,9 @@ func (s *Server) attemptAccount(r *http.Request, route domain.KeyRoute, request 
 	}
 	resp, err := s.providerAccountResponse(r.Context(), request, r.Header, credentials, account)
 	if err != nil {
+		if errors.Is(err, codex.ErrInvalidClientMetadata) {
+			return nil, retryInvalid, false
+		}
 		s.recordHealthFailure(r.Context(), account.ID, "connection_failed")
 		return nil, retryUnavailable, false
 	}
@@ -355,6 +365,9 @@ func (s *Server) retryRefreshedAccount(r *http.Request, route domain.KeyRoute, r
 	}
 	resp, err := s.providerAccountResponse(r.Context(), request, r.Header, credentials, refreshed)
 	if err != nil {
+		if errors.Is(err, codex.ErrInvalidClientMetadata) {
+			return nil, retryInvalid, false
+		}
 		s.recordHealthFailure(r.Context(), refreshed.ID, "connection_failed")
 		return nil, retryUnavailable, false
 	}
@@ -476,7 +489,17 @@ func (s *Server) providerAccountResponse(ctx context.Context, request upstreamRe
 	)
 	switch account.Provider {
 	case "", domain.ProviderCodex:
-		resp, err = s.codex.Responses(ctx, request.codexBody, header, codexCredentials)
+		installationID, identityErr := codex.InstallationID(account.ID)
+		if identityErr != nil {
+			err = identityErr
+			break
+		}
+		codexBody, normalizeErr := normalizeCodexRequest(request.codexBody, installationID)
+		if normalizeErr != nil {
+			err = normalizeErr
+			break
+		}
+		resp, err = s.codex.Responses(ctx, codexBody, codex.DeviceIdentityHeaders(header, installationID), codexCredentials)
 		responseFormat = "responses"
 	case domain.ProviderOpenAICompatible:
 		if s.compatible == nil {

@@ -115,6 +115,7 @@ type fakeProvider struct {
 	models      []codex.Model
 	credentials []codex.Credentials
 	bodies      [][]byte
+	headers     []http.Header
 }
 
 type fakeCompatibleProvider struct {
@@ -139,9 +140,10 @@ func (f *fakeCompatibleProvider) ChatCompletions(_ context.Context, body []byte,
 	return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"id":"chat-1","choices":[{"message":{"role":"assistant","content":"OK"},"finish_reason":"stop"}],"usage":{"prompt_tokens":9,"completion_tokens":2,"total_tokens":11}}`))}, nil
 }
 
-func (f *fakeProvider) Responses(_ context.Context, body []byte, _ http.Header, credentials codex.Credentials) (*http.Response, error) {
+func (f *fakeProvider) Responses(_ context.Context, body []byte, headers http.Header, credentials codex.Credentials) (*http.Response, error) {
 	f.credentials = append(f.credentials, credentials)
 	f.bodies = append(f.bodies, append([]byte(nil), body...))
+	f.headers = append(f.headers, headers.Clone())
 	if len(f.errors) > 0 {
 		err := f.errors[0]
 		f.errors = f.errors[1:]
@@ -190,6 +192,11 @@ func TestResponsesStreamMetersAndBindsSession(t *testing.T) {
 	if upstream["stream"] != true {
 		t.Fatal("upstream request did not force streaming")
 	}
+	wantInstallationID, _ := codex.InstallationID("account-1")
+	metadata, _ := upstream["client_metadata"].(map[string]any)
+	if provider.headers[0].Get("X-Codex-Installation-Id") != wantInstallationID || metadata["x-codex-installation-id"] != wantInstallationID {
+		t.Fatalf("headers=%#v metadata=%#v", provider.headers[0], metadata)
+	}
 }
 
 func TestOpenAICompatibleChatPassesThroughAndMetersUsage(t *testing.T) {
@@ -224,8 +231,11 @@ func TestOpenAICompatibleChatPassesThroughAndMetersUsage(t *testing.T) {
 	}
 }
 
-func TestForceStreamConvertsStringInputForCodexBackend(t *testing.T) {
-	body := forceStream([]byte(`{"model":"gpt-5.6-sol","input":"Reply with OK"}`))
+func TestNormalizeCodexRequestConvertsStringInput(t *testing.T) {
+	body, err := normalizeCodexRequest([]byte(`{"model":"gpt-5.6-sol","input":"Reply with OK"}`), "11111111-1111-4111-8111-111111111111")
+	if err != nil {
+		t.Fatal(err)
+	}
 	var request struct {
 		Stream bool `json:"stream"`
 		Store  bool `json:"store"`
@@ -242,6 +252,17 @@ func TestForceStreamConvertsStringInputForCodexBackend(t *testing.T) {
 	}
 	if !request.Stream || request.Store || len(request.Input) != 1 || request.Input[0].Role != "user" || len(request.Input[0].Content) != 1 || request.Input[0].Content[0].Type != "input_text" || request.Input[0].Content[0].Text != "Reply with OK" {
 		t.Fatalf("normalized request = %#v", request)
+	}
+}
+
+func TestResponsesRejectsNonObjectClientMetadata(t *testing.T) {
+	server, _, provider, plain := newTestServer(t)
+	recorder := serveGateway(t, server, plain, "/v1/responses", `{"model":"gpt-test","input":"hello","client_metadata":"invalid"}`)
+	if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), "invalid_request_error") {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if len(provider.credentials) != 0 {
+		t.Fatal("provider was called")
 	}
 }
 
@@ -289,6 +310,21 @@ func TestRateLimitedAccountReassignsBeforeStreaming(t *testing.T) {
 	}
 	if len(provider.credentials) != 2 || provider.credentials[1].AccessToken != "token-2" {
 		t.Fatalf("credentials = %#v", provider.credentials)
+	}
+	firstID, _ := codex.InstallationID("account-1")
+	secondID, _ := codex.InstallationID("account-2")
+	if len(provider.headers) != 2 || provider.headers[0].Get("X-Codex-Installation-Id") != firstID || provider.headers[1].Get("X-Codex-Installation-Id") != secondID || firstID == secondID {
+		t.Fatalf("installation IDs were not rebound on failover")
+	}
+	for index, want := range []string{firstID, secondID} {
+		var request map[string]any
+		if err := json.Unmarshal(provider.bodies[index], &request); err != nil {
+			t.Fatal(err)
+		}
+		metadata, _ := request["client_metadata"].(map[string]any)
+		if metadata["x-codex-installation-id"] != want {
+			t.Fatalf("attempt %d body installation ID = %v, want %q", index, metadata["x-codex-installation-id"], want)
+		}
 	}
 	if len(st.status) == 0 || st.status[0] != domain.AccountCoolingDown {
 		t.Fatalf("statuses = %#v", st.status)
