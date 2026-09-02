@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 const defaultCodexExecutable = "codex"
@@ -141,18 +142,48 @@ type appServerSession struct {
 	stdin       io.WriteCloser
 	scanner     *bufio.Scanner
 	stderr      *bytes.Buffer
+	configDir   string
 	credentials Credentials
+	closeOnce   sync.Once
 }
 
 func startAppServerSession(ctx context.Context, executable string, credentials Credentials) (*appServerSession, error) {
 	if strings.TrimSpace(credentials.AccessToken) == "" || strings.TrimSpace(credentials.AccountID) == "" {
 		return nil, fmt.Errorf("Codex credentials are incomplete")
 	}
+	session, err := startAppServerProcess(ctx, executable, credentials)
+	if err != nil {
+		return nil, err
+	}
+	if err = session.call(2, "account/login/start", map[string]any{
+		"type":             "chatgptAuthTokens",
+		"accessToken":      credentials.AccessToken,
+		"chatgptAccountId": credentials.AccountID,
+	}, nil); err != nil {
+		session.close()
+		return nil, err
+	}
+	return session, nil
+}
+
+func startAppServerProcess(ctx context.Context, executable string, credentials Credentials) (*appServerSession, error) {
+	session, err := launchAppServerProcess(ctx, executable, credentials)
+	if err != nil {
+		return nil, err
+	}
+	if err = initializeAppServer(ctx, session); err != nil {
+		session.close()
+		return nil, err
+	}
+	return session, nil
+}
+
+func launchAppServerProcess(ctx context.Context, executable string, credentials Credentials) (*appServerSession, error) {
 	configDir, err := os.MkdirTemp("", "subpool-codex-")
 	if err != nil {
 		return nil, fmt.Errorf("create temporary Codex config: %w", err)
 	}
-	cmd := exec.CommandContext(ctx, executable, "app-server", "--listen", "stdio://")
+	cmd := exec.CommandContext(ctx, executable, "-c", `cli_auth_credentials_store="file"`, "app-server", "--listen", "stdio://")
 	cmd.Env = append(os.Environ(), "CODEX_HOME="+configDir)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -172,30 +203,20 @@ func startAppServerSession(ctx context.Context, executable string, credentials C
 	}
 	scanner := bufio.NewScanner(stdout)
 	scanner.Buffer(make([]byte, 64*1024), 2<<20)
-	session := &appServerSession{cmd: cmd, stdin: stdin, scanner: scanner, stderr: stderr, credentials: credentials}
-	if err = session.call(1, "initialize", map[string]any{
+	return &appServerSession{cmd: cmd, stdin: stdin, scanner: scanner, stderr: stderr, configDir: configDir, credentials: credentials}, nil
+}
+
+func initializeAppServer(ctx context.Context, session *appServerSession) error {
+	if err := session.callContext(ctx, 1, "initialize", map[string]any{
 		"clientInfo":   map[string]string{"name": "subpool", "title": "Subpool", "version": "0.1.0"},
 		"capabilities": map[string]bool{"experimentalApi": true},
 	}, nil); err != nil {
-		session.close()
-		_ = os.RemoveAll(configDir)
-		return nil, err
+		return err
 	}
-	if err = session.notify("initialized", map[string]any{}); err != nil {
-		session.close()
-		_ = os.RemoveAll(configDir)
-		return nil, err
+	if err := session.notify("initialized", map[string]any{}); err != nil {
+		return err
 	}
-	if err = session.call(2, "account/login/start", map[string]any{
-		"type":             "chatgptAuthTokens",
-		"accessToken":      credentials.AccessToken,
-		"chatgptAccountId": credentials.AccountID,
-	}, nil); err != nil {
-		session.close()
-		_ = os.RemoveAll(configDir)
-		return nil, err
-	}
-	return session, nil
+	return nil
 }
 
 func (s *appServerSession) readResetCredits(id int) (*ResetCreditsSummary, error) {
@@ -289,6 +310,20 @@ func (s *appServerSession) call(id int, method string, params any, target any) e
 	return fmt.Errorf("Codex app-server stopped before %s completed", method)
 }
 
+func (s *appServerSession) callContext(ctx context.Context, id int, method string, params any, target any) error {
+	done := make(chan error, 1)
+	go func() {
+		done <- s.call(id, method, params, target)
+	}()
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		s.close()
+		return ctx.Err()
+	}
+}
+
 func (s *appServerSession) notify(method string, params any) error {
 	return s.write(map[string]any{"method": method, "params": params})
 }
@@ -306,17 +341,12 @@ func (s *appServerSession) write(message any) error {
 }
 
 func (s *appServerSession) close() {
-	_ = s.stdin.Close()
-	if s.cmd.Process != nil {
-		_ = s.cmd.Process.Kill()
-	}
-	_ = s.cmd.Wait()
-	if value := s.cmd.Env; value != nil {
-		for _, entry := range value {
-			if strings.HasPrefix(entry, "CODEX_HOME=") {
-				_ = os.RemoveAll(strings.TrimPrefix(entry, "CODEX_HOME="))
-				break
-			}
+	s.closeOnce.Do(func() {
+		_ = s.stdin.Close()
+		if s.cmd.Process != nil {
+			_ = s.cmd.Process.Kill()
 		}
-	}
+		_ = s.cmd.Wait()
+		_ = os.RemoveAll(s.configDir)
+	})
 }

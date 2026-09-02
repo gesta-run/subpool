@@ -2,8 +2,6 @@ package codex
 
 import (
 	"context"
-	"crypto/rand"
-	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -12,13 +10,10 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"sync"
 	"time"
 
 	providerhttp "github.com/gesta-run/subpool/internal/provider/httpclient"
 )
-
-const oauthScope = "openid email profile offline_access"
 
 type Credentials struct {
 	AccessToken  string    `json:"access_token"`
@@ -46,83 +41,25 @@ func IsDefinitiveAuthError(err error) bool {
 	return errors.As(err, &tokenError) && (tokenError.StatusCode == http.StatusUnauthorized || tokenError.Code == "invalid_grant")
 }
 
-type OAuthConfig struct {
-	ClientID    string
-	AuthURL     string
-	TokenURL    string
-	RedirectURL string
-	HTTPClient  *http.Client
+type TokenRefresherConfig struct {
+	ClientID   string
+	TokenURL   string
+	HTTPClient *http.Client
 }
 
-type oauthAttempt struct {
-	verifier    string
-	displayName string
-	expiresAt   time.Time
+type TokenRefresher struct {
+	config TokenRefresherConfig
+	now    func() time.Time
 }
 
-type OAuth struct {
-	config   OAuthConfig
-	mu       sync.Mutex
-	attempts map[string]oauthAttempt
-	now      func() time.Time
-}
-
-func NewOAuth(config OAuthConfig) *OAuth {
+func NewTokenRefresher(config TokenRefresherConfig) *TokenRefresher {
 	if config.HTTPClient == nil {
 		config.HTTPClient = providerhttp.New()
 	}
-	return &OAuth{config: config, attempts: make(map[string]oauthAttempt), now: time.Now}
+	return &TokenRefresher{config: config, now: time.Now}
 }
 
-func (o *OAuth) Start(displayName string) (string, error) {
-	state, err := randomURLString(32)
-	if err != nil {
-		return "", err
-	}
-	verifier, err := randomURLString(64)
-	if err != nil {
-		return "", err
-	}
-	challengeRaw := sha256.Sum256([]byte(verifier))
-	challenge := base64.RawURLEncoding.EncodeToString(challengeRaw[:])
-	now := o.now()
-	o.mu.Lock()
-	for pendingState, attempt := range o.attempts {
-		if !now.Before(attempt.expiresAt) {
-			delete(o.attempts, pendingState)
-		}
-	}
-	o.attempts[state] = oauthAttempt{verifier: verifier, displayName: strings.TrimSpace(displayName), expiresAt: now.Add(10 * time.Minute)}
-	o.mu.Unlock()
-
-	values := url.Values{
-		"client_id": {o.config.ClientID}, "response_type": {"code"}, "redirect_uri": {o.config.RedirectURL},
-		"scope": {oauthScope}, "state": {state}, "code_challenge": {challenge}, "code_challenge_method": {"S256"},
-		"prompt": {"login"}, "id_token_add_organizations": {"true"}, "codex_cli_simplified_flow": {"true"},
-	}
-	return o.config.AuthURL + "?" + values.Encode(), nil
-}
-
-func (o *OAuth) Exchange(ctx context.Context, state, code string) (Credentials, string, error) {
-	o.mu.Lock()
-	attempt, ok := o.attempts[state]
-	delete(o.attempts, state)
-	o.mu.Unlock()
-	if !ok || !o.now().Before(attempt.expiresAt) {
-		return Credentials{}, "", fmt.Errorf("OAuth state is invalid or expired")
-	}
-	if strings.TrimSpace(code) == "" {
-		return Credentials{}, "", fmt.Errorf("authorization code is required")
-	}
-	values := url.Values{
-		"grant_type": {"authorization_code"}, "client_id": {o.config.ClientID}, "code": {code},
-		"redirect_uri": {o.config.RedirectURL}, "code_verifier": {attempt.verifier},
-	}
-	credentials, err := o.tokenRequest(ctx, values)
-	return credentials, attempt.displayName, err
-}
-
-func (o *OAuth) Refresh(ctx context.Context, refreshToken string) (Credentials, error) {
+func (o *TokenRefresher) Refresh(ctx context.Context, refreshToken string) (Credentials, error) {
 	if strings.TrimSpace(refreshToken) == "" {
 		return Credentials{}, fmt.Errorf("refresh token is required")
 	}
@@ -135,7 +72,7 @@ func (o *OAuth) Refresh(ctx context.Context, refreshToken string) (Credentials, 
 	return credentials, err
 }
 
-func (o *OAuth) tokenRequest(ctx context.Context, values url.Values) (Credentials, error) {
+func (o *TokenRefresher) tokenRequest(ctx context.Context, values url.Values) (Credentials, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, o.config.TokenURL, strings.NewReader(values.Encode()))
 	if err != nil {
 		return Credentials{}, fmt.Errorf("create token request: %w", err)
@@ -201,12 +138,4 @@ func parseIdentity(idToken string) (string, string) {
 		return "", ""
 	}
 	return claims.Auth.AccountID, claims.Email
-}
-
-func randomURLString(size int) (string, error) {
-	raw := make([]byte, size)
-	if _, err := io.ReadFull(rand.Reader, raw); err != nil {
-		return "", fmt.Errorf("generate OAuth secret: %w", err)
-	}
-	return base64.RawURLEncoding.EncodeToString(raw), nil
 }

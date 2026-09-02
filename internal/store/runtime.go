@@ -44,10 +44,10 @@ func (p *Postgres) RecordAdminLoginAttempt(ctx context.Context, scopeKeys []stri
 	}
 	for _, key := range keys {
 		if _, err = tx.Exec(ctx, `INSERT INTO admin_login_failures(scope_key,failure_count,reset_at)
-			VALUES($1,1,$2+interval '1 minute')
+			VALUES($1,1,$2::timestamptz+interval '1 minute')
 			ON CONFLICT(scope_key) DO UPDATE SET
-				failure_count=CASE WHEN admin_login_failures.reset_at<=$2 THEN 1 ELSE admin_login_failures.failure_count+1 END,
-				reset_at=CASE WHEN admin_login_failures.reset_at<=$2 THEN $2+interval '1 minute' ELSE admin_login_failures.reset_at END,
+				failure_count=CASE WHEN admin_login_failures.reset_at<=$2::timestamptz THEN 1 ELSE admin_login_failures.failure_count+1 END,
+				reset_at=CASE WHEN admin_login_failures.reset_at<=$2::timestamptz THEN $2::timestamptz+interval '1 minute' ELSE admin_login_failures.reset_at END,
 				updated_at=now()`, key, now); err != nil {
 			return false, wrapDB("record admin login failure", err)
 		}

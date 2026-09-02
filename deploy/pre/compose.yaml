@@ -9,7 +9,6 @@ services:
         condition: service_healthy
     environment:
       SUBPOOL_LISTEN_ADDRESS: ":8080"
-      SUBPOOL_CODEX_CALLBACK_ADDRESS: ":1455"
       SUBPOOL_PUBLIC_URL: ${SUBPOOL_PUBLIC_URL:?Set SUBPOOL_PUBLIC_URL}
       SUBPOOL_DATABASE_URL: postgres://subpool:${SUBPOOL_POSTGRES_PASSWORD:?Set SUBPOOL_POSTGRES_PASSWORD}@postgres:5432/subpool?sslmode=disable
       SUBPOOL_ADMIN_USERNAME: ${SUBPOOL_ADMIN_USERNAME:?Set SUBPOOL_ADMIN_USERNAME}
@@ -18,7 +17,6 @@ services:
       SUBPOOL_API_KEY_HMAC_KEY: ${SUBPOOL_API_KEY_HMAC_KEY:?Set SUBPOOL_API_KEY_HMAC_KEY}
     ports:
       - "${SUBPOOL_HOST_PORT:-8082}:8080"
-      - "127.0.0.1:1455:1455"
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8080/healthz"]
       interval: 10s

@@ -13,6 +13,28 @@ import (
 	"github.com/gesta-run/subpool/internal/domain"
 )
 
+func TestPostgresAdminLoginAttemptTracksInvalidCredentials(t *testing.T) {
+	databaseURL := os.Getenv("SUBPOOL_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("SUBPOOL_TEST_DATABASE_URL is not set")
+	}
+	ctx := context.Background()
+	database, err := Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	keys := []string{"test-ip:203.0.113.1", "test-credential:admin|203.0.113.1"}
+	accepted, err := database.RecordAdminLoginAttempt(ctx, keys, false, time.Now().UTC())
+	if err != nil || accepted {
+		t.Fatalf("invalid attempt accepted=%v error=%v", accepted, err)
+	}
+	accepted, err = database.RecordAdminLoginAttempt(ctx, keys, true, time.Now().UTC())
+	if err != nil || !accepted {
+		t.Fatalf("valid attempt accepted=%v error=%v", accepted, err)
+	}
+}
+
 func TestPostgresAssignmentAndUsage(t *testing.T) {
 	databaseURL := os.Getenv("SUBPOOL_TEST_DATABASE_URL")
 	if databaseURL == "" {

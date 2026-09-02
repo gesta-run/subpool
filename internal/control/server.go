@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gesta-run/subpool/internal/auth"
@@ -26,33 +27,31 @@ type Cipher interface {
 	Encrypt([]byte) ([]byte, error)
 	Decrypt([]byte) ([]byte, error)
 }
-type OAuth interface {
-	Start(string) (string, error)
-	Exchange(context.Context, string, string) (codex.Credentials, string, error)
-}
 type ResetCredits interface {
 	ReadResetCredits(context.Context, codex.Credentials) (*codex.ResetCreditsSummary, error)
 	ConsumeResetCredit(context.Context, codex.Credentials, string, string) (codex.ConsumeResetCreditResult, error)
 }
 type Server struct {
-	store     store.Store
-	sessions  *auth.AdminSessions
-	keys      *auth.APIKeys
-	cipher    Cipher
-	oauth     OAuth
-	resets    ResetCredits
-	catalog   *catalog.Service
-	refresher credential.AccountRefresher
-	sources   *auth.SourceResolver
-	health    *providerhealth.Checker
+	store      store.Store
+	sessions   *auth.AdminSessions
+	keys       *auth.APIKeys
+	cipher     Cipher
+	deviceAuth DeviceAuth
+	resets     ResetCredits
+	catalog    *catalog.Service
+	refresher  credential.AccountRefresher
+	sources    *auth.SourceResolver
+	health     *providerhealth.Checker
+	loginMu    sync.Mutex
+	logins     map[string]*deviceLoginAttempt
 }
 
-func New(st store.Store, sessions *auth.AdminSessions, keys *auth.APIKeys, cipher Cipher, oauth OAuth, refresher credential.AccountRefresher, sources *auth.SourceResolver, healthChecker ...*providerhealth.Checker) *Server {
+func New(st store.Store, sessions *auth.AdminSessions, keys *auth.APIKeys, cipher Cipher, deviceAuth DeviceAuth, refresher credential.AccountRefresher, sources *auth.SourceResolver, healthChecker ...*providerhealth.Checker) *Server {
 	var checker *providerhealth.Checker
 	if len(healthChecker) > 0 {
 		checker = healthChecker[0]
 	}
-	return &Server{store: st, sessions: sessions, keys: keys, cipher: cipher, oauth: oauth, refresher: refresher, sources: sources, health: checker}
+	return &Server{store: st, sessions: sessions, keys: keys, cipher: cipher, deviceAuth: deviceAuth, refresher: refresher, sources: sources, health: checker, logins: make(map[string]*deviceLoginAttempt)}
 }
 
 func (s *Server) WithResetCredits(resets ResetCredits) *Server {
@@ -69,8 +68,9 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/auth/login", s.login)
 	mux.HandleFunc("GET /api/v1/auth/session", s.admin(s.session))
 	mux.HandleFunc("POST /api/v1/auth/logout", s.admin(s.logout))
-	mux.HandleFunc("POST /api/v1/provider-accounts/oauth/start", s.admin(s.oauthStart))
-	mux.HandleFunc("GET /api/v1/provider-accounts/oauth/callback", s.oauthCallback)
+	mux.HandleFunc("POST /api/v1/provider-accounts/codex/device-login", s.admin(s.startDeviceLogin))
+	mux.HandleFunc("GET /api/v1/provider-accounts/codex/device-login/{id}", s.admin(s.getDeviceLogin))
+	mux.HandleFunc("DELETE /api/v1/provider-accounts/codex/device-login/{id}", s.admin(s.cancelDeviceLogin))
 	mux.HandleFunc("GET /api/v1/provider-accounts", s.admin(s.listProviderAccounts))
 	mux.HandleFunc("GET /api/v1/provider-accounts/{id}/models", s.admin(s.listProviderModels))
 	mux.HandleFunc("POST /api/v1/provider-accounts", s.admin(s.createProviderAccount))
@@ -144,30 +144,11 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"authenticated": false})
 }
 
-func (s *Server) oauthStart(w http.ResponseWriter, r *http.Request) {
-	var request struct {
-		DisplayName string `json:"display_name"`
-	}
-	if !decode(w, r, &request) {
-		return
-	}
-	authURL, err := s.oauth.Start(request.DisplayName)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"authorization_url": authURL})
-}
+var errProviderCredentialsRejected = errors.New("provider rejected the credentials")
 
-func (s *Server) oauthCallback(w http.ResponseWriter, r *http.Request) {
-	if providerError := r.URL.Query().Get("error"); providerError != "" {
-		writeError(w, http.StatusBadRequest, "provider authorization failed")
-		return
-	}
-	credentials, display, err := s.oauth.Exchange(r.Context(), r.URL.Query().Get("state"), r.URL.Query().Get("code"))
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
+func (s *Server) saveCodexAccount(ctx context.Context, credentials codex.Credentials, display string) (string, error) {
+	if credentials.AccountID == "" {
+		return "", errors.New("provider identity is missing account_id")
 	}
 	if display == "" {
 		display = credentials.Email
@@ -175,35 +156,27 @@ func (s *Server) oauthCallback(w http.ResponseWriter, r *http.Request) {
 	if display == "" {
 		display = "Codex account"
 	}
-	if credentials.AccountID == "" {
-		writeError(w, http.StatusBadGateway, "provider identity is missing account_id")
-		return
+	raw, err := json.Marshal(credentials)
+	if err != nil {
+		return "", err
 	}
-	raw, _ := json.Marshal(credentials)
 	ciphertext, err := s.cipher.Encrypt(raw)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to encrypt credentials")
-		return
+		return "", err
 	}
 	accountID, err := id.New()
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to create account")
-		return
+		return "", err
 	}
 	account := domain.ProviderAccount{ID: accountID, Provider: domain.ProviderCodex, CredentialType: domain.CredentialSubscription, DisplayName: display, SubjectHMAC: s.keys.Digest("provider-subject:" + domain.ProviderCodex + ":" + credentials.AccountID), CredentialCiphertext: ciphertext, CredentialVersion: 1, Status: domain.AccountActive}
-	if !s.checkNewAccount(r.Context(), &account, w) {
-		return
+	if err = s.validateNewAccount(ctx, &account); err != nil {
+		return "", err
 	}
-	if err = s.store.CreateProviderAccount(r.Context(), account); err != nil {
-		if errors.Is(err, store.ErrConflict) {
-			writeError(w, http.StatusConflict, "this Codex account is already imported")
-			return
-		}
-		writeError(w, http.StatusInternalServerError, "failed to save provider account")
-		return
+	if err = s.store.CreateProviderAccount(ctx, account); err != nil {
+		return "", err
 	}
-	s.audit(r.Context(), "provider_account.create", "provider_account", accountID, "success")
-	http.Redirect(w, r, "/#/accounts", http.StatusSeeOther)
+	s.audit(ctx, "provider_account.create", "provider_account", accountID, "success")
+	return accountID, nil
 }
 
 func (s *Server) createProviderAccount(w http.ResponseWriter, r *http.Request) {
@@ -430,17 +403,24 @@ func (s *Server) checkProviderAccount(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) checkNewAccount(ctx context.Context, account *domain.ProviderAccount, w http.ResponseWriter) bool {
+	if err := s.validateNewAccount(ctx, account); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return false
+	}
+	return true
+}
+
+func (s *Server) validateNewAccount(ctx context.Context, account *domain.ProviderAccount) error {
 	if s.health == nil {
 		account.HealthStatus = domain.HealthUnknown
-		return true
+		return nil
 	}
 	checkCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	result := s.health.Check(checkCtx, *account)
 	if result.AuthFailed {
-		writeError(w, http.StatusBadRequest, "provider rejected the credentials")
-		return false
+		return errProviderCredentialsRejected
 	}
 	s.health.ApplyNewAccount(account, result)
-	return true
+	return nil
 }

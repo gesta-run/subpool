@@ -1,5 +1,7 @@
 import { useState } from 'react'
 import { errorMessage, request } from '../api'
+import { useCodexDeviceLogin } from './useCodexDeviceLogin'
+export type { CodexDeviceLogin } from './useCodexDeviceLogin'
 
 export type ConnectProvider = 'codex' | 'openai_compatible'
 
@@ -28,6 +30,11 @@ export function useConnectAccount(reload: () => Promise<void>) {
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({})
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+  const codex = useCodexDeviceLogin(async () => {
+    setOpen(false)
+    setDisplayName('')
+    await reload()
+  })
 
   function close() {
     setOpen(false)
@@ -37,6 +44,7 @@ export function useConnectAccount(reload: () => Promise<void>) {
     setAPIKey('')
     setFieldErrors({})
     setError('')
+    codex.cancel()
   }
 
   async function submit() {
@@ -50,15 +58,13 @@ export function useConnectAccount(reload: () => Promise<void>) {
       if (Object.keys(errors).length > 0) return
     }
     setError('')
-    setBusy(true)
+    codex.setError('')
     try {
       if (provider === 'codex') {
-        const result = await request<{ authorization_url?: string; url?: string }>('/api/v1/provider-accounts/oauth/start', { method: 'POST', body: JSON.stringify({ display_name: displayName.trim() }) })
-        const url = result.authorization_url ?? result.url
-        if (!url) throw new Error('The server did not return an authorization URL.')
-        window.location.assign(url)
+        await codex.start(displayName.trim())
         return
       }
+      setBusy(true)
       await request('/api/v1/provider-accounts', { method: 'POST', body: JSON.stringify({ provider, display_name: displayName.trim(), base_url: baseURL.trim(), api_key: apiKey.trim() }) })
       close()
       await reload()
@@ -73,7 +79,8 @@ export function useConnectAccount(reload: () => Promise<void>) {
     setProvider(value)
     setFieldErrors({})
     setError('')
+    codex.setError('')
   }
 
-  return { open, setOpen, displayName, setDisplayName, provider, changeProvider, baseURL, setBaseURL, apiKey, setAPIKey, fieldErrors, setFieldErrors, error, busy, close, submit }
+  return { open, setOpen, displayName, setDisplayName, provider, changeProvider, baseURL, setBaseURL, apiKey, setAPIKey, fieldErrors, setFieldErrors, error: codex.error || error, busy: codex.busy || busy, deviceLogin: codex.login, copyStatus: codex.copyStatus, continueToOpenAI: codex.continueToOpenAI, close, submit }
 }

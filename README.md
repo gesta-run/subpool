@@ -6,7 +6,7 @@
 </p>
 
 <p align="center">
-  A lightweight, self-hosted AI subscription pool for teams.
+  Enterprise AI subscription quota allocation and governance, self-hosted.
 </p>
 
 <p align="center">
@@ -16,7 +16,7 @@
   <img alt="Docker Compose" src="https://img.shields.io/badge/Deploy-Docker_Compose-2496ED?logo=docker&logoColor=white">
 </p>
 
-Subpool is a lightweight, self-hosted service that pools AI subscriptions and API accounts behind one consistent team API. Administrators combine authorized subscription and API accounts into pools, distribute employee-specific keys, monitor remaining quota, and expose one consistent API without storing conversation content.
+Subpool is a self-hosted control plane for allocating, governing, and auditing AI subscription capacity across teams. Administrators combine authorized subscription and API accounts into pools, distribute employee-specific keys, monitor remaining quota, and expose one consistent API without storing conversation content.
 
 <p align="center">
   <img src="docs/images/subpool-accounts-console.png" alt="Subpool provider accounts console">
@@ -63,7 +63,7 @@ Replace every `replace-with-*` value, then open [http://localhost:8080](http://l
 2. Create a pool and add the account.
 3. Create an employee API key for the pool.
 
-Codex OAuth uses `http://localhost:1455/auth/callback`. Forward port `1455` when the Docker host is remote.
+Codex subscriptions use [device-code authorization](https://developers.openai.com/codex/auth/). Copy the one-time code from Subpool, continue to OpenAI, and confirm it there. This works on remote and headless deployments without a localhost callback or an extra exposed port. Device-code login must be enabled in ChatGPT security or workspace settings.
 
 Configure Codex CLI:
 

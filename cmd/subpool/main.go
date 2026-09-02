@@ -45,11 +45,13 @@ func main() {
 	keys := auth.NewAPIKeys(cfg.APIKeyHMACKey)
 	publicURL, _ := url.Parse(cfg.PublicURL)
 	sessions := auth.NewAdminSessions(cfg.AdminUsername, cfg.AdminPassword, cfg.SessionTTL, publicURL.Scheme == "https", cfg.APIKeyHMACKey, database)
-	oauth := codex.NewOAuth(codex.OAuthConfig{ClientID: cfg.CodexClientID, AuthURL: cfg.CodexAuthURL, TokenURL: cfg.CodexTokenURL, RedirectURL: cfg.CodexRedirectURL})
+	tokenRefresher := codex.NewTokenRefresher(codex.TokenRefresherConfig{ClientID: cfg.CodexClientID, TokenURL: cfg.CodexTokenURL})
+	deviceAuth := codex.NewDeviceAuth()
+	defer deviceAuth.Close()
 	provider := codex.NewClient(cfg.CodexUpstreamURL, nil)
 	resetCredits := codex.NewAppServer()
 	compatibleProvider := openaicompat.NewClient(nil)
-	refreshManager := credential.NewRefreshManager(database, cipher, oauth)
+	refreshManager := credential.NewRefreshManager(database, cipher, tokenRefresher)
 	healthChecker := providerhealth.NewChecker(database, cipher, provider, compatibleProvider)
 	sources, err := auth.NewSourceResolver(cfg.TrustedProxyCIDRs)
 	if err != nil {
@@ -57,7 +59,7 @@ func main() {
 		os.Exit(1)
 	}
 	mux := http.NewServeMux()
-	control.New(database, sessions, keys, cipher, oauth, refreshManager, sources, healthChecker).
+	control.New(database, sessions, keys, cipher, deviceAuth, refreshManager, sources, healthChecker).
 		WithResetCredits(resetCredits).
 		WithModelProviders(resetCredits, compatibleProvider).
 		Register(mux)
@@ -84,30 +86,14 @@ func main() {
 	})
 	registerWeb(mux)
 	server := &http.Server{Addr: cfg.ListenAddress, Handler: securityHeaders(mux), ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 60 * time.Second, IdleTimeout: 120 * time.Second, MaxHeaderBytes: 1 << 20}
-	callbackMux := http.NewServeMux()
-	callbackMux.HandleFunc("GET /auth/callback", func(w http.ResponseWriter, r *http.Request) {
-		target := cfg.PublicURL + "/api/v1/provider-accounts/oauth/callback"
-		if r.URL.RawQuery != "" {
-			target += "?" + r.URL.RawQuery
-		}
-		w.Header().Set("Cache-Control", "no-store")
-		http.Redirect(w, r, target, http.StatusFound)
-	})
-	callbackServer := &http.Server{Addr: cfg.CodexCallbackAddress, Handler: securityHeaders(callbackMux), ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 1 << 20}
 	stopCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	go healthChecker.Run(stopCtx)
 	go database.RunMaintenance(stopCtx)
 	go func() {
-		if callbackErr := callbackServer.ListenAndServe(); callbackErr != nil && !errors.Is(callbackErr, http.ErrServerClosed) {
-			slog.Error("Codex OAuth callback server failed", "error", callbackErr)
-		}
-	}()
-	go func() {
 		<-stopCtx.Done()
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
-		_ = callbackServer.Shutdown(ctx)
 		_ = server.Shutdown(ctx)
 	}()
 	slog.Info("Subpool is listening", "address", cfg.ListenAddress)
