@@ -29,6 +29,7 @@ export async function request<T>(path: string, init: RequestInit = {}): Promise<
     ...init,
     headers,
     credentials: 'same-origin',
+    cache: init.cache ?? 'no-store',
   })
 
   const contentType = response.headers.get('content-type') ?? ''
@@ -37,6 +38,9 @@ export async function request<T>(path: string, init: RequestInit = {}): Promise<
     : await response.text()
 
   if (!response.ok) {
+    if (response.status === 401 && path !== '/api/v1/auth/login' && path !== '/api/v1/auth/session') {
+      window.dispatchEvent(new Event('subpool:unauthorized'))
+    }
     const message =
       typeof body === 'object' && body !== null && 'message' in body
         ? String(body.message)

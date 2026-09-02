@@ -12,13 +12,13 @@ func TestAPIKeyGenerationAndDigest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(plain, "sk-subpool-") {
+	if !strings.HasPrefix(plain, "sk-") {
 		t.Fatalf("unexpected prefix: %s", plain)
 	}
 	if strings.Contains(plain, ".") {
 		t.Fatalf("API key must be a single opaque segment: %s", plain)
 	}
-	if len(plain) != (len("sk-subpool-") + 43) {
+	if len(plain) != (len("sk-") + 43) {
 		t.Fatalf("unexpected API key length: %d", len(plain))
 	}
 	if hint != plain[len(plain)-4:] {
@@ -30,11 +30,11 @@ func TestAPIKeyGenerationAndDigest(t *testing.T) {
 }
 
 func TestBearer(t *testing.T) {
-	key := "sk-subpool-example"
+	key := "sk-example"
 	if got, err := Bearer("Bearer " + key); err != nil || got != key {
 		t.Fatalf("Bearer() = %q, %v", got, err)
 	}
-	for _, value := range []string{"", key, "Basic " + key, "Bearer sk-other-value"} {
+	for _, value := range []string{"", key, "Basic " + key, "Bearer other-value"} {
 		if _, err := Bearer(value); err == nil {
 			t.Fatalf("Bearer(%q) succeeded", value)
 		}

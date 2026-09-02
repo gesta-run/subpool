@@ -17,7 +17,9 @@ import (
 	"github.com/gesta-run/subpool/internal/control"
 	"github.com/gesta-run/subpool/internal/credential"
 	"github.com/gesta-run/subpool/internal/gateway"
+	providerhealth "github.com/gesta-run/subpool/internal/health"
 	"github.com/gesta-run/subpool/internal/provider/codex"
+	"github.com/gesta-run/subpool/internal/provider/openaicompat"
 	"github.com/gesta-run/subpool/internal/store"
 )
 
@@ -42,18 +44,26 @@ func main() {
 	}
 	keys := auth.NewAPIKeys(cfg.APIKeyHMACKey)
 	publicURL, _ := url.Parse(cfg.PublicURL)
-	sessions := auth.NewAdminSessions(cfg.AdminUsername, cfg.AdminPassword, cfg.SessionTTL, publicURL.Scheme == "https")
+	sessions := auth.NewAdminSessions(cfg.AdminUsername, cfg.AdminPassword, cfg.SessionTTL, publicURL.Scheme == "https", cfg.APIKeyHMACKey, database)
 	oauth := codex.NewOAuth(codex.OAuthConfig{ClientID: cfg.CodexClientID, AuthURL: cfg.CodexAuthURL, TokenURL: cfg.CodexTokenURL, RedirectURL: cfg.CodexRedirectURL})
 	provider := codex.NewClient(cfg.CodexUpstreamURL, nil)
+	resetCredits := codex.NewAppServer(cfg.CodexExecutable)
+	compatibleProvider := openaicompat.NewClient(nil)
 	refreshManager := credential.NewRefreshManager(database, cipher, oauth)
+	healthChecker := providerhealth.NewChecker(database, cipher, provider, compatibleProvider)
 	sources, err := auth.NewSourceResolver(cfg.TrustedProxyCIDRs)
 	if err != nil {
 		slog.Error("trusted proxy configuration failed", "error", err)
 		os.Exit(1)
 	}
 	mux := http.NewServeMux()
-	control.New(database, sessions, keys, cipher, oauth, refreshManager, sources).Register(mux)
-	gateway.New(database, keys, cipher, provider, refreshManager).Register(mux)
+	control.New(database, sessions, keys, cipher, oauth, refreshManager, sources, healthChecker).
+		WithResetCredits(resetCredits).
+		WithModelProviders(resetCredits, compatibleProvider).
+		Register(mux)
+	gateway.New(database, keys, cipher, provider, refreshManager, compatibleProvider).
+		WithModelProviders(resetCredits, compatibleProvider).
+		Register(mux)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"status":"ok"}`))
@@ -73,7 +83,7 @@ func main() {
 		_, _ = w.Write([]byte("# HELP subpool_up Whether the service is running.\n# TYPE subpool_up gauge\nsubpool_up 1\n"))
 	})
 	registerWeb(mux)
-	server := &http.Server{Addr: cfg.ListenAddress, Handler: securityHeaders(mux), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 120 * time.Second}
+	server := &http.Server{Addr: cfg.ListenAddress, Handler: securityHeaders(mux), ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 60 * time.Second, IdleTimeout: 120 * time.Second, MaxHeaderBytes: 1 << 20}
 	callbackMux := http.NewServeMux()
 	callbackMux.HandleFunc("GET /auth/callback", func(w http.ResponseWriter, r *http.Request) {
 		target := cfg.PublicURL + "/api/v1/provider-accounts/oauth/callback"
@@ -83,9 +93,11 @@ func main() {
 		w.Header().Set("Cache-Control", "no-store")
 		http.Redirect(w, r, target, http.StatusFound)
 	})
-	callbackServer := &http.Server{Addr: cfg.CodexCallbackAddress, Handler: securityHeaders(callbackMux), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 30 * time.Second}
+	callbackServer := &http.Server{Addr: cfg.CodexCallbackAddress, Handler: securityHeaders(callbackMux), ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 1 << 20}
 	stopCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	go healthChecker.Run(stopCtx)
+	go database.RunMaintenance(stopCtx)
 	go func() {
 		if callbackErr := callbackServer.ListenAndServe(); callbackErr != nil && !errors.Is(callbackErr, http.ErrServerClosed) {
 			slog.Error("Codex OAuth callback server failed", "error", callbackErr)

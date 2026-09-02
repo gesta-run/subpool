@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" role="img" aria-labelledby="title">
+  <title id="title">Subpool</title>
+  <g fill="#F5F5F5"><rect x="25" y="13" width="16" height="16" rx="5"/><rect x="58" y="18" width="16" height="16" rx="5"/><rect x="11" y="43" width="16" height="16" rx="5"/><rect x="73" y="41" width="16" height="16" rx="5"/><rect x="23" y="70" width="16" height="16" rx="5"/><rect x="58" y="68" width="16" height="16" rx="5"/></g>
+  <rect x="41" y="41" width="18" height="18" rx="5.5" fill="#145BFF"/>
+</svg>

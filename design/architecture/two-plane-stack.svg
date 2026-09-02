@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 820" role="img" aria-labelledby="title desc">
+  <title id="title">Subpool two-plane stack architecture</title>
+  <desc id="desc">A self-hosted Subpool stack divided into control and data planes, connected to employee clients, administrators, PostgreSQL, and upstream subscriptions.</desc>
+  <defs>
+    <linearGradient id="brand2" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#22A6F2"/><stop offset="1" stop-color="#4F46E5"/></linearGradient>
+    <filter id="shadow2" x="-20%" y="-20%" width="140%" height="150%"><feDropShadow dx="0" dy="14" stdDeviation="22" flood-color="#182B49" flood-opacity=".09"/></filter>
+    <marker id="arrow2" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M0 0 10 5 0 10Z" fill="#4F46E5"/></marker>
+  </defs>
+  <rect width="1440" height="820" fill="#FFFFFF"/>
+  <g font-family="Avenir Next, Helvetica Neue, Arial, sans-serif">
+    <text x="72" y="76" fill="#0F172A" font-size="34" font-weight="700" letter-spacing="-1">Control and data planes</text>
+    <text x="72" y="108" fill="#64748B" font-size="15">One self-hosted stack, two deliberately separated responsibilities</text>
+
+    <g filter="url(#shadow2)"><rect x="320" y="152" width="800" height="570" rx="28" fill="#FFFFFF" stroke="#CBD5E1"/></g>
+    <rect x="320" y="152" width="800" height="54" rx="28" fill="#F8FAFC"/><path d="M320 206H1120" stroke="#E2E8F0"/>
+    <circle cx="354" cy="179" r="6" fill="#22A6F2"/><circle cx="374" cy="179" r="6" fill="#4F46E5"/>
+    <text x="402" y="185" fill="#0F172A" font-size="13" font-weight="750" letter-spacing="1.3">SELF-HOSTED SUBPOOL STACK</text>
+
+    <rect x="354" y="240" width="732" height="196" rx="20" fill="#F6FBFE" stroke="#B9E4F8"/>
+    <text x="382" y="275" fill="#1687C8" font-size="12" font-weight="750" letter-spacing="1.5">DATA PLANE</text>
+    <text x="382" y="303" fill="#0F172A" font-size="18" font-weight="700">Request path</text>
+    <g>
+      <rect x="382" y="330" width="190" height="72" rx="13" fill="#FFFFFF" stroke="#9DD7F4"/>
+      <rect x="625" y="330" width="190" height="72" rx="13" fill="#FFFFFF" stroke="#9DD7F4"/>
+      <rect x="868" y="330" width="190" height="72" rx="13" fill="#FFFFFF" stroke="#AFAAF7"/>
+      <g fill="#0F172A" text-anchor="middle"><text x="477" y="360" font-size="14" font-weight="650">Unified API</text><text x="477" y="383" fill="#64748B" font-size="11">Responses · Chat</text><text x="720" y="360" font-size="14" font-weight="650">Authentication</text><text x="720" y="383" fill="#64748B" font-size="11">Key · scope · limit</text><text x="963" y="360" font-size="14" font-weight="650">Pool scheduler</text><text x="963" y="383" fill="#64748B" font-size="11">Slots · health · affinity</text></g>
+      <g fill="none" stroke="#22A6F2" stroke-width="2" marker-end="url(#arrow2)"><path d="M572 366H625"/><path d="M815 366H868"/></g>
+    </g>
+
+    <rect x="354" y="466" width="732" height="158" rx="20" fill="#F8F8FF" stroke="#D4D2FA"/>
+    <text x="382" y="501" fill="#4F46E5" font-size="12" font-weight="750" letter-spacing="1.5">CONTROL PLANE</text>
+    <text x="382" y="529" fill="#0F172A" font-size="18" font-weight="700">Administration path</text>
+    <g>
+      <rect x="382" y="550" width="190" height="46" rx="11" fill="#FFFFFF" stroke="#C7C4FA"/>
+      <rect x="625" y="550" width="190" height="46" rx="11" fill="#FFFFFF" stroke="#C7C4FA"/>
+      <rect x="868" y="550" width="190" height="46" rx="11" fill="#FFFFFF" stroke="#C7C4FA"/>
+      <g fill="#0F172A" font-size="13" font-weight="650" text-anchor="middle"><text x="477" y="579">React console</text><text x="720" y="579">Control API</text><text x="963" y="579">OAuth manager</text></g>
+      <g fill="none" stroke="#4F46E5" stroke-width="2" marker-end="url(#arrow2)"><path d="M572 573H625"/><path d="M815 573H868"/></g>
+    </g>
+
+    <g filter="url(#shadow2)"><path d="M634 661h172v44c0 14-38 26-86 26s-86-12-86-26Z" fill="#FFFFFF" stroke="#BFC8F5"/><ellipse cx="720" cy="661" rx="86" ry="24" fill="#F8F8FF" stroke="#BFC8F5"/></g>
+    <text x="720" y="673" fill="#0F172A" font-size="14" font-weight="650" text-anchor="middle">PostgreSQL</text><text x="720" y="697" fill="#64748B" font-size="11" text-anchor="middle">configuration · audit · aggregate usage</text>
+    <g fill="none" stroke="#A5B4FC" stroke-width="2"><path d="M720 624V637"/><path d="M963 402C963 645 806 630 806 661"/></g>
+
+    <g filter="url(#shadow2)">
+      <rect x="72" y="284" width="190" height="100" rx="18" fill="#FFFFFF" stroke="#CBD5E1"/>
+      <rect x="72" y="510" width="190" height="100" rx="18" fill="#FFFFFF" stroke="#CBD5E1"/>
+      <rect x="1178" y="248" width="190" height="92" rx="18" fill="#FFFFFF" stroke="#BFC8F5"/>
+      <rect x="1178" y="366" width="190" height="92" rx="18" fill="#FFFFFF" stroke="#BFC8F5"/>
+      <rect x="1178" y="484" width="190" height="92" rx="18" fill="#FFFFFF" stroke="#BFC8F5"/>
+    </g>
+    <g fill="#0F172A" text-anchor="middle"><text x="167" y="324" font-size="15" font-weight="700">Employee clients</text><text x="167" y="349" fill="#64748B" font-size="12">Codex · SDK · curl</text><text x="167" y="550" font-size="15" font-weight="700">Administrator</text><text x="167" y="575" fill="#64748B" font-size="12">Browser</text><text x="1273" y="284" font-size="14" font-weight="650">Subscription A</text><text x="1273" y="308" fill="#64748B" font-size="11">Codex OAuth</text><text x="1273" y="402" font-size="14" font-weight="650">Subscription B</text><text x="1273" y="426" fill="#64748B" font-size="11">Codex OAuth</text><text x="1273" y="520" font-size="14" font-weight="650">Subscription N</text><text x="1273" y="544" fill="#64748B" font-size="11">Codex OAuth</text></g>
+    <g fill="none" stroke="#4F46E5" stroke-width="2" marker-end="url(#arrow2)"><path d="M262 334H382"/><path d="M262 560H382"/><path d="M1058 366C1120 366 1114 294 1178 294"/><path d="M1058 366C1120 366 1114 412 1178 412"/><path d="M1058 366C1120 366 1114 530 1178 530"/></g>
+    <text x="72" y="775" fill="#94A3B8" font-size="12">White-box deployment view · provider adapters can expand without changing the employee-facing API.</text>
+  </g>
+</svg>

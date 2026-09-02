@@ -7,18 +7,23 @@ interface ModalProps {
   children: ReactNode
   onClose: () => void
   closeLabel?: string
+  eyebrow?: string
+  className?: string
+  showClose?: boolean
 }
 
-export function Modal({ title, description, children, onClose, closeLabel = 'Close dialog' }: ModalProps) {
+export function Modal({ title, description, children, onClose, closeLabel = 'Close dialog', eyebrow = 'Subpool console', className = '', showClose = true }: ModalProps) {
   const dialogRef = useRef<HTMLDivElement>(null)
   const onCloseRef = useRef(onClose)
   onCloseRef.current = onClose
 
   useEffect(() => {
     const previous = document.activeElement as HTMLElement | null
-    dialogRef.current?.focus()
+    const initialFocus = dialogRef.current?.querySelector<HTMLElement>('[data-autofocus]')
+    if (initialFocus) initialFocus.focus()
+    else dialogRef.current?.focus()
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onCloseRef.current()
+      if (event.key === 'Escape' && !event.defaultPrevented) onCloseRef.current()
     }
     document.addEventListener('keydown', onKeyDown)
     return () => {
@@ -33,7 +38,7 @@ export function Modal({ title, description, children, onClose, closeLabel = 'Clo
     }}>
       <div
         ref={dialogRef}
-        className="modal"
+        className={`modal ${className}`.trim()}
         role="dialog"
         aria-modal="true"
         aria-labelledby="modal-title"
@@ -41,13 +46,13 @@ export function Modal({ title, description, children, onClose, closeLabel = 'Clo
       >
         <header className="modal__header">
           <div>
-            <p className="eyebrow">Subpool console</p>
+            <p className="eyebrow">{eyebrow}</p>
             <h2 id="modal-title">{title}</h2>
             {description ? <p>{description}</p> : null}
           </div>
-          <button className="icon-button" type="button" aria-label={closeLabel} onClick={onClose}>
+          {showClose ? <button className="icon-button" type="button" aria-label={closeLabel} onClick={onClose}>
             <CloseIcon />
-          </button>
+          </button> : null}
         </header>
         <div className="modal__body">{children}</div>
       </div>

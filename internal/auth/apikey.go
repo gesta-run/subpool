@@ -10,7 +10,7 @@ import (
 	"strings"
 )
 
-const keyPrefix = "sk-subpool-"
+const keyPrefix = "sk-"
 
 type APIKeys struct {
 	hmacKey []byte

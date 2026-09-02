@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -16,6 +17,7 @@ import (
 	"github.com/gesta-run/subpool/internal/credential"
 	"github.com/gesta-run/subpool/internal/domain"
 	"github.com/gesta-run/subpool/internal/provider/codex"
+	"github.com/gesta-run/subpool/internal/provider/openaicompat"
 	"github.com/gesta-run/subpool/internal/store"
 )
 
@@ -25,6 +27,9 @@ type fakeStore struct {
 	sessionAccount          domain.ProviderAccount
 	sessionErr              error
 	reassigned              domain.ProviderAccount
+	reassignedAccounts      []domain.ProviderAccount
+	poolAccounts            []domain.ProviderAccount
+	reassignExcludes        [][]string
 	usageInput, usageOutput int64
 	sessionSaved            bool
 	savedAccount            string
@@ -40,6 +45,9 @@ type fakeStore struct {
 func (f *fakeStore) ResolveAPIKey(context.Context, []byte) (domain.KeyRoute, error) {
 	return f.route, nil
 }
+func (f *fakeStore) ListPoolProviderAccounts(context.Context, string) ([]domain.ProviderAccount, error) {
+	return f.poolAccounts, nil
+}
 func (f *fakeStore) ResolveSessionAccount(context.Context, string, []byte) (domain.ProviderAccount, error) {
 	return f.sessionAccount, f.sessionErr
 }
@@ -53,15 +61,25 @@ func (f *fakeStore) SaveSessionBinding(_ context.Context, _, _ string, _ []byte,
 	f.savedAccount = account
 	return nil
 }
-func (f *fakeStore) ReassignAPIKey(context.Context, string, string, string) (domain.ProviderAccount, error) {
+func (f *fakeStore) ReassignAPIKey(_ context.Context, _, _ string, excludeIDs []string) (domain.ProviderAccount, error) {
+	f.reassignExcludes = append(f.reassignExcludes, append([]string(nil), excludeIDs...))
+	if len(f.reassignedAccounts) > 0 {
+		account := f.reassignedAccounts[0]
+		f.reassignedAccounts = f.reassignedAccounts[1:]
+		return account, nil
+	}
 	if f.reassigned.ID == "" {
-		return domain.ProviderAccount{}, store.ErrCapacityExhausted
+		return domain.ProviderAccount{}, store.ErrNoEligibleAccount
 	}
 	return f.reassigned, nil
 }
-func (f *fakeStore) MarkProviderSuccess(context.Context, string) error { return nil }
-func (f *fakeStore) TouchAPIKey(context.Context, string) error         { return nil }
-func (f *fakeStore) AddUsage(_ context.Context, _ string, eventHash []byte, _ time.Time, input, output int64) error {
+func (f *fakeStore) AllowAPIKeyRequest(context.Context, string, int, time.Time) (bool, error) {
+	return true, nil
+}
+func (f *fakeStore) RecordRequestSuccess(context.Context, string, string, time.Time) error {
+	return nil
+}
+func (f *fakeStore) AddUsage(_ context.Context, _ string, eventHash []byte, _ string, _ time.Time, input, output int64) error {
 	f.usageCalls++
 	if f.usageEvents == nil {
 		f.usageEvents = make(map[string]struct{})
@@ -87,19 +105,57 @@ func (f *fakeStore) UpdateProviderStatus(_ context.Context, _ string, status str
 	f.status = append(f.status, status)
 	return nil
 }
+func (f *fakeStore) RecordProviderHealthFailure(context.Context, string, string, time.Time, time.Time) error {
+	return nil
+}
 
 type fakeProvider struct {
 	responses   []*http.Response
+	errors      []error
+	models      []codex.Model
 	credentials []codex.Credentials
 	bodies      [][]byte
+}
+
+type fakeCompatibleProvider struct {
+	chatBody      []byte
+	responsesBody []byte
+	credentials   openaicompat.Credentials
+}
+
+func (f *fakeCompatibleProvider) Models(context.Context, openaicompat.Credentials) (*http.Response, error) {
+	return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"object":"list","data":[{"id":"compatible-model"}]}`))}, nil
+}
+
+func (f *fakeCompatibleProvider) Responses(_ context.Context, body []byte, _ http.Header, credentials openaicompat.Credentials) (*http.Response, error) {
+	f.responsesBody = append([]byte(nil), body...)
+	f.credentials = credentials
+	return sseResponse(http.StatusOK, "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-api\",\"output\":[],\"usage\":{}}}\n\n"), nil
+}
+
+func (f *fakeCompatibleProvider) ChatCompletions(_ context.Context, body []byte, _ http.Header, credentials openaicompat.Credentials) (*http.Response, error) {
+	f.chatBody = append([]byte(nil), body...)
+	f.credentials = credentials
+	return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"id":"chat-1","choices":[{"message":{"role":"assistant","content":"OK"},"finish_reason":"stop"}],"usage":{"prompt_tokens":9,"completion_tokens":2,"total_tokens":11}}`))}, nil
 }
 
 func (f *fakeProvider) Responses(_ context.Context, body []byte, _ http.Header, credentials codex.Credentials) (*http.Response, error) {
 	f.credentials = append(f.credentials, credentials)
 	f.bodies = append(f.bodies, append([]byte(nil), body...))
+	if len(f.errors) > 0 {
+		err := f.errors[0]
+		f.errors = f.errors[1:]
+		if err != nil {
+			return nil, err
+		}
+	}
 	response := f.responses[0]
 	f.responses = f.responses[1:]
 	return response, nil
+}
+
+func (f *fakeProvider) ListModels(context.Context, codex.Credentials) ([]codex.Model, error) {
+	return f.models, nil
 }
 
 type fakeRefresher struct {
@@ -136,11 +192,64 @@ func TestResponsesStreamMetersAndBindsSession(t *testing.T) {
 	}
 }
 
+func TestOpenAICompatibleChatPassesThroughAndMetersUsage(t *testing.T) {
+	cipher, err := credential.New(bytes.Repeat([]byte{3}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys := auth.NewAPIKeys(bytes.Repeat([]byte{4}, 32))
+	plain, _, _, err := keys.Generate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(openaicompat.Credentials{BaseURL: "https://api.example.com/v1", APIKey: "sk-test-placeholder"})
+	encrypted, err := cipher.Encrypt(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	account := domain.ProviderAccount{ID: "account-1", Provider: domain.ProviderOpenAICompatible, CredentialType: domain.CredentialAPIKey, Status: domain.AccountActive, CredentialCiphertext: encrypted, CredentialVersion: 1}
+	st := &fakeStore{route: domain.KeyRoute{Key: domain.APIKey{ID: "key-1", PoolID: "pool-1"}, Pool: domain.Pool{ID: "pool-1", Provider: domain.ProviderOpenAICompatible}, Account: account, MembershipEnabled: true}}
+	compatible := &fakeCompatibleProvider{}
+	server := New(st, keys, cipher, &fakeProvider{}, &fakeRefresher{}, compatible)
+	body := `{"model":"compatible-model","messages":[{"role":"user","content":"hello"}]}`
+	recorder := serveGateway(t, server, plain, "/v1/chat/completions", body)
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"id":"chat-1"`) {
+		t.Fatalf("status = %d, body=%s", recorder.Code, recorder.Body.String())
+	}
+	if string(compatible.chatBody) != body || compatible.credentials.BaseURL != "https://api.example.com/v1" || compatible.credentials.APIKey != "sk-test-placeholder" {
+		t.Fatalf("upstream request = %s, credentials=%#v", compatible.chatBody, compatible.credentials)
+	}
+	if st.usageInput != 9 || st.usageOutput != 2 {
+		t.Fatalf("usage = %d/%d", st.usageInput, st.usageOutput)
+	}
+}
+
+func TestForceStreamConvertsStringInputForCodexBackend(t *testing.T) {
+	body := forceStream([]byte(`{"model":"gpt-5.6-sol","input":"Reply with OK"}`))
+	var request struct {
+		Stream bool `json:"stream"`
+		Store  bool `json:"store"`
+		Input  []struct {
+			Role    string `json:"role"`
+			Content []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"content"`
+		} `json:"input"`
+	}
+	if err := json.Unmarshal(body, &request); err != nil {
+		t.Fatal(err)
+	}
+	if !request.Stream || request.Store || len(request.Input) != 1 || request.Input[0].Role != "user" || len(request.Input[0].Content) != 1 || request.Input[0].Content[0].Type != "input_text" || request.Input[0].Content[0].Text != "Reply with OK" {
+		t.Fatalf("normalized request = %#v", request)
+	}
+}
+
 func TestResponsesJSONMetersTerminalResponse(t *testing.T) {
 	server, st, provider, plain := newTestServer(t)
-	provider.responses = []*http.Response{sseResponse(http.StatusOK, "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-json\",\"output\":[],\"usage\":{\"input_tokens\":8,\"output_tokens\":3}}}\n\n")}
+	provider.responses = []*http.Response{sseResponse(http.StatusOK, "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"msg-test\",\"type\":\"message\",\"role\":\"assistant\",\"status\":\"in_progress\",\"content\":[]}}\n\ndata: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"id\":\"msg-test\",\"type\":\"message\",\"role\":\"assistant\",\"status\":\"completed\",\"content\":[{\"type\":\"output_text\",\"text\":\"OK\"}]}}\n\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-json\",\"output\":[],\"usage\":{\"input_tokens\":8,\"output_tokens\":3}}}\n\n")}
 	recorder := serveGateway(t, server, plain, "/v1/responses", `{"model":"gpt-test","input":"hello"}`)
-	if recorder.Code != http.StatusOK || st.usageInput != 8 || st.usageOutput != 3 || len(st.usageEvents) != 1 {
+	if recorder.Code != http.StatusOK || st.usageInput != 8 || st.usageOutput != 3 || len(st.usageEvents) != 1 || !strings.Contains(recorder.Body.String(), `"text":"OK"`) {
 		t.Fatalf("response=%d usage=%d/%d events=%d body=%s", recorder.Code, st.usageInput, st.usageOutput, len(st.usageEvents), recorder.Body.String())
 	}
 }
@@ -186,6 +295,73 @@ func TestRateLimitedAccountReassignsBeforeStreaming(t *testing.T) {
 	}
 }
 
+func TestMixedPoolFallsBackFromSubscriptionsToPaidAPI(t *testing.T) {
+	server, st, provider, plain := newTestServer(t)
+	cipher := server.cipher.(*credential.Cipher)
+	st.route.Pool.Provider = domain.ProviderMixed
+	st.reassignedAccounts = []domain.ProviderAccount{
+		accountWithCipher(t, cipher, "account-2", "token-2"),
+		compatibleAccountWithCipher(t, cipher, "account-api"),
+	}
+	provider.responses = []*http.Response{
+		sseResponse(http.StatusTooManyRequests, "limited"),
+		sseResponse(http.StatusTooManyRequests, "limited"),
+	}
+	compatible := &fakeCompatibleProvider{}
+	server.compatible = compatible
+
+	recorder := serveGateway(t, server, plain, "/v1/responses", `{"model":"gpt-test","input":"hello"}`)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", recorder.Code, recorder.Body.String())
+	}
+	if len(provider.credentials) != 2 || compatible.credentials.APIKey != "sk-paid-placeholder" {
+		t.Fatalf("subscription calls=%d paid credentials=%#v", len(provider.credentials), compatible.credentials)
+	}
+	if len(st.reassignExcludes) != 2 || strings.Join(st.reassignExcludes[1], ",") != "account-1,account-2" {
+		t.Fatalf("reassignment exclusions = %#v", st.reassignExcludes)
+	}
+}
+
+func TestNewRequestReturnsFromPaidFallbackToSubscription(t *testing.T) {
+	server, st, provider, plain := newTestServer(t)
+	cipher := server.cipher.(*credential.Cipher)
+	st.route.Pool.Provider = domain.ProviderMixed
+	st.route.Account = compatibleAccountWithCipher(t, cipher, "account-api")
+	st.reassignedAccounts = []domain.ProviderAccount{accountWithCipher(t, cipher, "account-subscription", "subscription-token")}
+	provider.responses = []*http.Response{sseResponse(http.StatusOK, "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-subscription\",\"output\":[],\"usage\":{}}}\n\n")}
+	compatible := &fakeCompatibleProvider{}
+	server.compatible = compatible
+
+	recorder := serveGateway(t, server, plain, "/v1/responses", `{"model":"gpt-test","input":"hello"}`)
+
+	if recorder.Code != http.StatusOK || len(provider.credentials) != 1 || provider.credentials[0].AccessToken != "subscription-token" {
+		t.Fatalf("status=%d subscription credentials=%#v body=%s", recorder.Code, provider.credentials, recorder.Body.String())
+	}
+	if len(compatible.responsesBody) != 0 || len(st.reassignExcludes) != 1 || len(st.reassignExcludes[0]) != 0 {
+		t.Fatalf("paid API called=%v reassignment exclusions=%#v", len(compatible.responsesBody) != 0, st.reassignExcludes)
+	}
+}
+
+func TestProviderAttemptsAreBoundedWithoutReassigningPastLimit(t *testing.T) {
+	server, st, provider, plain := newTestServer(t)
+	for index := 2; index <= maxProviderAttempts+1; index++ {
+		st.reassignedAccounts = append(st.reassignedAccounts, accountWithCredentials(t, fmt.Sprintf("account-%d", index), fmt.Sprintf("token-%d", index)))
+	}
+	for range maxProviderAttempts {
+		provider.responses = append(provider.responses, sseResponse(http.StatusTooManyRequests, "limited"))
+	}
+
+	recorder := serveGateway(t, server, plain, "/v1/responses", `{"model":"gpt-test","input":"hello"}`)
+
+	if recorder.Code != http.StatusTooManyRequests || len(provider.credentials) != maxProviderAttempts {
+		t.Fatalf("status=%d provider attempts=%d body=%s", recorder.Code, len(provider.credentials), recorder.Body.String())
+	}
+	if len(st.reassignExcludes) != maxProviderAttempts-1 || len(st.reassignedAccounts) != 1 {
+		t.Fatalf("reassignments=%d unconsumed accounts=%d", len(st.reassignExcludes), len(st.reassignedAccounts))
+	}
+}
+
 func TestUnauthorizedRefreshesOnce(t *testing.T) {
 	server, _, provider, plain := newTestServer(t)
 	refresher := server.refresher.(*fakeRefresher)
@@ -228,16 +404,18 @@ func TestUpstreamErrorStatusIsPreserved(t *testing.T) {
 	}
 }
 
-func TestModelsAreLimitedToAuthenticatedPoolAndScope(t *testing.T) {
-	server, st, _, plain := newTestServer(t)
-	st.route.Pool.ModelAllowlist = []string{"pool-model"}
+func TestModelsEndpointReturnsPoolModelsAndChecksScope(t *testing.T) {
+	server, st, provider, plain := newTestServer(t)
+	provider.models = []codex.Model{{Model: "gpt-test", DisplayName: "GPT Test"}}
+	st.poolAccounts = []domain.ProviderAccount{st.route.Account}
+	server.WithModelProviders(provider, &fakeCompatibleProvider{})
 	mux := http.NewServeMux()
 	server.Register(mux)
 	request := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
 	request.Header.Set("Authorization", "Bearer "+plain)
 	recorder := httptest.NewRecorder()
 	mux.ServeHTTP(recorder, request)
-	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), "pool-model") {
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"id":"gpt-test"`) || !strings.Contains(recorder.Body.String(), `"object":"model"`) {
 		t.Fatalf("models = %d %s", recorder.Code, recorder.Body.String())
 	}
 	st.route.Key.Scopes = []string{"responses"}
@@ -247,6 +425,37 @@ func TestModelsAreLimitedToAuthenticatedPoolAndScope(t *testing.T) {
 	mux.ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusForbidden || !strings.Contains(recorder.Body.String(), "insufficient_scope") {
 		t.Fatalf("scope response = %d %s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestTransportErrorAndServerErrorReassignBeforeStreaming(t *testing.T) {
+	server, st, provider, plain := newTestServer(t)
+	st.reassignedAccounts = []domain.ProviderAccount{
+		accountWithCredentials(t, "account-2", "second-token"),
+		accountWithCredentials(t, "account-3", "third-token"),
+	}
+	provider.errors = []error{errors.New("connection reset"), nil, nil}
+	provider.responses = []*http.Response{
+		sseResponse(http.StatusBadGateway, "upstream unavailable"),
+		sseResponse(http.StatusOK, "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-ok\",\"output\":[],\"usage\":{}}}\n\n"),
+	}
+	recorder := serveGateway(t, server, plain, "/v1/responses", `{"model":"gpt-test","input":"hello"}`)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if len(provider.credentials) != 3 || provider.credentials[2].AccessToken != "third-token" {
+		t.Fatalf("credentials=%#v", provider.credentials)
+	}
+}
+
+func TestUnhealthyBoundAccountIsReassigned(t *testing.T) {
+	server, st, provider, plain := newTestServer(t)
+	st.route.Account.HealthStatus = domain.HealthUnhealthy
+	st.reassigned = accountWithCredentials(t, "account-2", "healthy-token")
+	provider.responses = []*http.Response{sseResponse(http.StatusOK, "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-ok\",\"output\":[],\"usage\":{}}}\n\n")}
+	recorder := serveGateway(t, server, plain, "/v1/responses", `{"model":"gpt-test","input":"hello"}`)
+	if recorder.Code != http.StatusOK || len(provider.credentials) != 1 || provider.credentials[0].AccessToken != "healthy-token" {
+		t.Fatalf("status=%d credentials=%#v body=%s", recorder.Code, provider.credentials, recorder.Body.String())
 	}
 }
 
@@ -305,12 +514,25 @@ func TestInterruptedChatStreamDoesNotSendDone(t *testing.T) {
 }
 
 func TestChatTranslationMapsMaxTokensAndTools(t *testing.T) {
-	raw, err := chatToResponses([]byte(`{"model":"gpt-test","max_tokens":99,"messages":[{"role":"user","content":"hello"}],"tools":[{"type":"function","function":{"name":"lookup","parameters":{"type":"object"}}}]}`))
+	raw, err := chatToResponses([]byte(`{"model":"gpt-test","temperature":0.2,"top_p":0.8,"reasoning_effort":"xhigh","max_tokens":99,"messages":[{"role":"user","content":"hello"}],"tools":[{"type":"function","function":{"name":"lookup","parameters":{"type":"object"}}}]}`))
 	if err != nil {
 		t.Fatal(err)
 	}
 	var value map[string]any
 	_ = json.Unmarshal(raw, &value)
+	if value["store"] != false || value["instructions"] != "" {
+		t.Fatalf("Codex compatibility fields = %#v", value)
+	}
+	if _, exists := value["temperature"]; exists {
+		t.Fatalf("temperature was forwarded: %#v", value)
+	}
+	if _, exists := value["top_p"]; exists {
+		t.Fatalf("top_p was forwarded: %#v", value)
+	}
+	reasoning, _ := value["reasoning"].(map[string]any)
+	if reasoning["effort"] != "xhigh" {
+		t.Fatalf("reasoning = %#v", reasoning)
+	}
 	if value["max_output_tokens"] != float64(99) {
 		t.Fatalf("max_output_tokens = %#v", value["max_output_tokens"])
 	}
@@ -408,7 +630,7 @@ func newTestServer(t *testing.T) (*Server, *fakeStore, *fakeProvider, string) {
 		t.Fatal(err)
 	}
 	account := accountWithCipher(t, cipher, "account-1", "old-token")
-	st := &fakeStore{route: domain.KeyRoute{Key: domain.APIKey{ID: "key-1", PoolID: "pool-1"}, Pool: domain.Pool{ID: "pool-1", Provider: domain.ProviderCodex, ModelAllowlist: []string{"gpt-test"}}, Account: account, MembershipEnabled: true}, sessionAccount: account}
+	st := &fakeStore{route: domain.KeyRoute{Key: domain.APIKey{ID: "key-1", PoolID: "pool-1"}, Pool: domain.Pool{ID: "pool-1", Provider: domain.ProviderCodex}, Account: account, MembershipEnabled: true}, sessionAccount: account}
 	provider := &fakeProvider{}
 	refresher := &fakeRefresher{account: account}
 	return New(st, keys, cipher, provider, refresher), st, provider, plain
@@ -426,6 +648,15 @@ func accountWithCipher(t *testing.T, cipher *credential.Cipher, id, token string
 		t.Fatal(err)
 	}
 	return domain.ProviderAccount{ID: id, Provider: domain.ProviderCodex, Status: domain.AccountActive, CredentialCiphertext: encrypted, CredentialVersion: 1}
+}
+func compatibleAccountWithCipher(t *testing.T, cipher *credential.Cipher, id string) domain.ProviderAccount {
+	t.Helper()
+	raw, _ := json.Marshal(openaicompat.Credentials{BaseURL: "https://api.example.com/v1", APIKey: "sk-paid-placeholder"})
+	encrypted, err := cipher.Encrypt(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return domain.ProviderAccount{ID: id, Provider: domain.ProviderOpenAICompatible, CredentialType: domain.CredentialAPIKey, Status: domain.AccountActive, CredentialCiphertext: encrypted, CredentialVersion: 1}
 }
 func sseResponse(status int, body string) *http.Response {
 	return &http.Response{StatusCode: status, Header: http.Header{"Content-Type": []string{"text/event-stream"}, "Retry-After": []string{"1"}}, Body: io.NopCloser(strings.NewReader(body))}

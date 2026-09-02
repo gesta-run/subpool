@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 140" role="img" aria-labelledby="title">
+  <title id="title">Subpool by Gesta — parenthetical signature</title>
+  <style>
+    .ink{fill:#10141C}.muted{fill:#64748B}
+    @media (prefers-color-scheme:dark){.ink{fill:#F7F8FA}.muted{fill:#94A3B8}}
+  </style>
+  <text x="20" y="105" font-family="Avenir Next, Helvetica Neue, Arial, sans-serif" font-size="92" font-weight="700" letter-spacing="-5"><tspan class="ink">subp</tspan><tspan fill="#22A6F2">o</tspan><tspan fill="#4F46E5">o</tspan><tspan class="ink">l</tspan></text>
+  <text x="585" y="91" class="muted" font-family="Gesta Serif, Playfair Display, Georgia, serif" font-size="37" font-style="italic">(by <tspan class="ink" font-style="normal" font-weight="600">Gesta</tspan>)</text>
+</svg>

@@ -1,150 +1,80 @@
-import { useState } from 'react'
-import { errorMessage, request } from '../api'
-import { PlusIcon, RefreshIcon } from '../components/Icons'
-import { Modal } from '../components/Modal'
+import { useEffect, useState } from 'react'
+import { AccountTable } from '../components/accounts/AccountTable'
+import { ConnectAccountDialog } from '../components/accounts/ConnectAccountDialog'
+import { ModelsDialog } from '../components/accounts/ModelsDialog'
+import { ConfirmDialog } from '../components/ConfirmDialog'
+import { PlusIcon } from '../components/Icons'
+import { PageSkeleton } from '../components/PageSkeleton'
 import { StatePanel } from '../components/StatePanel'
+import { useAccountModels } from '../hooks/useAccountModels'
+import { useAccountMutations } from '../hooks/useAccountMutations'
+import { useConnectAccount } from '../hooks/useConnectAccount'
 import { useRemoteList } from '../hooks/useRemoteList'
+import { useResetCredits } from '../hooks/useResetCredits'
 import type { ProviderAccount } from '../types'
+import './AccountsPage.css'
 
-function statusLabel(status: ProviderAccount['status']) {
-  return status.replaceAll('_', ' ')
-}
+type PendingAction =
+  | { type: 'disable' | 'remove'; account: ProviderAccount }
+  | { type: 'reset'; account: ProviderAccount; creditID?: string }
 
-function accountCapacity(account: ProviderAccount) {
-  const assigned = account.assigned_api_keys ?? 0
-  const max = account.max_api_keys || 0
-  return { assigned, max, percent: max > 0 ? Math.min((assigned / max) * 100, 100) : 0 }
+function AccountSummary({ accounts }: { accounts: ProviderAccount[] }) {
+  const healthy = accounts.filter((account) => account.health_status === 'healthy').length
+  const assigned = accounts.reduce((total, account) => total + (account.assigned_api_keys ?? 0), 0)
+  return <dl className="accounts-summary" aria-label="Account summary">
+    <div><dt><i className="accounts-summary__health" />Healthy</dt><dd>{healthy}<small> / {accounts.length}</small></dd></div>
+    <div title="Employee API keys currently bound to provider accounts"><dt>Bound keys</dt><dd>{assigned}</dd></div>
+    <div><dt>Providers</dt><dd>{new Set(accounts.map((account) => account.provider)).size}</dd></div>
+  </dl>
 }
 
 export function AccountsPage() {
-  const { items, loading, error, reload } = useRemoteList<ProviderAccount>('/api/v1/provider-accounts', ['provider_accounts', 'accounts'])
-  const [showImport, setShowImport] = useState(false)
-  const [displayName, setDisplayName] = useState('')
-  const [actionError, setActionError] = useState('')
-  const [busyID, setBusyID] = useState('')
+  const list = useRemoteList<ProviderAccount>('/api/v1/provider-accounts', ['provider_accounts', 'accounts'])
+  const connect = useConnectAccount(list.reload)
+  const mutations = useAccountMutations(list.reload)
+  const resets = useResetCredits(list.reload)
+  const models = useAccountModels()
+  const [pending, setPending] = useState<PendingAction | null>(null)
 
-  const healthy = items.filter((item) => item.status === 'active').length
-  const assigned = items.reduce((total, account) => total + (account.assigned_api_keys ?? 0), 0)
-  const capacity = items.reduce((total, account) => total + (account.max_api_keys ?? 0), 0)
+  useEffect(() => {
+    list.items
+      .filter((account) => account.provider === 'codex' && account.credential_type !== 'api_key')
+      .forEach((account) => void resets.load(account.id))
+  }, [list.items])
 
-  async function startImport() {
-    if (!displayName.trim()) {
-      setActionError('Enter a display name.')
-      return
-    }
-    setActionError('')
-    setBusyID('oauth')
-    try {
-      const result = await request<{ authorization_url?: string; url?: string }>('/api/v1/provider-accounts/oauth/start', {
-        method: 'POST',
-        body: JSON.stringify({ display_name: displayName.trim() }),
-      })
-      const url = result.authorization_url ?? result.url
-      if (!url) throw new Error('The server did not return an authorization URL.')
-      window.location.assign(url)
-    } catch (caught) {
-      setActionError(errorMessage(caught))
-      setBusyID('')
-    }
+  function toggle(account: ProviderAccount) {
+    if (account.status === 'disabled') void mutations.updateStatus(account, 'active')
+    else setPending({ type: 'disable', account })
   }
 
-  async function refreshAccount(id: string) {
-    setBusyID(id)
-    setActionError('')
-    try {
-      await request(`/api/v1/provider-accounts/${id}/refresh`, { method: 'POST' })
-      await reload()
-    } catch (caught) {
-      setActionError(errorMessage(caught))
-    } finally {
-      setBusyID('')
-    }
+  function confirmPending() {
+    if (!pending) return
+    setPending(null)
+    if (pending.type === 'remove') void mutations.remove(pending.account)
+    else if (pending.type === 'reset') void resets.consume(pending.account, pending.creditID)
+    else void mutations.updateStatus(pending.account, 'disabled')
   }
 
-  async function toggleAccount(account: ProviderAccount) {
-    const nextStatus = account.status === 'disabled' ? 'active' : 'disabled'
-    if (nextStatus === 'disabled' && !window.confirm(`Disable ${account.display_name}? Existing keys will stop routing to it.`)) return
-    setBusyID(account.id)
-    setActionError('')
-    try {
-      await request(`/api/v1/provider-accounts/${account.id}`, {
-        method: 'PUT',
-        body: JSON.stringify({ display_name: account.display_name, status: nextStatus }),
-      })
-      await reload()
-    } catch (caught) {
-      setActionError(errorMessage(caught))
-    } finally {
-      setBusyID('')
-    }
-  }
-
-  async function removeAccount(account: ProviderAccount) {
-    if (!window.confirm(`Remove ${account.display_name}? This permanently deletes its stored OAuth credentials and removes it from every pool.`)) return
-    setBusyID(account.id)
-    setActionError('')
-    try {
-      await request(`/api/v1/provider-accounts/${account.id}`, { method: 'DELETE' })
-      await reload()
-    } catch (caught) {
-      setActionError(errorMessage(caught))
-    } finally {
-      setBusyID('')
-    }
-  }
-
-  return (
-    <section aria-labelledby="accounts-heading">
-      <header className="page-heading">
-        <div>
-          <p className="eyebrow">Upstream capacity</p>
-          <h2 id="accounts-heading">Codex accounts</h2>
-          <p>Connect Codex subscription accounts. API key capacity is controlled by the global routing setting.</p>
-        </div>
-        <button className="button button--primary" type="button" onClick={() => setShowImport(true)}>
-          <PlusIcon className="button__icon" /> Connect account
-        </button>
-      </header>
-      <div className="metric-strip" aria-label="Account summary">
-        <article><span>Healthy</span><strong>{healthy}<small> / {items.length}</small></strong></article>
-        <article><span>Key assignments</span><strong>{assigned}<small> / {capacity}</small></strong></article>
-        <article><span>Provider</span><strong className="metric-word">CODEX</strong></article>
-      </div>
-      {actionError ? <div className="inline-alert" role="alert">{actionError}</div> : null}
-      {loading ? <StatePanel kind="loading" title="Loading accounts" description="Checking upstream account state and capacity." /> :
-        error ? <StatePanel kind="error" title="Accounts unavailable" description={error} actionLabel="Try again" onAction={() => void reload()} /> :
-        items.length === 0 ? <StatePanel kind="empty" title="No accounts connected" description="Connect a Codex subscription account before creating a pool." actionLabel="Connect account" onAction={() => setShowImport(true)} /> : (
-          <div className="table-frame">
-            <table>
-              <thead><tr><th>Account</th><th>Status</th><th>API key capacity</th><th>Quota</th><th>Last success</th><th><span className="sr-only">Actions</span></th></tr></thead>
-              <tbody>{items.map((account) => {
-                const cap = accountCapacity(account)
-                return <tr key={account.id}>
-                  <td data-label="Account"><strong>{account.display_name}</strong><small>{account.provider} · subscription OAuth</small></td>
-                  <td data-label="Status"><span className={`status status--${account.status}`}><i />{statusLabel(account.status)}</span></td>
-                  <td data-label="API key capacity">
-                    <div className="capacity"><span><strong>{cap.assigned}</strong> of {cap.max} keys</span><div><i style={{ width: `${cap.percent}%` }} /></div></div>
-                  </td>
-                  <td data-label="Quota">{account.quota_snapshot?.remaining_percent != null ? `${account.quota_snapshot.remaining_percent}% left` : 'Not reported'}</td>
-                  <td data-label="Last success">{account.last_success_at ? new Date(account.last_success_at).toLocaleString() : 'Never'}</td>
-                  <td><div className="row-actions"><button className="icon-button" type="button" aria-label={`Refresh ${account.display_name}`} onClick={() => void refreshAccount(account.id)} disabled={busyID === account.id}><RefreshIcon className={busyID === account.id ? 'spin' : ''} /></button><button className={`text-button ${account.status === 'disabled' ? '' : 'text-button--danger'}`} type="button" onClick={() => void toggleAccount(account)} disabled={busyID === account.id}>{account.status === 'disabled' ? 'Enable' : 'Disable'}</button><button className="text-button text-button--danger" type="button" onClick={() => void removeAccount(account)} disabled={busyID === account.id}>Remove</button></div></td>
-                </tr>
-              })}</tbody>
-            </table>
-          </div>
-        )}
-      {showImport ? (
-        <Modal title="Connect Codex account" description="Subpool will open the Codex authorization flow. Upstream credentials never reach the browser." onClose={() => setShowImport(false)}>
-          <div className="form-stack">
-            <div className="field">
-              <label htmlFor="account-name">Display name <span aria-hidden="true">*</span></label>
-              <input id="account-name" value={displayName} onChange={(event) => setDisplayName(event.target.value)} placeholder="Primary Codex account" />
-            </div>
-            {actionError ? <div className="inline-alert" role="alert">{actionError}</div> : null}
-            <div className="form-actions"><button className="button button--secondary" type="button" onClick={() => setShowImport(false)}>Cancel</button><button className="button button--primary" type="button" onClick={() => void startImport()} disabled={busyID === 'oauth'}>{busyID === 'oauth' ? 'Starting…' : 'Continue to Codex'}</button></div>
-          </div>
-        </Modal>
-      ) : null}
-    </section>
-  )
+  return <section className="accounts-page" aria-labelledby="accounts-heading">
+    <header className="page-heading"><div><h2 id="accounts-heading">Provider accounts</h2><p>Connect and manage subscription or API endpoint accounts. Employee key capacity is controlled in Global settings.</p></div>
+      {!list.loading && !list.error && list.items.length > 0 ? <button className="button button--primary" type="button" onClick={() => connect.setOpen(true)}><PlusIcon className="button__icon" /> Connect account</button> : null}
+    </header>
+    {list.loading ? <PageSkeleton metrics={3} variant="table" /> : <>
+      <AccountSummary accounts={list.items} />
+      {mutations.error ? <div className="inline-alert" role="alert">{mutations.error}</div> : null}
+      {list.error ? <StatePanel kind="error" title="Accounts unavailable" description={list.error} actionLabel="Try again" onAction={() => void list.reload()} /> : list.items.length === 0 ? <StatePanel kind="empty" title="No accounts connected" description="Connect a provider account before creating a pool." actionLabel="Connect account" onAction={() => connect.setOpen(true)} /> : <AccountTable
+        accounts={list.items} busyID={mutations.busyID} resetBusyID={resets.busyID} resetStates={resets.states}
+        onModels={models.open} onRefresh={(account) => void mutations.refresh(account.id, () => resets.load(account.id, true))}
+        onResetLoad={(account) => void resets.load(account.id, true)} onReset={(account, creditID) => setPending({ type: 'reset', account, creditID })}
+        onToggle={toggle} onRemove={(account) => setPending({ type: 'remove', account })}
+      />}
+    </>}
+    {connect.open ? <ConnectAccountDialog apiKey={connect.apiKey} baseURL={connect.baseURL} busy={connect.busy} displayName={connect.displayName} error={connect.error} fieldErrors={connect.fieldErrors} provider={connect.provider} onAPIKeyChange={connect.setAPIKey} onBaseURLChange={connect.setBaseURL} onClose={connect.close} onDisplayNameChange={connect.setDisplayName} onFieldErrorsChange={connect.setFieldErrors} onProviderChange={connect.changeProvider} onSubmit={() => void connect.submit()} /> : null}
+    {models.account ? <ModelsDialog account={models.account} models={models.models} loading={models.loading} error={models.error} onClose={models.close} onReload={() => void models.reload()} /> : null}
+    {pending ? <ConfirmDialog
+      title={pending.type === 'remove' ? `Remove ${pending.account.display_name}?` : pending.type === 'reset' ? `Reset ${pending.account.display_name} quota?` : `Disable ${pending.account.display_name}?`}
+      description={pending.type === 'remove' ? 'This permanently deletes its stored credentials and removes it from every pool.' : pending.type === 'reset' ? 'This consumes one earned Codex reset credit. The action cannot be undone.' : 'Existing API keys will stop routing requests to this account.'}
+      confirmLabel={pending.type === 'remove' ? 'Remove account' : pending.type === 'reset' ? 'Use full reset' : 'Disable account'} onCancel={() => setPending(null)} onConfirm={confirmPending}
+    /> : null}
+  </section>
 }

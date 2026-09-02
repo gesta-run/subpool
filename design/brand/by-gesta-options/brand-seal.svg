@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 140" role="img" aria-labelledby="title">
+  <title id="title">Subpool by Gesta — brand seal</title>
+  <style>
+    .ink{fill:#10141C}.muted{fill:#64748B}.ring{stroke:#CBD5E1}
+    @media (prefers-color-scheme:dark){.ink{fill:#F7F8FA}.muted{fill:#94A3B8}.ring{stroke:#475569}}
+  </style>
+  <text x="20" y="105" font-family="Avenir Next, Helvetica Neue, Arial, sans-serif" font-size="92" font-weight="700" letter-spacing="-5"><tspan class="ink">subp</tspan><tspan fill="#22A6F2">o</tspan><tspan fill="#4F46E5">o</tspan><tspan class="ink">l</tspan></text>
+  <circle cx="625" cy="70" r="38" fill="none" class="ring" stroke-width="2"/>
+  <circle cx="613" cy="70" r="13" fill="#22A6F2"/>
+  <circle cx="637" cy="70" r="13" fill="#4F46E5"/>
+  <text x="690" y="64" class="muted" font-family="Avenir Next, Helvetica Neue, Arial, sans-serif" font-size="14" font-weight="700" letter-spacing="3">BY</text>
+  <text x="690" y="102" class="ink" font-family="Gesta Serif, Playfair Display, Georgia, serif" font-size="43" font-weight="600">Gesta</text>
+</svg>

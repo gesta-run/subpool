@@ -1,0 +1,281 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="3240" height="2030" viewBox="0 0 3240 2030" role="img" aria-labelledby="title desc">
+  <title id="title">Subpool console redesign</title>
+  <desc id="desc">Four desktop administration screens for Overview, Accounts, Pools, and API Keys, using the Gesta console visual language.</desc>
+  <defs>
+    <filter id="frame-shadow" x="-20%" y="-20%" width="140%" height="150%">
+      <feDropShadow dx="0" dy="22" stdDeviation="34" flood-color="#000000" flood-opacity="0.46"/>
+    </filter>
+    <clipPath id="screen-clip"><rect width="1460" height="800" rx="18"/></clipPath>
+    <style>
+      .ui { font-family: "Geist Sans", "Aptos", "SF Pro Text", system-ui, sans-serif; }
+      .mono { font-family: "Geist Mono", "SFMono-Regular", Consolas, monospace; font-variant-numeric: tabular-nums; }
+      .title { fill: #fafafa; font-size: 27px; font-weight: 650; }
+      .subtitle { fill: #9d9d9d; font-size: 13px; }
+      .eyebrow { fill: #858585; font-size: 10px; font-weight: 650; letter-spacing: 1.2px; }
+      .panel-title { fill: #f5f5f5; font-size: 14px; font-weight: 650; }
+      .panel-copy { fill: #8f8f8f; font-size: 11px; }
+      .nav { fill: #b8b8b8; font-size: 12px; font-weight: 520; }
+      .nav-active { fill: #ffffff; font-size: 12px; font-weight: 650; }
+      .label { fill: #a3a3a3; font-size: 11px; }
+      .text { fill: #e8e8e8; font-size: 12px; }
+      .text-strong { fill: #fafafa; font-size: 12px; font-weight: 650; }
+      .tiny { fill: #858585; font-size: 10px; }
+      .metric { fill: #fafafa; font-size: 27px; font-weight: 620; }
+      .metric-sm { fill: #fafafa; font-size: 21px; font-weight: 620; }
+      .button-dark { fill: #111111; font-size: 11px; font-weight: 650; }
+      .button-light { fill: #f5f5f5; font-size: 11px; font-weight: 600; }
+      .status { fill: #d4d4d4; font-size: 10px; font-weight: 600; }
+      .axis { fill: #737373; font-size: 9px; }
+      .rule { stroke: #2b2b2b; stroke-width: 1; }
+      .grid { stroke: #353535; stroke-width: 1; stroke-dasharray: 3 5; }
+      .icon { fill: none; stroke: #b8b8b8; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+      .icon-active { fill: none; stroke: #ffffff; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+    </style>
+
+    <g id="overview-icon" class="icon"><path d="M1 12V7h4v5M8 12V3h4v9M15 12V5h4v7"/></g>
+    <g id="account-icon" class="icon"><circle cx="10" cy="5" r="3"/><path d="M3 16c.6-3.7 2.9-5.5 7-5.5s6.4 1.8 7 5.5"/></g>
+    <g id="pool-icon" class="icon"><circle cx="4" cy="4" r="2.3"/><circle cx="16" cy="4" r="2.3"/><circle cx="10" cy="15" r="2.3"/><path d="m6 5.5 2.7 7M14 5.5l-2.7 7M6.5 4h7"/></g>
+    <g id="key-icon" class="icon"><circle cx="6" cy="12" r="4"/><path d="m9 9 8-8m-2 2 2 2m-5 1 2 2"/></g>
+    <g id="usage-icon" class="icon"><path d="M2 16V9m5 7V3m6 13v-5m5 5V6"/></g>
+    <g id="settings-icon" class="icon"><circle cx="10" cy="10" r="3"/><path d="M10 1v2m0 14v2M1 10h2m14 0h2M3.6 3.6 5 5m10 10 1.4 1.4M16.4 3.6 15 5M5 15l-1.4 1.4"/></g>
+    <g id="search-icon" class="icon"><circle cx="7" cy="7" r="5"/><path d="m11 11 4 4"/></g>
+    <g id="chevron" class="icon"><path d="m2 2 4 4-4 4"/></g>
+    <g id="plus"><path d="M6 1v10M1 6h10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></g>
+
+    <g id="app-shell">
+      <rect width="1460" height="800" rx="18" fill="#0a0a0a"/>
+      <rect x="0.5" y="0.5" width="1459" height="799" rx="17.5" fill="none" stroke="#2b2b2b"/>
+      <path d="M212 0v800M212 56h1248" class="rule"/>
+
+      <g transform="translate(18 17)">
+        <rect width="26" height="26" rx="7" fill="#f3f3f3"/>
+        <circle cx="8" cy="8" r="2.2" fill="#171717"/><circle cx="17.5" cy="8" r="2.2" fill="#171717"/>
+        <circle cx="13" cy="17.5" r="2.2" fill="#171717"/>
+        <path d="M9.8 9.5 12 15M16.2 9.5 14 15M10 8h5.5" stroke="#171717" stroke-width="1.2" fill="none"/>
+        <text x="38" y="17.5" class="ui" fill="#fafafa" font-size="14" font-weight="700">Subpool</text>
+        <rect x="111" y="3" width="44" height="20" rx="10" fill="#222" stroke="#333"/>
+        <text x="121" y="17" class="ui tiny">LOCAL</text>
+      </g>
+
+      <g class="ui">
+        <g transform="translate(25 104)"><use href="#overview-icon"/><text x="29" y="12" class="nav">Overview</text></g>
+        <g transform="translate(25 148)"><use href="#account-icon"/><text x="29" y="12" class="nav">Accounts</text></g>
+        <g transform="translate(25 192)"><use href="#pool-icon"/><text x="29" y="12" class="nav">Pools</text></g>
+        <g transform="translate(25 236)"><use href="#key-icon"/><text x="29" y="12" class="nav">API Keys</text></g>
+        <g transform="translate(25 280)"><use href="#usage-icon"/><text x="29" y="12" class="nav">Usage</text></g>
+        <line x1="16" y1="324" x2="196" y2="324" class="rule"/>
+        <g transform="translate(25 346)"><use href="#settings-icon"/><text x="29" y="12" class="nav">Settings</text></g>
+      </g>
+
+      <g transform="translate(14 742)" class="ui">
+        <rect width="184" height="44" rx="8" fill="#141414" stroke="#292929"/>
+        <circle cx="23" cy="22" r="12" fill="#292929"/>
+        <text x="16" y="26" fill="#d4d4d4" font-size="9" font-weight="650">AD</text>
+        <text x="44" y="19" class="text-strong">Administrator</text>
+        <text x="44" y="34" class="tiny">Self-hosted console</text>
+        <circle cx="169" cy="21" r="1.3" fill="#a3a3a3"/><circle cx="174" cy="21" r="1.3" fill="#a3a3a3"/><circle cx="179" cy="21" r="1.3" fill="#a3a3a3"/>
+      </g>
+
+      <g class="ui">
+        <text x="244" y="35" class="label">Subscription pools</text>
+        <path d="m357 28 5 5-5 5" fill="none" stroke="#737373" stroke-width="1.4"/>
+        <rect x="1348" y="14" width="32" height="30" rx="7" fill="#171717" stroke="#303030"/>
+        <path d="M1361 29a5 5 0 1 0 8-4 6 6 0 1 1-8 4Z" fill="none" stroke="#bdbdbd" stroke-width="1.3"/>
+        <rect x="1388" y="14" width="32" height="30" rx="7" fill="#171717" stroke="#303030"/>
+        <path d="M1398 24h12M1398 29h12M1398 34h12" stroke="#bdbdbd" stroke-width="1.4"/>
+      </g>
+    </g>
+  </defs>
+
+  <rect width="3240" height="2030" fill="#070707"/>
+  <circle cx="2960" cy="-90" r="410" fill="#0e1726" opacity="0.7"/>
+  <g class="ui">
+    <text x="120" y="76" class="eyebrow" fill="#6ea8fe">SUBPOOL CONSOLE · REDESIGN 01</text>
+    <text x="120" y="124" fill="#fafafa" font-size="38" font-weight="650">Subscription pooling, made operational.</text>
+    <text x="120" y="153" fill="#8f8f8f" font-size="15">Four implementation-ready desktop views aligned with the Gesta console shell.</text>
+    <g transform="translate(2653 78)">
+      <circle cx="5" cy="5" r="5" fill="#4ade80"/><text x="20" y="10" class="label">Illustrative data only</text>
+    </g>
+  </g>
+
+  <!-- OVERVIEW -->
+  <g transform="translate(120 190)" filter="url(#frame-shadow)" clip-path="url(#screen-clip)">
+    <use href="#app-shell"/>
+    <g class="ui">
+      <rect x="12" y="92" width="188" height="40" rx="7" fill="#262626"/>
+      <g transform="translate(25 104)" class="icon-active"><path d="M1 12V7h4v5M8 12V3h4v9M15 12V5h4v7"/><text x="29" y="12" class="nav-active" stroke="none">Overview</text></g>
+      <text x="372" y="35" class="text-strong">Overview</text>
+
+      <text x="244" y="108" class="title">Overview</text>
+      <text x="244" y="132" class="subtitle">Capacity, assignments, and usage across every connected Codex subscription.</text>
+      <rect x="1298" y="85" width="130" height="34" rx="7" fill="#f5f5f5"/>
+      <g transform="translate(1314 96)" style="color:#111"><use href="#plus"/></g>
+      <text x="1335" y="106" class="button-dark">Connect account</text>
+
+      <g transform="translate(244 160)">
+        <g><rect width="272" height="104" rx="10" fill="#171717" stroke="#2b2b2b"/><text x="18" y="25" class="label">Active accounts</text><text x="18" y="61" class="metric">6</text><circle cx="19" cy="82" r="4" fill="#4ade80"/><text x="31" y="86" class="tiny">All OAuth sessions healthy</text></g>
+        <g transform="translate(288)"><rect width="272" height="104" rx="10" fill="#171717" stroke="#2b2b2b"/><text x="18" y="25" class="label">Available key seats</text><text x="18" y="61" class="metric">8</text><text x="18" y="86" class="tiny">11 assigned of 19 total</text></g>
+        <g transform="translate(576)"><rect width="272" height="104" rx="10" fill="#171717" stroke="#2b2b2b"/><text x="18" y="25" class="label">Issued API keys</text><text x="18" y="61" class="metric">11</text><text x="18" y="86" class="tiny">9 used in the last 7 days</text></g>
+        <g transform="translate(864)"><rect width="320" height="104" rx="10" fill="#171717" stroke="#2b2b2b"/><text x="18" y="25" class="label">Tokens · last 30 days</text><text x="18" y="61" class="metric">46.8M</text><text x="18" y="86" class="tiny">35.1M input · 11.7M output</text></g>
+      </g>
+
+      <g transform="translate(244 280)">
+        <rect width="676" height="250" rx="10" fill="#171717" stroke="#2b2b2b"/>
+        <text x="20" y="28" class="panel-title">Account capacity</text><text x="20" y="47" class="panel-copy">Assigned API keys over each account limit</text>
+        <g transform="translate(20 72)">
+          <text y="11" class="text-strong">Codex Primary</text><text x="276" y="11" class="tiny">3 of 3</text>
+          <circle cx="355" cy="7" r="6" fill="#6ea8fe"/><circle cx="373" cy="7" r="6" fill="#6ea8fe"/><circle cx="391" cy="7" r="6" fill="#6ea8fe"/>
+          <text x="445" y="11" class="status">FULL</text><circle cx="430" cy="7" r="4" fill="#fbbf24"/>
+          <text x="570" y="11" class="tiny">2m ago</text>
+          <line x1="0" y1="31" x2="636" y2="31" class="rule"/>
+          <g transform="translate(0 47)"><text y="11" class="text-strong">Codex Team B</text><text x="276" y="11" class="tiny">2 of 4</text><circle cx="355" cy="7" r="6" fill="#6ea8fe"/><circle cx="373" cy="7" r="6" fill="#6ea8fe"/><circle cx="391" cy="7" r="6" fill="#303030"/><circle cx="409" cy="7" r="6" fill="#303030"/><text x="445" y="11" class="status">2 AVAILABLE</text><circle cx="430" cy="7" r="4" fill="#4ade80"/><text x="570" y="11" class="tiny">8m ago</text></g>
+          <line x1="0" y1="78" x2="636" y2="78" class="rule"/>
+          <g transform="translate(0 94)"><text y="11" class="text-strong">Codex Research</text><text x="276" y="11" class="tiny">1 of 3</text><circle cx="355" cy="7" r="6" fill="#6ea8fe"/><circle cx="373" cy="7" r="6" fill="#303030"/><circle cx="391" cy="7" r="6" fill="#303030"/><text x="445" y="11" class="status">2 AVAILABLE</text><circle cx="430" cy="7" r="4" fill="#4ade80"/><text x="570" y="11" class="tiny">18m ago</text></g>
+          <line x1="0" y1="125" x2="636" y2="125" class="rule"/>
+          <g transform="translate(0 141)"><text y="11" class="text-strong">Codex CI</text><text x="276" y="11" class="tiny">2 of 2</text><circle cx="355" cy="7" r="6" fill="#6ea8fe"/><circle cx="373" cy="7" r="6" fill="#6ea8fe"/><text x="445" y="11" class="status">FULL</text><circle cx="430" cy="7" r="4" fill="#fbbf24"/><text x="570" y="11" class="tiny">21m ago</text></g>
+        </g>
+      </g>
+
+      <g transform="translate(936 280)">
+        <rect width="492" height="250" rx="10" fill="#171717" stroke="#2b2b2b"/>
+        <text x="20" y="28" class="panel-title">Token usage</text><text x="20" y="47" class="panel-copy">Input and output tokens · last 14 days</text>
+        <g transform="translate(46 70)">
+          <line x1="0" y1="20" x2="410" y2="20" class="grid"/><line x1="0" y1="76" x2="410" y2="76" class="grid"/><line x1="0" y1="132" x2="410" y2="132" class="grid"/>
+          <text x="-30" y="24" class="axis">5M</text><text x="-30" y="80" class="axis">2.5M</text><text x="-16" y="136" class="axis">0</text>
+          <g fill="#6ea8fe"><rect x="12" y="82" width="15" height="50"/><rect x="42" y="69" width="15" height="63"/><rect x="72" y="91" width="15" height="41"/><rect x="102" y="57" width="15" height="75"/><rect x="132" y="47" width="15" height="85"/><rect x="162" y="73" width="15" height="59"/><rect x="192" y="62" width="15" height="70"/><rect x="222" y="29" width="15" height="103"/><rect x="252" y="42" width="15" height="90"/><rect x="282" y="70" width="15" height="62"/><rect x="312" y="52" width="15" height="80"/><rect x="342" y="20" width="15" height="112"/><rect x="372" y="39" width="15" height="93"/></g>
+          <g fill="#a8c9ff"><rect x="12" y="72" width="15" height="10"/><rect x="42" y="56" width="15" height="13"/><rect x="72" y="82" width="15" height="9"/><rect x="102" y="43" width="15" height="14"/><rect x="132" y="31" width="15" height="16"/><rect x="162" y="60" width="15" height="13"/><rect x="192" y="49" width="15" height="13"/><rect x="222" y="10" width="15" height="19"/><rect x="252" y="27" width="15" height="15"/><rect x="282" y="58" width="15" height="12"/><rect x="312" y="38" width="15" height="14"/><rect x="342" y="3" width="15" height="17"/><rect x="372" y="23" width="15" height="16"/></g>
+          <text x="10" y="153" class="axis">Aug 20</text><text x="188" y="153" class="axis">Aug 27</text><text x="354" y="153" class="axis">Sep 2</text>
+          <circle cx="15" cy="176" r="4" fill="#6ea8fe"/><text x="26" y="179" class="tiny">Input 35.1M</text><circle cx="130" cy="176" r="4" fill="#a8c9ff"/><text x="141" y="179" class="tiny">Output 11.7M</text>
+        </g>
+      </g>
+
+      <g transform="translate(244 546)">
+        <rect width="1184" height="220" rx="10" fill="#171717" stroke="#2b2b2b"/>
+        <text x="20" y="28" class="panel-title">Recent key activity</text><text x="20" y="47" class="panel-copy">Usage totals only · request content is never stored</text>
+        <rect x="16" y="64" width="1152" height="31" rx="6" fill="#202020"/>
+        <text x="32" y="84" class="tiny">EMPLOYEE</text><text x="280" y="84" class="tiny">POOL</text><text x="468" y="84" class="tiny">ACCOUNT</text><text x="722" y="84" class="tiny">INPUT</text><text x="842" y="84" class="tiny">OUTPUT</text><text x="964" y="84" class="tiny">LAST USED</text>
+        <g transform="translate(32 113)"><circle cx="8" cy="7" r="8" fill="#2b2b2b"/><text x="27" y="11" class="text-strong">Alex Chen</text><text x="248" y="11" class="text">Engineering</text><text x="436" y="11" class="text">Codex Team B</text><text x="690" y="11" class="mono text">4.82M</text><text x="810" y="11" class="mono text">1.21M</text><text x="932" y="11" class="text">2 minutes ago</text></g>
+        <line x1="16" y1="142" x2="1168" y2="142" class="rule"/>
+        <g transform="translate(32 158)"><circle cx="8" cy="7" r="8" fill="#2b2b2b"/><text x="27" y="11" class="text-strong">Maya Lin</text><text x="248" y="11" class="text">Design</text><text x="436" y="11" class="text">Codex Research</text><text x="690" y="11" class="mono text">2.17M</text><text x="810" y="11" class="mono text">682K</text><text x="932" y="11" class="text">18 minutes ago</text></g>
+      </g>
+    </g>
+  </g>
+
+  <!-- ACCOUNTS -->
+  <g transform="translate(1660 190)" filter="url(#frame-shadow)" clip-path="url(#screen-clip)">
+    <use href="#app-shell"/>
+    <g class="ui">
+      <rect x="12" y="136" width="188" height="40" rx="7" fill="#262626"/>
+      <g transform="translate(25 148)" class="icon-active"><circle cx="10" cy="5" r="3"/><path d="M3 16c.6-3.7 2.9-5.5 7-5.5s6.4 1.8 7 5.5"/><text x="29" y="12" class="nav-active" stroke="none">Accounts</text></g>
+      <text x="372" y="35" class="text-strong">Accounts</text>
+      <text x="244" y="108" class="title">Codex accounts</text>
+      <text x="244" y="132" class="subtitle">Connect subscriptions, set API-key capacity, and monitor OAuth health.</text>
+      <rect x="1298" y="85" width="130" height="34" rx="7" fill="#f5f5f5"/><g transform="translate(1314 96)" style="color:#111"><use href="#plus"/></g><text x="1335" y="106" class="button-dark">Connect account</text>
+
+      <g transform="translate(244 160)">
+        <g><rect width="278" height="88" rx="10" fill="#171717" stroke="#2b2b2b"/><text x="18" y="25" class="label">Connected</text><text x="18" y="58" class="metric-sm">6</text><text x="54" y="57" class="tiny">accounts</text></g>
+        <g transform="translate(294)"><rect width="278" height="88" rx="10" fill="#171717" stroke="#2b2b2b"/><text x="18" y="25" class="label">Healthy</text><text x="18" y="58" class="metric-sm">5</text><circle cx="54" cy="52" r="4" fill="#4ade80"/><text x="65" y="57" class="tiny">ready to route</text></g>
+        <g transform="translate(588)"><rect width="278" height="88" rx="10" fill="#171717" stroke="#2b2b2b"/><text x="18" y="25" class="label">Assigned seats</text><text x="18" y="58" class="metric-sm">11 / 19</text><text x="104" y="57" class="tiny">58% allocated</text></g>
+        <g transform="translate(882)"><rect width="302" height="88" rx="10" fill="#171717" stroke="#2b2b2b"/><text x="18" y="25" class="label">Needs attention</text><text x="18" y="58" class="metric-sm">1</text><circle cx="54" cy="52" r="4" fill="#fbbf24"/><text x="65" y="57" class="tiny">OAuth renewal required</text></g>
+      </g>
+
+      <g transform="translate(244 264)">
+        <rect width="1184" height="502" rx="10" fill="#171717" stroke="#2b2b2b"/>
+        <text x="20" y="30" class="panel-title">Subscription accounts</text><text x="20" y="49" class="panel-copy">Capacity limits the number of API keys assigned to each account.</text>
+        <g transform="translate(20 67)"><rect width="316" height="34" rx="7" fill="#111" stroke="#3a3a3a"/><g transform="translate(12 9) scale(.9)"><use href="#search-icon"/></g><text x="41" y="22" class="tiny">Search account or pool</text></g>
+        <g transform="translate(848 67)"><rect width="144" height="34" rx="7" fill="#111" stroke="#3a3a3a"/><text x="12" y="22" class="text">All pools</text><path d="m123 14 5 5 5-5" class="icon"/></g>
+        <g transform="translate(1004 67)"><rect width="160" height="34" rx="7" fill="#111" stroke="#3a3a3a"/><text x="12" y="22" class="text">Any status</text><path d="m139 14 5 5 5-5" class="icon"/></g>
+        <rect x="16" y="118" width="1152" height="36" rx="7" fill="#202020"/>
+        <text x="32" y="141" class="tiny">STATUS</text><text x="136" y="141" class="tiny">ACCOUNT</text><text x="378" y="141" class="tiny">POOL</text><text x="550" y="141" class="tiny">API KEY SEATS</text><text x="750" y="141" class="tiny">OAUTH</text><text x="894" y="141" class="tiny">LAST USED</text><text x="1095" y="141" class="tiny">ACTION</text>
+        <g transform="translate(32 174)"><circle cx="7" cy="7" r="4" fill="#4ade80"/><text x="18" y="11" class="status">ACTIVE</text><text x="104" y="7" class="text-strong">Codex Primary</text><text x="104" y="23" class="tiny">codex · •••• 5f8a</text><text x="346" y="11" class="text">Engineering</text><text x="518" y="11" class="mono text">3 / 3</text><circle cx="572" cy="7" r="5" fill="#6ea8fe"/><circle cx="588" cy="7" r="5" fill="#6ea8fe"/><circle cx="604" cy="7" r="5" fill="#6ea8fe"/><circle cx="718" cy="7" r="4" fill="#4ade80"/><text x="730" y="11" class="text">Healthy</text><text x="862" y="11" class="text">2m ago</text><rect x="1056" y="-8" width="76" height="30" rx="7" fill="#222" stroke="#333"/><text x="1072" y="11" class="text-strong">Manage</text></g>
+        <line x1="16" y1="217" x2="1168" y2="217" class="rule"/>
+        <g transform="translate(32 238)"><circle cx="7" cy="7" r="4" fill="#4ade80"/><text x="18" y="11" class="status">ACTIVE</text><text x="104" y="7" class="text-strong">Codex Team B</text><text x="104" y="23" class="tiny">codex · •••• 8c21</text><text x="346" y="11" class="text">Engineering</text><text x="518" y="11" class="mono text">2 / 4</text><circle cx="572" cy="7" r="5" fill="#6ea8fe"/><circle cx="588" cy="7" r="5" fill="#6ea8fe"/><circle cx="604" cy="7" r="5" fill="#303030"/><circle cx="620" cy="7" r="5" fill="#303030"/><circle cx="718" cy="7" r="4" fill="#4ade80"/><text x="730" y="11" class="text">Healthy</text><text x="862" y="11" class="text">8m ago</text><rect x="1056" y="-8" width="76" height="30" rx="7" fill="#222" stroke="#333"/><text x="1072" y="11" class="text-strong">Manage</text></g>
+        <line x1="16" y1="281" x2="1168" y2="281" class="rule"/>
+        <g transform="translate(32 302)"><circle cx="7" cy="7" r="4" fill="#fbbf24"/><text x="18" y="11" class="status">ATTENTION</text><text x="104" y="7" class="text-strong">Codex Research</text><text x="104" y="23" class="tiny">codex · •••• 1ba9</text><text x="346" y="11" class="text">Design</text><text x="518" y="11" class="mono text">1 / 3</text><circle cx="572" cy="7" r="5" fill="#6ea8fe"/><circle cx="588" cy="7" r="5" fill="#303030"/><circle cx="604" cy="7" r="5" fill="#303030"/><circle cx="718" cy="7" r="4" fill="#fbbf24"/><text x="730" y="11" class="text">Renew soon</text><text x="862" y="11" class="text">18m ago</text><rect x="1056" y="-8" width="76" height="30" rx="7" fill="#f5f5f5"/><text x="1072" y="11" class="button-dark">Reconnect</text></g>
+        <line x1="16" y1="345" x2="1168" y2="345" class="rule"/>
+        <g transform="translate(32 366)"><circle cx="7" cy="7" r="4" fill="#4ade80"/><text x="18" y="11" class="status">ACTIVE</text><text x="104" y="7" class="text-strong">Codex CI</text><text x="104" y="23" class="tiny">codex · •••• 4ee2</text><text x="346" y="11" class="text">CI Runners</text><text x="518" y="11" class="mono text">2 / 2</text><circle cx="572" cy="7" r="5" fill="#6ea8fe"/><circle cx="588" cy="7" r="5" fill="#6ea8fe"/><circle cx="718" cy="7" r="4" fill="#4ade80"/><text x="730" y="11" class="text">Healthy</text><text x="862" y="11" class="text">21m ago</text><rect x="1056" y="-8" width="76" height="30" rx="7" fill="#222" stroke="#333"/><text x="1072" y="11" class="text-strong">Manage</text></g>
+        <text x="20" y="478" class="tiny">Showing 4 of 6 accounts</text><text x="1092" y="478" class="tiny">1  /  2</text>
+      </g>
+    </g>
+  </g>
+
+  <!-- POOLS -->
+  <g transform="translate(120 1070)" filter="url(#frame-shadow)" clip-path="url(#screen-clip)">
+    <use href="#app-shell"/>
+    <g class="ui">
+      <rect x="12" y="180" width="188" height="40" rx="7" fill="#262626"/>
+      <g transform="translate(25 192)" class="icon-active"><circle cx="4" cy="4" r="2.3"/><circle cx="16" cy="4" r="2.3"/><circle cx="10" cy="15" r="2.3"/><path d="m6 5.5 2.7 7M14 5.5l-2.7 7M6.5 4h7"/><text x="29" y="12" class="nav-active" stroke="none">Pools</text></g>
+      <text x="372" y="35" class="text-strong">Pools</text>
+      <text x="244" y="108" class="title">Routing pools</text><text x="244" y="132" class="subtitle">Group accounts, constrain models, and keep every employee key pinned to one upstream account.</text>
+      <rect x="1312" y="85" width="116" height="34" rx="7" fill="#f5f5f5"/><g transform="translate(1328 96)" style="color:#111"><use href="#plus"/></g><text x="1349" y="106" class="button-dark">Create pool</text>
+      <g transform="translate(244 160)">
+        <g><rect width="374" height="88" rx="10" fill="#171717" stroke="#2b2b2b"/><text x="18" y="25" class="label">Active pools</text><text x="18" y="58" class="metric-sm">3</text><text x="53" y="57" class="tiny">least-assigned routing</text></g>
+        <g transform="translate(390)"><rect width="374" height="88" rx="10" fill="#171717" stroke="#2b2b2b"/><text x="18" y="25" class="label">Accounts in pools</text><text x="18" y="58" class="metric-sm">6</text><text x="53" y="57" class="tiny">all accounts assigned</text></g>
+        <g transform="translate(780)"><rect width="404" height="88" rx="10" fill="#171717" stroke="#2b2b2b"/><text x="18" y="25" class="label">Unallocated seats</text><text x="18" y="58" class="metric-sm">8</text><text x="53" y="57" class="tiny">available for new employee keys</text></g>
+      </g>
+      <g transform="translate(244 264)">
+        <rect width="740" height="502" rx="10" fill="#171717" stroke="#2b2b2b"/><text x="20" y="30" class="panel-title">Pools</text><text x="20" y="49" class="panel-copy">Model policy and account capacity by routing group</text>
+        <g transform="translate(20 68)"><rect width="300" height="34" rx="7" fill="#111" stroke="#3a3a3a"/><g transform="translate(12 9) scale(.9)"><use href="#search-icon"/></g><text x="41" y="22" class="tiny">Search pool</text></g>
+        <rect x="16" y="118" width="708" height="36" rx="7" fill="#202020"/><text x="32" y="141" class="tiny">POOL</text><text x="248" y="141" class="tiny">ACCOUNTS</text><text x="352" y="141" class="tiny">KEYS</text><text x="445" y="141" class="tiny">MODEL POLICY</text><text x="652" y="141" class="tiny">ACTION</text>
+        <g transform="translate(32 177)"><circle cx="8" cy="7" r="8" fill="#24354d"/><text x="5.2" y="10.5" fill="#b9d3ff" font-size="9" font-weight="700">E</text><text x="28" y="7" class="text-strong">Engineering</text><text x="28" y="23" class="tiny">least assigned</text><text x="216" y="11" class="mono text">3</text><text x="320" y="11" class="mono text">6</text><rect x="413" y="-7" width="109" height="28" rx="14" fill="#252525"/><text x="426" y="11" class="mono tiny">gpt-5-codex</text><rect x="612" y="-8" width="64" height="30" rx="7" fill="#f5f5f5"/><text x="628" y="11" class="button-dark">Open</text></g>
+        <line x1="16" y1="219" x2="724" y2="219" class="rule"/>
+        <g transform="translate(32 244)"><circle cx="8" cy="7" r="8" fill="#332e1f"/><text x="5" y="10.5" fill="#f7d887" font-size="9" font-weight="700">D</text><text x="28" y="7" class="text-strong">Design</text><text x="28" y="23" class="tiny">least assigned</text><text x="216" y="11" class="mono text">2</text><text x="320" y="11" class="mono text">3</text><rect x="413" y="-7" width="109" height="28" rx="14" fill="#252525"/><text x="426" y="11" class="mono tiny">gpt-5-codex</text><rect x="612" y="-8" width="64" height="30" rx="7" fill="#222" stroke="#333"/><text x="628" y="11" class="text-strong">Open</text></g>
+        <line x1="16" y1="286" x2="724" y2="286" class="rule"/>
+        <g transform="translate(32 311)"><circle cx="8" cy="7" r="8" fill="#23372c"/><text x="4.7" y="10.5" fill="#9de5ba" font-size="9" font-weight="700">CI</text><text x="28" y="7" class="text-strong">CI Runners</text><text x="28" y="23" class="tiny">least assigned</text><text x="216" y="11" class="mono text">1</text><text x="320" y="11" class="mono text">2</text><rect x="413" y="-7" width="109" height="28" rx="14" fill="#252525"/><text x="426" y="11" class="mono tiny">gpt-5-codex</text><rect x="612" y="-8" width="64" height="30" rx="7" fill="#222" stroke="#333"/><text x="628" y="11" class="text-strong">Open</text></g>
+        <g transform="translate(20 399)"><rect width="700" height="76" rx="8" fill="#111" stroke="#333" stroke-dasharray="4 4"/><circle cx="36" cy="38" r="15" fill="#242424"/><path d="M36 31v14M29 38h14" stroke="#d4d4d4" stroke-width="1.5"/><text x="62" y="34" class="text-strong">Create another routing pool</text><text x="62" y="52" class="tiny">Separate account capacity by team or workload.</text><rect x="581" y="22" width="96" height="32" rx="7" fill="#222" stroke="#333"/><text x="599" y="42" class="text-strong">Create pool</text></g>
+      </g>
+      <g transform="translate(1000 264)">
+        <rect width="428" height="502" rx="10" fill="#171717" stroke="#2b2b2b"/><text x="20" y="30" class="panel-title">Routing preview</text><text x="20" y="49" class="panel-copy">Engineering · fixed assignment after first request</text>
+        <g transform="translate(20 76)"><text class="eyebrow">API KEY</text><rect y="17" width="388" height="58" rx="8" fill="#202020"/><circle cx="28" cy="46" r="13" fill="#303030"/><text x="21" y="50" fill="#d4d4d4" font-size="9" font-weight="700">AC</text><text x="52" y="42" class="text-strong">Alex Chen</text><text x="52" y="59" class="mono tiny">sk-••••••••••••7JQ · active</text></g>
+        <path d="M214 155v26" stroke="#6ea8fe" stroke-width="1.7"/><circle cx="214" cy="168" r="4" fill="#6ea8fe"/>
+        <g transform="translate(20 181)"><text class="eyebrow">POOL</text><rect y="17" width="388" height="62" rx="8" fill="#202020"/><circle cx="28" cy="48" r="12" fill="#24354d"/><text x="24.7" y="52" fill="#b9d3ff" font-size="9" font-weight="700">E</text><text x="52" y="43" class="text-strong">Engineering</text><text x="52" y="61" class="tiny">3 accounts · 6 keys · least assigned</text><rect x="292" y="34" width="78" height="28" rx="14" fill="#252525"/><text x="307" y="52" class="status">HEALTHY</text></g>
+        <path d="M214 260v28" stroke="#6ea8fe" stroke-width="1.7"/><circle cx="214" cy="275" r="4" fill="#6ea8fe"/>
+        <g transform="translate(20 290)"><text class="eyebrow">ELIGIBLE ACCOUNTS</text><rect y="17" width="388" height="140" rx="8" fill="#202020"/><g transform="translate(16 36)"><circle cx="6" cy="6" r="4" fill="#4ade80"/><text x="20" y="10" class="text-strong">Codex Primary</text><text x="234" y="10" class="mono tiny">3 / 3</text><text x="304" y="10" class="tiny">full</text></g><line x1="16" y1="67" x2="372" y2="67" class="rule"/><g transform="translate(16 82)"><circle cx="6" cy="6" r="4" fill="#4ade80"/><text x="20" y="10" class="text-strong">Codex Team B</text><text x="234" y="10" class="mono tiny">2 / 4</text><rect x="298" y="-7" width="66" height="26" rx="13" fill="#24354d"/><text x="310" y="10" fill="#b9d3ff" font-size="9" font-weight="650">SELECTED</text></g><line x1="16" y1="113" x2="372" y2="113" class="rule"/><g transform="translate(16 128)"><circle cx="6" cy="6" r="4" fill="#4ade80"/><text x="20" y="10" class="text-strong">Codex Overflow</text><text x="234" y="10" class="mono tiny">1 / 3</text><text x="304" y="10" class="tiny">available</text></g></g>
+      </g>
+    </g>
+  </g>
+
+  <!-- API KEYS -->
+  <g transform="translate(1660 1070)" filter="url(#frame-shadow)" clip-path="url(#screen-clip)">
+    <use href="#app-shell"/>
+    <g class="ui">
+      <rect x="12" y="224" width="188" height="40" rx="7" fill="#262626"/>
+      <g transform="translate(25 236)" class="icon-active"><circle cx="6" cy="12" r="4"/><path d="m9 9 8-8m-2 2 2 2m-5 1 2 2"/><text x="29" y="12" class="nav-active" stroke="none">API Keys</text></g>
+      <text x="372" y="35" class="text-strong">API Keys</text>
+      <text x="244" y="108" class="title">Employee API keys</text><text x="244" y="132" class="subtitle">Issue one key per employee, inspect its fixed account assignment, and track token totals.</text>
+      <rect x="1308" y="85" width="120" height="34" rx="7" fill="#f5f5f5"/><g transform="translate(1324 96)" style="color:#111"><use href="#plus"/></g><text x="1345" y="106" class="button-dark">Create API key</text>
+      <g transform="translate(244 160)">
+        <g><rect width="278" height="88" rx="10" fill="#171717" stroke="#2b2b2b"/><text x="18" y="25" class="label">Active keys</text><text x="18" y="58" class="metric-sm">11</text><text x="54" y="57" class="tiny">one per employee</text></g>
+        <g transform="translate(294)"><rect width="278" height="88" rx="10" fill="#171717" stroke="#2b2b2b"/><text x="18" y="25" class="label">Used · last 7 days</text><text x="18" y="58" class="metric-sm">9</text><text x="54" y="57" class="tiny">2 keys idle</text></g>
+        <g transform="translate(588)"><rect width="278" height="88" rx="10" fill="#171717" stroke="#2b2b2b"/><text x="18" y="25" class="label">Input tokens · 30d</text><text x="18" y="58" class="metric-sm">35.1M</text></g>
+        <g transform="translate(882)"><rect width="302" height="88" rx="10" fill="#171717" stroke="#2b2b2b"/><text x="18" y="25" class="label">Output tokens · 30d</text><text x="18" y="58" class="metric-sm">11.7M</text></g>
+      </g>
+      <g transform="translate(244 264)">
+        <rect width="796" height="502" rx="10" fill="#171717" stroke="#2b2b2b"/><text x="20" y="30" class="panel-title">API keys</text><text x="20" y="49" class="panel-copy">Keys are shown once at creation; stored records remain masked.</text>
+        <g transform="translate(20 67)"><rect width="300" height="34" rx="7" fill="#111" stroke="#3a3a3a"/><g transform="translate(12 9) scale(.9)"><use href="#search-icon"/></g><text x="41" y="22" class="tiny">Search employee or key hint</text></g>
+        <g transform="translate(616 67)"><rect width="160" height="34" rx="7" fill="#111" stroke="#3a3a3a"/><text x="12" y="22" class="text">Any status</text><path d="m139 14 5 5 5-5" class="icon"/></g>
+        <rect x="16" y="118" width="764" height="36" rx="7" fill="#202020"/><text x="32" y="141" class="tiny">EMPLOYEE / KEY</text><text x="248" y="141" class="tiny">POOL</text><text x="400" y="141" class="tiny">ACCOUNT</text><text x="594" y="141" class="tiny">TOKENS · 30D</text><text x="728" y="141" class="tiny">OPEN</text>
+        <g transform="translate(32 177)"><circle cx="8" cy="7" r="8" fill="#2b2b2b"/><text x="4" y="10.5" fill="#d4d4d4" font-size="8" font-weight="700">AC</text><text x="28" y="7" class="text-strong">Alex Chen</text><text x="28" y="23" class="mono tiny">sk-••••••••7JQ</text><text x="216" y="11" class="text">Engineering</text><text x="368" y="11" class="text">Codex Team B</text><text x="562" y="7" class="mono text">4.82M in</text><text x="562" y="23" class="mono tiny">1.21M out</text><path d="m702 2 5 5-5 5" class="icon"/></g>
+        <line x1="16" y1="219" x2="780" y2="219" class="rule"/>
+        <g transform="translate(32 244)"><circle cx="8" cy="7" r="8" fill="#2b2b2b"/><text x="4" y="10.5" fill="#d4d4d4" font-size="8" font-weight="700">ML</text><text x="28" y="7" class="text-strong">Maya Lin</text><text x="28" y="23" class="mono tiny">sk-••••••••2KV</text><text x="216" y="11" class="text">Design</text><text x="368" y="11" class="text">Codex Research</text><text x="562" y="7" class="mono text">2.17M in</text><text x="562" y="23" class="mono tiny">682K out</text><path d="m702 2 5 5-5 5" class="icon"/></g>
+        <line x1="16" y1="286" x2="780" y2="286" class="rule"/>
+        <g transform="translate(32 311)"><circle cx="8" cy="7" r="8" fill="#2b2b2b"/><text x="4" y="10.5" fill="#d4d4d4" font-size="8" font-weight="700">JT</text><text x="28" y="7" class="text-strong">Jon Tan</text><text x="28" y="23" class="mono tiny">sk-••••••••9PD</text><text x="216" y="11" class="text">Engineering</text><text x="368" y="11" class="text">Codex Primary</text><text x="562" y="7" class="mono text">3.61M in</text><text x="562" y="23" class="mono tiny">911K out</text><path d="m702 2 5 5-5 5" class="icon"/></g>
+        <line x1="16" y1="353" x2="780" y2="353" class="rule"/>
+        <g transform="translate(32 378)"><circle cx="8" cy="7" r="8" fill="#2b2b2b"/><text x="4" y="10.5" fill="#d4d4d4" font-size="8" font-weight="700">SR</text><text x="28" y="7" class="text-strong">Sam Reed</text><text x="28" y="23" class="mono tiny">sk-••••••••4XA</text><text x="216" y="11" class="text">CI Runners</text><text x="368" y="11" class="text">Codex CI</text><text x="562" y="7" class="mono text">1.08M in</text><text x="562" y="23" class="mono tiny">302K out</text><path d="m702 2 5 5-5 5" class="icon"/></g>
+        <text x="20" y="478" class="tiny">Showing 4 of 11 active keys</text>
+      </g>
+      <g transform="translate(1056 264)">
+        <rect width="372" height="502" rx="10" fill="#171717" stroke="#2b2b2b"/><text x="20" y="30" class="panel-title">Key detail</text><text x="20" y="49" class="panel-copy">Alex Chen · active</text>
+        <g transform="translate(20 76)"><text class="eyebrow">MASKED KEY</text><rect y="16" width="332" height="42" rx="7" fill="#111" stroke="#333"/><text x="14" y="42" class="mono text">sk-••••••••••••••7JQ</text><rect x="285" y="22" width="34" height="30" rx="6" fill="#242424"/><path d="M300 32h8v9h-8zm-4 5h4m-4 0v9h8v-5" class="icon"/></g>
+        <g transform="translate(20 158)"><text class="eyebrow">ASSIGNMENT</text><rect y="16" width="332" height="94" rx="8" fill="#202020"/><text x="14" y="42" class="label">Pool</text><text x="113" y="42" class="text-strong">Engineering</text><text x="14" y="68" class="label">Account</text><text x="113" y="68" class="text-strong">Codex Team B</text><text x="14" y="94" class="label">Account seats</text><text x="113" y="94" class="mono text">2 of 4</text><circle cx="171" cy="90" r="5" fill="#6ea8fe"/><circle cx="187" cy="90" r="5" fill="#6ea8fe"/><circle cx="203" cy="90" r="5" fill="#303030"/><circle cx="219" cy="90" r="5" fill="#303030"/></g>
+        <g transform="translate(20 298)"><text class="eyebrow">USAGE · LAST 30 DAYS</text><rect y="16" width="332" height="100" rx="8" fill="#202020"/><text x="14" y="44" class="label">Input</text><text x="14" y="70" class="metric-sm">4.82M</text><line x1="162" y1="31" x2="162" y2="101" class="rule"/><text x="184" y="44" class="label">Output</text><text x="184" y="70" class="metric-sm">1.21M</text><text x="14" y="94" class="tiny">Last used 2 minutes ago</text></g>
+        <g transform="translate(20 448)"><rect width="160" height="34" rx="7" fill="#222" stroke="#333"/><text x="42" y="22" class="text-strong">Reassign account</text><rect x="172" width="160" height="34" rx="7" fill="#2b1717" stroke="#5b2929"/><text x="222" y="22" fill="#fca5a5" font-size="11" font-weight="650">Revoke key</text></g>
+      </g>
+    </g>
+  </g>
+
+  <g class="ui">
+    <text x="120" y="1975" class="label">Design tokens and responsive behavior are documented in subpool/DESIGN.md</text>
+    <text x="2784" y="1975" class="eyebrow">GESTA VISUAL LANGUAGE · SUBPOOL DOMAIN MODEL</text>
+  </g>
+</svg>

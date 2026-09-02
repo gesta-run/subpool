@@ -1,0 +1,119 @@
+.usage-page .page-heading {
+  align-items: center;
+}
+
+.usage-range {
+  flex: 0 0 auto;
+  padding: 4px;
+  display: flex;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-nested);
+  background: var(--panel);
+}
+
+.usage-range button {
+  min-height: 34px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-control);
+  padding: 0 13px;
+  color: var(--ink-muted);
+  background: transparent;
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.usage-range button.active {
+  color: var(--ink);
+  border-color: var(--line-strong);
+  background: var(--panel-nested);
+}
+
+.usage-page .usage-total strong {
+  font-variant-numeric: tabular-nums;
+}
+
+.usage-table-frame {
+  overflow-x: auto;
+}
+
+.usage-table-heading {
+  min-height: 74px;
+  padding: 15px 18px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  border-bottom: 1px solid var(--line);
+}
+
+.usage-table-heading h3 {
+  margin: 0 0 4px;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.usage-table-heading p {
+  margin: 0;
+  color: var(--ink-muted);
+  font-size: 10px;
+}
+
+.usage-page .usage-key-row:has(.usage-key-toggle[aria-expanded="true"]) td,
+.usage-page .usage-model-detail td {
+  background: var(--panel);
+}
+
+.usage-page .usage-model-detail td {
+  padding: 0 16px 16px;
+}
+
+.usage-page .usage-model-list {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-nested);
+  background: var(--paper);
+}
+
+.usage-key-toggle { min-width: 0; border: 0; padding: 0; display: inline-flex; align-items: center; gap: 11px; color: var(--ink); background: transparent; cursor: pointer; text-align: left; }
+.usage-key-toggle__icon { width: 26px; height: 26px; display: grid; place-items: center; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); transition: border-color 160ms ease, background-color 160ms ease; }
+.usage-key-toggle__icon svg { width: 14px; height: 14px; color: var(--ink-muted); transition: transform 160ms ease, color 160ms ease; }
+.usage-key-toggle__label { display: grid; gap: 2px; }
+.usage-key-toggle__label small { margin: 0; color: var(--ink-muted); font-size: 9px; font-weight: 500; }
+.usage-key-toggle[aria-expanded="true"] .usage-key-toggle__icon { border-color: oklch(0.68 0.18 255 / .48); background: oklch(0.3 0.045 255); }
+.usage-key-toggle[aria-expanded="true"] svg { transform: rotate(180deg); color: var(--acid-deep); }
+.usage-key-toggle:focus-visible { border-radius: 4px; outline: 2px solid var(--acid-deep); outline-offset: 4px; }
+.usage-key-row:has(.usage-key-toggle[aria-expanded="true"]) td { border-bottom-color: transparent; background: oklch(0.205 0.006 255); }
+.usage-model-detail:hover { background: transparent; }
+.usage-model-detail td { padding: 0 18px 15px 52px; background: oklch(0.205 0.006 255); }
+.usage-model-list { overflow: hidden; border-left: 2px solid var(--acid-deep); border-radius: 0 7px 7px 0; background: oklch(0.17 0.004 255); }
+.usage-model-list > div { min-height: 48px; padding: 0 16px 0 18px; display: grid; grid-template-columns: minmax(180px, 1fr) repeat(3, minmax(90px, .45fr)); align-items: center; gap: 20px; border-bottom: 1px solid var(--line); }
+.usage-model-list > div:last-child { border-bottom: 0; }
+.usage-model-list .usage-model-list__header { min-height: 32px; color: var(--ink-muted); background: transparent; font-size: 9px; font-weight: 650; letter-spacing: .08em; text-transform: uppercase; }
+.usage-model-list span,
+.usage-model-list strong { text-align: right; font-variant-numeric: tabular-nums; }
+.usage-model-list__header span:first-child { text-align: left; }
+.usage-model-name { display: flex; align-items: center; gap: 10px; text-align: left !important; }
+.usage-model-name > i { width: 6px; height: 6px; flex: 0 0 auto; border-radius: 50%; background: var(--acid-deep); box-shadow: 0 0 0 4px oklch(0.68 0.18 255 / .1); }
+.usage-model-name > span { display: grid; gap: 2px; text-align: left; }
+.usage-model-name strong { color: var(--ink); text-align: left; }
+.usage-model-name small { margin: 0; color: var(--ink-muted); font-size: 9px; text-align: left; }
+
+@media (max-width: 760px) {
+  .usage-page .page-heading {
+    align-items: stretch;
+  }
+
+  .usage-range {
+    width: 100%;
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+  }
+
+  .usage-range button {
+    padding-inline: 7px;
+  }
+
+  .usage-table-heading {
+    min-width: 820px;
+  }
+}

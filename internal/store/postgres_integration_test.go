@@ -27,7 +27,7 @@ func TestPostgresAssignmentAndUsage(t *testing.T) {
 	if err = database.UpdateSettings(ctx, domain.Settings{MaxAPIKeysPerAccount: 3}); err != nil {
 		t.Fatal(err)
 	}
-	account := domain.ProviderAccount{ID: "00000000-0000-4000-8000-000000000001", Provider: domain.ProviderCodex, CredentialType: domain.CredentialSubscription, DisplayName: "Test account", SubjectHMAC: bytes.Repeat([]byte{8}, 32), CredentialCiphertext: []byte("encrypted"), CredentialVersion: 1, Status: domain.AccountActive, MaxAPIKeys: 3}
+	account := domain.ProviderAccount{ID: "00000000-0000-4000-8000-000000000001", Provider: domain.ProviderCodex, CredentialType: domain.CredentialSubscription, DisplayName: "Test account", SubjectHMAC: bytes.Repeat([]byte{8}, 32), CredentialCiphertext: []byte("encrypted"), CredentialVersion: 1, Status: domain.AccountActive}
 	if err = database.CreateProviderAccount(ctx, account); err != nil {
 		t.Fatal(err)
 	}
@@ -36,7 +36,7 @@ func TestPostgresAssignmentAndUsage(t *testing.T) {
 	if err = database.CreateProviderAccount(ctx, duplicate); !errors.Is(err, ErrConflict) {
 		t.Fatalf("duplicate subject error = %v", err)
 	}
-	pool := domain.Pool{ID: "00000000-0000-4000-8000-000000000002", Name: "Test pool", Provider: domain.ProviderCodex, Strategy: domain.StrategyLeastAssigned, ModelAllowlist: []string{"gpt-test"}}
+	pool := domain.Pool{ID: "00000000-0000-4000-8000-000000000002", Name: "Test pool", Provider: domain.ProviderCodex}
 	if err = database.CreatePool(ctx, pool); err != nil {
 		t.Fatal(err)
 	}
@@ -55,17 +55,17 @@ func TestPostgresAssignmentAndUsage(t *testing.T) {
 			t.Fatalf("key %d assignment = %q, %v", i, assigned, createErr)
 		}
 	}
-	if err = database.UpdateSettings(ctx, domain.Settings{MaxAPIKeysPerAccount: 2}); !errors.Is(err, ErrCapacityExhausted) {
-		t.Fatalf("capacity reduction error = %v", err)
+	if err = database.UpdateSettings(ctx, domain.Settings{MaxAPIKeysPerAccount: 3}); err != nil {
+		t.Fatalf("capacity setting update error = %v", err)
 	}
-	if _, err = database.CreateAPIKeyAndBind(ctx, keys[3]); !errors.Is(err, ErrCapacityExhausted) {
-		t.Fatalf("fourth assignment error = %v", err)
+	if _, err = database.CreateAPIKeyAndBind(ctx, keys[3]); !errors.Is(err, ErrNoEligibleAccount) {
+		t.Fatalf("fourth assignment error = %v, want no eligible account", err)
 	}
 	if err = database.RevokeAPIKey(ctx, keys[0].ID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = database.CreateAPIKeyAndBind(ctx, keys[3]); err != nil {
-		t.Fatalf("slot was not released: %v", err)
+		t.Fatalf("assignment after revoke error = %v", err)
 	}
 	route, err := database.ResolveAPIKey(ctx, keys[2].KeyHMAC)
 	if err != nil || route.Account.ID != account.ID || route.Pool.ID != pool.ID || !route.MembershipEnabled {
@@ -92,13 +92,13 @@ func TestPostgresAssignmentAndUsage(t *testing.T) {
 	}
 	day := time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)
 	firstUsageEvent := bytes.Repeat([]byte{10}, 32)
-	if err = database.AddUsage(ctx, keys[2].ID, firstUsageEvent, day, 10, 4); err != nil {
+	if err = database.AddUsage(ctx, keys[2].ID, firstUsageEvent, "test-model", day, 10, 4); err != nil {
 		t.Fatal(err)
 	}
-	if err = database.AddUsage(ctx, keys[2].ID, firstUsageEvent, day, 10, 4); err != nil {
+	if err = database.AddUsage(ctx, keys[2].ID, firstUsageEvent, "test-model", day, 10, 4); err != nil {
 		t.Fatal(err)
 	}
-	if err = database.AddUsage(ctx, keys[2].ID, bytes.Repeat([]byte{11}, 32), day, 2, 1); err != nil {
+	if err = database.AddUsage(ctx, keys[2].ID, bytes.Repeat([]byte{11}, 32), "test-model", day, 2, 1); err != nil {
 		t.Fatal(err)
 	}
 	rows, err := database.ListUsage(ctx, domain.UsageFilter{APIKeyID: keys[2].ID})
@@ -121,11 +121,11 @@ func TestPostgresConcurrentAssignmentHonorsCapacity(t *testing.T) {
 	if err = database.UpdateSettings(ctx, domain.Settings{MaxAPIKeysPerAccount: 3}); err != nil {
 		t.Fatal(err)
 	}
-	account := domain.ProviderAccount{ID: "00000000-0000-4000-8000-000000000101", Provider: domain.ProviderCodex, CredentialType: domain.CredentialSubscription, DisplayName: "Concurrent account", SubjectHMAC: bytes.Repeat([]byte{7}, 32), CredentialCiphertext: []byte("encrypted"), CredentialVersion: 1, Status: domain.AccountActive, MaxAPIKeys: 3}
+	account := domain.ProviderAccount{ID: "00000000-0000-4000-8000-000000000101", Provider: domain.ProviderCodex, CredentialType: domain.CredentialSubscription, DisplayName: "Concurrent account", SubjectHMAC: bytes.Repeat([]byte{7}, 32), CredentialCiphertext: []byte("encrypted"), CredentialVersion: 1, Status: domain.AccountActive}
 	if err = database.CreateProviderAccount(ctx, account); err != nil {
 		t.Fatal(err)
 	}
-	pool := domain.Pool{ID: "00000000-0000-4000-8000-000000000102", Name: "Concurrent pool", Provider: domain.ProviderCodex, Strategy: domain.StrategyLeastAssigned}
+	pool := domain.Pool{ID: "00000000-0000-4000-8000-000000000102", Name: "Concurrent pool", Provider: domain.ProviderCodex}
 	if err = database.CreatePool(ctx, pool); err != nil {
 		t.Fatal(err)
 	}
@@ -146,22 +146,22 @@ func TestPostgresConcurrentAssignmentHonorsCapacity(t *testing.T) {
 	}
 	wait.Wait()
 	close(results)
-	successes, capacityErrors := 0, 0
+	successes, noEligibleErrors := 0, 0
 	for result := range results {
 		if result == nil {
 			successes++
-		} else if errors.Is(result, ErrCapacityExhausted) {
-			capacityErrors++
+		} else if errors.Is(result, ErrNoEligibleAccount) {
+			noEligibleErrors++
 		} else {
 			t.Fatalf("unexpected assignment error: %v", result)
 		}
 	}
-	if successes != 3 || capacityErrors != 1 {
-		t.Fatalf("successes=%d capacity_errors=%d", successes, capacityErrors)
+	if successes != 3 || noEligibleErrors != 1 {
+		t.Fatalf("successes=%d no_eligible_errors=%d", successes, noEligibleErrors)
 	}
 }
 
-func TestPostgresLeastAssignedPrecedesPriority(t *testing.T) {
+func TestPostgresMixedPoolPrefersSubscriptionPriority(t *testing.T) {
 	databaseURL := os.Getenv("SUBPOOL_TEST_DATABASE_URL")
 	if databaseURL == "" {
 		t.Skip("SUBPOOL_TEST_DATABASE_URL is not set")
@@ -172,13 +172,15 @@ func TestPostgresLeastAssignedPrecedesPriority(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer database.Close()
-	if err = database.UpdateSettings(ctx, domain.Settings{MaxAPIKeysPerAccount: 2}); err != nil {
+	if err = database.UpdateSettings(ctx, domain.Settings{MaxAPIKeysPerAccount: 3}); err != nil {
 		t.Fatal(err)
 	}
-	first := domain.ProviderAccount{ID: "00000000-0000-4000-8000-000000000301", Provider: domain.ProviderCodex, CredentialType: domain.CredentialSubscription, DisplayName: "First", SubjectHMAC: bytes.Repeat([]byte{31}, 32), CredentialCiphertext: []byte("encrypted"), CredentialVersion: 1, Status: domain.AccountActive, MaxAPIKeys: 3}
+	first := domain.ProviderAccount{ID: "00000000-0000-4000-8000-000000000301", Provider: domain.ProviderCodex, CredentialType: domain.CredentialSubscription, DisplayName: "First", SubjectHMAC: bytes.Repeat([]byte{31}, 32), CredentialCiphertext: []byte("encrypted"), CredentialVersion: 1, Status: domain.AccountActive}
 	second := first
 	second.ID = "00000000-0000-4000-8000-000000000302"
 	second.DisplayName = "Second"
+	second.Provider = domain.ProviderOpenAICompatible
+	second.CredentialType = domain.CredentialAPIKey
 	second.SubjectHMAC = bytes.Repeat([]byte{32}, 32)
 	if err = database.CreateProviderAccount(ctx, first); err != nil {
 		t.Fatal(err)
@@ -186,7 +188,7 @@ func TestPostgresLeastAssignedPrecedesPriority(t *testing.T) {
 	if err = database.CreateProviderAccount(ctx, second); err != nil {
 		t.Fatal(err)
 	}
-	pool := domain.Pool{ID: "00000000-0000-4000-8000-000000000303", Name: "Least assigned pool", Provider: domain.ProviderCodex, Strategy: domain.StrategyLeastAssigned}
+	pool := domain.Pool{ID: "00000000-0000-4000-8000-000000000303", Name: "Least assigned pool", Provider: domain.ProviderCodex}
 	if err = database.CreatePool(ctx, pool); err != nil {
 		t.Fatal(err)
 	}
@@ -200,13 +202,24 @@ func TestPostgresLeastAssignedPrecedesPriority(t *testing.T) {
 	if err = database.AddPoolAccount(ctx, domain.PoolAccount{PoolID: pool.ID, ProviderAccountID: second.ID, Weight: 1, Priority: 100, Enabled: true}); err != nil {
 		t.Fatal(err)
 	}
+	pools, listErr := database.ListPools(ctx)
+	var storedPool domain.Pool
+	for _, candidate := range pools {
+		if candidate.ID == pool.ID {
+			storedPool = candidate
+			break
+		}
+	}
+	if listErr != nil || storedPool.Provider != domain.ProviderMixed {
+		t.Fatalf("mixed pool=%#v error=%v", pools, listErr)
+	}
 	next := domain.APIKey{ID: "00000000-0000-4000-8000-000000000305", PoolID: pool.ID, EmployeeName: "Next", KeyHMAC: bytes.Repeat([]byte{34}, 32), KeyHint: "next"}
-	if assigned, createErr := database.CreateAPIKeyAndBind(ctx, next); createErr != nil || assigned != second.ID {
-		t.Fatalf("least-assigned account=%s error=%v", assigned, createErr)
+	if assigned, createErr := database.CreateAPIKeyAndBind(ctx, next); createErr != nil || assigned != first.ID {
+		t.Fatalf("priority account=%s error=%v", assigned, createErr)
 	}
 }
 
-func TestPostgresConcurrentCapacityReductionAndAssignment(t *testing.T) {
+func TestPostgresAPIKeyCapacityRoutesToAvailableAccount(t *testing.T) {
 	databaseURL := os.Getenv("SUBPOOL_TEST_DATABASE_URL")
 	if databaseURL == "" {
 		t.Skip("SUBPOOL_TEST_DATABASE_URL is not set")
@@ -217,54 +230,39 @@ func TestPostgresConcurrentCapacityReductionAndAssignment(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer database.Close()
-	if err = database.UpdateSettings(ctx, domain.Settings{MaxAPIKeysPerAccount: 2}); err != nil {
+	if err = database.UpdateSettings(ctx, domain.Settings{MaxAPIKeysPerAccount: 3}); err != nil {
 		t.Fatal(err)
 	}
-	account := domain.ProviderAccount{ID: "00000000-0000-4000-8000-000000000401", Provider: domain.ProviderCodex, CredentialType: domain.CredentialSubscription, DisplayName: "Capacity account", SubjectHMAC: bytes.Repeat([]byte{41}, 32), CredentialCiphertext: []byte("encrypted"), CredentialVersion: 1, Status: domain.AccountActive, MaxAPIKeys: 2}
-	if err = database.CreateProviderAccount(ctx, account); err != nil {
+	primary := domain.ProviderAccount{ID: "00000000-0000-4000-8000-000000000401", Provider: domain.ProviderCodex, CredentialType: domain.CredentialSubscription, DisplayName: "Primary account", SubjectHMAC: bytes.Repeat([]byte{41}, 32), CredentialCiphertext: []byte("encrypted"), CredentialVersion: 1, Status: domain.AccountActive}
+	secondary := primary
+	secondary.ID = "00000000-0000-4000-8000-000000000405"
+	secondary.DisplayName = "Secondary account"
+	secondary.SubjectHMAC = bytes.Repeat([]byte{45}, 32)
+	if err = database.CreateProviderAccount(ctx, primary); err != nil {
 		t.Fatal(err)
 	}
-	pool := domain.Pool{ID: "00000000-0000-4000-8000-000000000402", Name: "Capacity pool", Provider: domain.ProviderCodex, Strategy: domain.StrategyLeastAssigned, ModelAllowlist: []string{"gpt-test"}}
+	if err = database.CreateProviderAccount(ctx, secondary); err != nil {
+		t.Fatal(err)
+	}
+	pool := domain.Pool{ID: "00000000-0000-4000-8000-000000000402", Name: "Capacity pool", Provider: domain.ProviderCodex}
 	if err = database.CreatePool(ctx, pool); err != nil {
 		t.Fatal(err)
 	}
-	if err = database.AddPoolAccount(ctx, domain.PoolAccount{PoolID: pool.ID, ProviderAccountID: account.ID, Weight: 1, Enabled: true}); err != nil {
+	if err = database.AddPoolAccount(ctx, domain.PoolAccount{PoolID: pool.ID, ProviderAccountID: primary.ID, Weight: 1, Priority: 0, Enabled: true}); err != nil {
 		t.Fatal(err)
 	}
-	seed := domain.APIKey{ID: "00000000-0000-4000-8000-000000000403", PoolID: pool.ID, EmployeeName: "Seed", KeyHMAC: bytes.Repeat([]byte{42}, 32), KeyHint: "seed"}
-	if _, err = database.CreateAPIKeyAndBind(ctx, seed); err != nil {
+	if err = database.AddPoolAccount(ctx, domain.PoolAccount{PoolID: pool.ID, ProviderAccountID: secondary.ID, Weight: 1, Priority: 100, Enabled: true}); err != nil {
 		t.Fatal(err)
 	}
-	results := make(chan error, 2)
-	go func() {
-		results <- database.UpdateSettings(ctx, domain.Settings{MaxAPIKeysPerAccount: 1})
-	}()
-	go func() {
-		key := domain.APIKey{ID: "00000000-0000-4000-8000-000000000404", PoolID: pool.ID, EmployeeName: "Concurrent", KeyHMAC: bytes.Repeat([]byte{43}, 32), KeyHint: "next"}
-		_, createErr := database.CreateAPIKeyAndBind(ctx, key)
-		results <- createErr
-	}()
-	successes, capacityErrors := 0, 0
-	for range 2 {
-		result := <-results
-		if result == nil {
-			successes++
-		} else if errors.Is(result, ErrCapacityExhausted) {
-			capacityErrors++
-		} else {
-			t.Fatalf("unexpected concurrent result: %v", result)
+	for index := 0; index < 4; index++ {
+		key := domain.APIKey{ID: fmt.Sprintf("00000000-0000-4000-8000-%012d", 410+index), PoolID: pool.ID, EmployeeName: fmt.Sprintf("Employee %d", index+1), KeyHMAC: bytes.Repeat([]byte{byte(50 + index)}, 32), KeyHint: fmt.Sprintf("key%d", index+1)}
+		assigned, createErr := database.CreateAPIKeyAndBind(ctx, key)
+		want := primary.ID
+		if index == 3 {
+			want = secondary.ID
 		}
-	}
-	if successes != 1 || capacityErrors != 1 {
-		t.Fatalf("successes=%d capacity_errors=%d", successes, capacityErrors)
-	}
-	accounts, err := database.ListProviderAccounts(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, current := range accounts {
-		if current.ID == account.ID && current.AssignedAPIKeys > current.MaxAPIKeys {
-			t.Fatalf("capacity invariant violated: assigned=%d max=%d", current.AssignedAPIKeys, current.MaxAPIKeys)
+		if createErr != nil || assigned != want {
+			t.Fatalf("key %d assignment=%s want=%s error=%v", index+1, assigned, want, createErr)
 		}
 	}
 }
