@@ -36,6 +36,10 @@ func TestCompatibleHealthCheck(t *testing.T) {
 	if unauthorized.HealthStatus != domain.HealthUnhealthy || !unauthorized.AuthFailed || unauthorized.ErrorCode != "authentication_failed" {
 		t.Fatalf("unauthorized result = %#v", unauthorized)
 	}
+	unsupported := NewChecker(nil, testCipher{plaintext: credentials}, nil, testCompatible{status: http.StatusNotFound}).Check(context.Background(), account)
+	if unsupported.HealthStatus != domain.HealthUnknown || unsupported.Failure || unsupported.ErrorCode != "probe_unsupported" {
+		t.Fatalf("unsupported result = %#v", unsupported)
+	}
 }
 
 func TestClassifyCodexStatusError(t *testing.T) {
@@ -47,8 +51,8 @@ func TestClassifyCodexStatusError(t *testing.T) {
 		{name: "unauthorized", statusCode: http.StatusUnauthorized, want: Result{HealthStatus: domain.HealthUnhealthy, ErrorCode: "authentication_failed", AuthFailed: true}},
 		{name: "forbidden", statusCode: http.StatusForbidden, want: Result{HealthStatus: domain.HealthUnhealthy, ErrorCode: "authentication_failed", AuthFailed: true}},
 		{name: "rate limited", statusCode: http.StatusTooManyRequests, want: Result{HealthStatus: domain.HealthHealthy}},
-		{name: "not found", statusCode: http.StatusNotFound, want: Result{HealthStatus: domain.HealthUnknown, ErrorCode: "probe_unsupported"}},
-		{name: "method not allowed", statusCode: http.StatusMethodNotAllowed, want: Result{HealthStatus: domain.HealthUnknown, ErrorCode: "probe_unsupported"}},
+		{name: "not found", statusCode: http.StatusNotFound, want: Result{HealthStatus: domain.HealthUnknown, ErrorCode: "provider_unavailable", Failure: true}},
+		{name: "method not allowed", statusCode: http.StatusMethodNotAllowed, want: Result{HealthStatus: domain.HealthUnknown, ErrorCode: "provider_unavailable", Failure: true}},
 		{name: "provider failure", statusCode: http.StatusBadGateway, want: Result{HealthStatus: domain.HealthUnknown, ErrorCode: "provider_5xx", Failure: true}},
 	}
 	for _, test := range tests {

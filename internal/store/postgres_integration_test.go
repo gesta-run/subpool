@@ -35,6 +35,80 @@ func TestPostgresAdminLoginAttemptTracksInvalidCredentials(t *testing.T) {
 	}
 }
 
+func TestPostgresHealthFailureThresholdAndRecovery(t *testing.T) {
+	databaseURL := os.Getenv("SUBPOOL_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("SUBPOOL_TEST_DATABASE_URL is not set")
+	}
+	ctx := context.Background()
+	database, err := Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	account := domain.ProviderAccount{
+		ID:                   "00000000-0000-4000-8000-000000000701",
+		Provider:             domain.ProviderCodex,
+		CredentialType:       domain.CredentialSubscription,
+		DisplayName:          "Health threshold account",
+		SubjectHMAC:          bytes.Repeat([]byte{71}, 32),
+		CredentialCiphertext: []byte("encrypted"),
+		CredentialVersion:    1,
+		Status:               domain.AccountActive,
+		HealthStatus:         domain.HealthHealthy,
+	}
+	if err = database.CreateProviderAccount(ctx, account); err != nil {
+		t.Fatal(err)
+	}
+	pool := domain.Pool{ID: "00000000-0000-4000-8000-000000000702", Name: "Health threshold pool", Provider: domain.ProviderCodex}
+	if err = database.CreatePool(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	if err = database.AddPoolAccount(ctx, domain.PoolAccount{PoolID: pool.ID, ProviderAccountID: account.ID, Weight: 1, Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	checkedAt := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	for failure := 1; failure <= 3; failure++ {
+		if err = database.RecordProviderHealthFailure(ctx, account.ID, "provider_unavailable", checkedAt, checkedAt.Add(5*time.Minute)); err != nil {
+			t.Fatal(err)
+		}
+		stored, getErr := database.GetProviderAccount(ctx, account.ID)
+		if getErr != nil {
+			t.Fatal(getErr)
+		}
+		wantHealth := domain.HealthHealthy
+		if failure == 3 {
+			wantHealth = domain.HealthUnhealthy
+		}
+		if stored.ConsecutiveFailures != failure || stored.HealthStatus != wantHealth || stored.LastHealthErrorCode != "provider_unavailable" {
+			t.Fatalf("failure %d account = %#v", failure, stored)
+		}
+	}
+	eligible, err := database.ListPoolProviderAccounts(ctx, pool.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(eligible) != 0 {
+		t.Fatalf("unhealthy account remained eligible: %#v", eligible)
+	}
+
+	if err = database.SetProviderHealth(ctx, account.ID, domain.HealthHealthy, "", checkedAt.Add(5*time.Minute), checkedAt.Add(10*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	recovered, err := database.GetProviderAccount(ctx, account.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recovered.HealthStatus != domain.HealthHealthy || recovered.ConsecutiveFailures != 0 || recovered.LastHealthErrorCode != "" {
+		t.Fatalf("recovered account = %#v", recovered)
+	}
+	eligible, err = database.ListPoolProviderAccounts(ctx, pool.ID)
+	if err != nil || len(eligible) != 1 || eligible[0].ID != account.ID {
+		t.Fatalf("eligible accounts after recovery = %#v, %v", eligible, err)
+	}
+}
+
 func TestPostgresAssignmentAndUsage(t *testing.T) {
 	databaseURL := os.Getenv("SUBPOOL_TEST_DATABASE_URL")
 	if databaseURL == "" {
