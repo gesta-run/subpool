@@ -219,7 +219,7 @@ func classifyError(err error) Result {
 		case statusErr.StatusCode == http.StatusTooManyRequests:
 			return Result{HealthStatus: domain.HealthHealthy}
 		case statusErr.StatusCode == http.StatusNotFound || statusErr.StatusCode == http.StatusMethodNotAllowed:
-			return Result{HealthStatus: domain.HealthUnknown, ErrorCode: "probe_unsupported"}
+			return Result{HealthStatus: domain.HealthUnknown, ErrorCode: "provider_unavailable", Failure: true}
 		case statusErr.StatusCode >= 500:
 			return Result{HealthStatus: domain.HealthUnknown, ErrorCode: "provider_5xx", Failure: true}
 		default:

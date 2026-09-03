@@ -19,7 +19,7 @@ type PendingAction =
   | { type: 'reset'; account: ProviderAccount; creditID?: string }
 
 function AccountSummary({ accounts }: { accounts: ProviderAccount[] }) {
-  const healthy = accounts.filter((account) => account.health_status === 'healthy').length
+  const healthy = accounts.filter((account) => account.health_status === 'healthy' && (account.consecutive_health_failures ?? 0) === 0).length
   const assigned = accounts.reduce((total, account) => total + (account.assigned_api_keys ?? 0), 0)
   return <dl className="accounts-summary" aria-label="Account summary">
     <div><dt><i className="accounts-summary__health" />Healthy</dt><dd>{healthy}<small> / {accounts.length}</small></dd></div>

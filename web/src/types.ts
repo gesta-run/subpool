@@ -15,6 +15,7 @@ export interface ProviderAccount {
   health_status?: 'unknown' | 'healthy' | 'unhealthy'
   last_checked_at?: string | null
   last_health_error_code?: string | null
+  consecutive_health_failures?: number
   assigned_api_keys?: number
   quota_snapshot?: {
     plan_type?: string
