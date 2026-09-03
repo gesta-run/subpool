@@ -65,7 +65,13 @@ Replace every `replace-with-*` value, then open [http://localhost:8080](http://l
 
 Codex subscriptions use [device-code authorization](https://developers.openai.com/codex/auth/). Copy the one-time code from Subpool, continue to OpenAI, and confirm it there. This works on remote and headless deployments without a localhost callback or an extra exposed port. Device-code login must be enabled in ChatGPT security or workspace settings.
 
-Configure Codex CLI:
+Add the following settings to your Codex CLI user configuration file:
+
+- Linux: `/home/<username>/.codex/config.toml` (or `~/.codex/config.toml`)
+- macOS: `/Users/<username>/.codex/config.toml` (or `~/.codex/config.toml`)
+- Windows: `C:\Users\<username>\.codex\config.toml` (or `%USERPROFILE%\.codex\config.toml`)
+
+Create the `.codex` directory and `config.toml` file if they do not already exist.
 
 ```toml
 model = "gpt-5.6-sol"
