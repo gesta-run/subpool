@@ -7,23 +7,26 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
 
 type Config struct {
-	ListenAddress     string
-	DatabaseURL       string
-	PublicURL         string
-	AdminUsername     string
-	AdminPassword     string
-	CredentialKey     []byte
-	APIKeyHMACKey     []byte
-	SessionTTL        time.Duration
-	CodexClientID     string
-	CodexTokenURL     string
-	CodexUpstreamURL  string
-	TrustedProxyCIDRs []string
+	ListenAddress              string
+	DatabaseURL                string
+	PublicURL                  string
+	AdminUsername              string
+	AdminPassword              string
+	CredentialKey              []byte
+	APIKeyHMACKey              []byte
+	SessionTTL                 time.Duration
+	CodexClientID              string
+	CodexTokenURL              string
+	CodexUpstreamURL           string
+	ResponsesWSEnabled         bool
+	ResponsesWSForceHTTPBridge bool
+	TrustedProxyCIDRs          []string
 }
 
 func Load() (Config, error) {
@@ -38,8 +41,14 @@ func Load() (Config, error) {
 		CodexTokenURL:    envOr("SUBPOOL_CODEX_TOKEN_URL", "https://auth.openai.com/oauth/token"),
 		CodexUpstreamURL: strings.TrimRight(envOr("SUBPOOL_CODEX_UPSTREAM_URL", "https://chatgpt.com/backend-api/codex"), "/"),
 	}
-
 	var err error
+	if cfg.ResponsesWSEnabled, err = envBool("SUBPOOL_RESPONSES_WS_ENABLED", false); err != nil {
+		return Config{}, err
+	}
+	if cfg.ResponsesWSForceHTTPBridge, err = envBool("SUBPOOL_RESPONSES_WS_FORCE_HTTP_BRIDGE", false); err != nil {
+		return Config{}, err
+	}
+
 	if cfg.CredentialKey, err = decodeKey("SUBPOOL_CREDENTIAL_KEY", 32); err != nil {
 		return Config{}, err
 	}
@@ -106,4 +115,16 @@ func envOr(name, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+func envBool(name string, fallback bool) (bool, error) {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return fallback, nil
+	}
+	value, err := strconv.ParseBool(raw)
+	if err != nil {
+		return false, fmt.Errorf("%s must be a boolean", name)
+	}
+	return value, nil
 }

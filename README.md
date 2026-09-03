@@ -78,9 +78,15 @@ base_url = "https://subpool.example.com/v1"
 wire_api = "responses"
 experimental_bearer_token = "sk-example-not-a-real-key"
 requires_openai_auth = false
+supports_websockets = true
+
+[features]
+responses_websockets_v2 = true
 ```
 
-Available endpoints include `POST /v1/responses`, `POST /v1/chat/completions`, `GET /v1/models`, `GET /healthz`, `GET /readyz`, and `GET /metrics`.
+Set `SUBPOOL_RESPONSES_WS_ENABLED=true` to accept Responses WebSocket connections. Codex subscription accounts use a dedicated upstream WebSocket; OpenAI-compatible accounts use the existing HTTP/SSE bridge. `SUBPOOL_RESPONSES_WS_FORCE_HTTP_BRIDGE=true` is an emergency rollback switch for the upstream Codex transport.
+
+Available endpoints include `GET/POST /v1/responses`, `POST /v1/chat/completions`, `GET /v1/models`, `GET /healthz`, `GET /readyz`, and `GET /metrics`.
 
 ## Deployment notes
 

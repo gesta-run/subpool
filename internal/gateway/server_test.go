@@ -38,11 +38,18 @@ type fakeStore struct {
 	sessionFailures         int
 	usageCalls              int
 	sessionCalls            int
+	allowCalls              int
 	usageCommitUncertain    bool
 	usageEvents             map[string]struct{}
 }
 
 func (f *fakeStore) ResolveAPIKey(context.Context, []byte) (domain.KeyRoute, error) {
+	return f.route, nil
+}
+func (f *fakeStore) ResolvePinnedAPIKey(_ context.Context, _ []byte, poolID, accountID string) (domain.KeyRoute, error) {
+	if f.route.Pool.ID != poolID || f.route.Account.ID != accountID {
+		return domain.KeyRoute{}, store.ErrNotFound
+	}
 	return f.route, nil
 }
 func (f *fakeStore) ListPoolProviderAccounts(context.Context, string) ([]domain.ProviderAccount, error) {
@@ -74,6 +81,7 @@ func (f *fakeStore) ReassignAPIKey(_ context.Context, _, _ string, excludeIDs []
 	return f.reassigned, nil
 }
 func (f *fakeStore) AllowAPIKeyRequest(context.Context, string, int, time.Time) (bool, error) {
+	f.allowCalls++
 	return true, nil
 }
 func (f *fakeStore) RecordRequestSuccess(context.Context, string, string, time.Time) error {

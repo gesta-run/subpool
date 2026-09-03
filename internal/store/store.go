@@ -12,6 +12,7 @@ var (
 	ErrNotFound          = errors.New("not found")
 	ErrNoEligibleAccount = errors.New("no eligible account")
 	ErrConflict          = errors.New("conflict")
+	ErrPinnedUnavailable = errors.New("pinned provider account is unavailable")
 )
 
 type Store interface {
@@ -50,6 +51,7 @@ type Store interface {
 	ListAPIKeys(context.Context) ([]domain.APIKey, error)
 	RevokeAPIKey(context.Context, string) error
 	ResolveAPIKey(context.Context, []byte) (domain.KeyRoute, error)
+	ResolvePinnedAPIKey(context.Context, []byte, string, string) (domain.KeyRoute, error)
 	ResolveSessionAccount(context.Context, string, []byte) (domain.ProviderAccount, error)
 	SaveSessionBinding(context.Context, string, string, []byte, string, time.Time) error
 	ReassignAPIKey(context.Context, string, string, []string) (domain.ProviderAccount, error)

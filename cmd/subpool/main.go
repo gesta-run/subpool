@@ -63,9 +63,10 @@ func main() {
 		WithResetCredits(resetCredits).
 		WithModelProviders(resetCredits, compatibleProvider).
 		Register(mux)
-	gateway.New(database, keys, cipher, provider, refreshManager, compatibleProvider).
+	gatewayServer := gateway.New(database, keys, cipher, provider, refreshManager, compatibleProvider).
 		WithModelProviders(resetCredits, compatibleProvider).
-		Register(mux)
+		WithResponsesWebSocket(cfg.ResponsesWSEnabled, cfg.ResponsesWSForceHTTPBridge, cfg.CodexUpstreamURL)
+	gatewayServer.Register(mux)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"status":"ok"}`))
@@ -82,7 +83,7 @@ func main() {
 	})
 	mux.HandleFunc("GET /metrics", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4")
-		_, _ = w.Write([]byte("# HELP subpool_up Whether the service is running.\n# TYPE subpool_up gauge\nsubpool_up 1\n"))
+		_, _ = w.Write([]byte("# HELP subpool_up Whether the service is running.\n# TYPE subpool_up gauge\nsubpool_up 1\n" + gatewayServer.ResponsesWebSocketMetrics()))
 	})
 	registerWeb(mux)
 	server := &http.Server{Addr: cfg.ListenAddress, Handler: securityHeaders(mux), ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 60 * time.Second, IdleTimeout: 120 * time.Second, MaxHeaderBytes: 1 << 20}
@@ -92,6 +93,7 @@ func main() {
 	go database.RunMaintenance(stopCtx)
 	go func() {
 		<-stopCtx.Done()
+		gatewayServer.CloseResponsesWebSockets()
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		_ = server.Shutdown(ctx)
