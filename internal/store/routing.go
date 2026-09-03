@@ -200,6 +200,36 @@ func (p *Postgres) ResolveAPIKey(ctx context.Context, digest []byte) (domain.Key
 	return route, wrapDB("resolve API key", err)
 }
 
+func (p *Postgres) ResolvePinnedAPIKey(ctx context.Context, digest []byte, poolID, accountID string) (domain.KeyRoute, error) {
+	var route domain.KeyRoute
+	err := p.pool.QueryRow(ctx, `SELECT k.id,k.pool_id,k.employee_name,k.key_hint,k.scopes,k.rate_limit,k.expires_at,k.revoked_at,k.last_used_at,k.created_at,
+		p.id,p.name,p.provider,p.created_at,p.updated_at,
+		a.id,a.provider,a.credential_type,a.display_name,a.credential_ciphertext,a.credential_version,a.status,a.health_status,a.quota_snapshot,a.cooldown_until,a.last_success_at,a.last_failure_at,a.created_at,a.updated_at,
+		pa.enabled
+		FROM api_keys k JOIN pools p ON p.id=k.pool_id
+		JOIN pool_accounts pa ON pa.pool_id=p.id AND pa.provider_account_id=$3
+		JOIN provider_accounts a ON a.id=pa.provider_account_id
+		WHERE k.key_hmac=$1 AND k.pool_id=$2 AND k.revoked_at IS NULL AND (k.expires_at IS NULL OR k.expires_at>now())`, digest, poolID, accountID).Scan(
+		&route.Key.ID, &route.Key.PoolID, &route.Key.EmployeeName, &route.Key.KeyHint, &route.Key.Scopes, &route.Key.RateLimit, &route.Key.ExpiresAt, &route.Key.RevokedAt, &route.Key.LastUsedAt, &route.Key.CreatedAt,
+		&route.Pool.ID, &route.Pool.Name, &route.Pool.Provider, &route.Pool.CreatedAt, &route.Pool.UpdatedAt,
+		&route.Account.ID, &route.Account.Provider, &route.Account.CredentialType, &route.Account.DisplayName, &route.Account.CredentialCiphertext, &route.Account.CredentialVersion, &route.Account.Status, &route.Account.HealthStatus, &route.Account.QuotaSnapshot, &route.Account.CooldownUntil, &route.Account.LastSuccessAt, &route.Account.LastFailureAt, &route.Account.CreatedAt, &route.Account.UpdatedAt,
+		&route.MembershipEnabled)
+	err = wrapDB("resolve pinned API key", err)
+	if !errors.Is(err, ErrNotFound) {
+		return route, err
+	}
+	var keyValid bool
+	checkErr := p.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM api_keys
+		WHERE key_hmac=$1 AND pool_id=$2 AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at>now()))`, digest, poolID).Scan(&keyValid)
+	if checkErr != nil {
+		return domain.KeyRoute{}, wrapDB("check pinned API key", checkErr)
+	}
+	if keyValid {
+		return domain.KeyRoute{}, ErrPinnedUnavailable
+	}
+	return domain.KeyRoute{}, ErrNotFound
+}
+
 func (p *Postgres) ResolveSessionAccount(ctx context.Context, keyID string, sessionHash []byte) (domain.ProviderAccount, error) {
 	var account domain.ProviderAccount
 	err := p.pool.QueryRow(ctx, `SELECT a.id,a.provider,a.credential_type,a.display_name,a.credential_ciphertext,a.credential_version,a.status,

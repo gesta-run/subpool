@@ -26,6 +26,27 @@ func TestLoad(t *testing.T) {
 		t.Fatalf("upstream = %s", cfg.CodexUpstreamURL)
 	}
 }
+
+func TestLoadResponsesWebSocketSettings(t *testing.T) {
+	setValidEnv(t)
+	t.Setenv("SUBPOOL_RESPONSES_WS_ENABLED", "true")
+	t.Setenv("SUBPOOL_RESPONSES_WS_FORCE_HTTP_BRIDGE", "true")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.ResponsesWSEnabled || !cfg.ResponsesWSForceHTTPBridge {
+		t.Fatalf("WebSocket settings = %#v", cfg)
+	}
+}
+
+func TestLoadRejectsInvalidResponsesWebSocketSetting(t *testing.T) {
+	setValidEnv(t)
+	t.Setenv("SUBPOOL_RESPONSES_WS_ENABLED", "sometimes")
+	if _, err := Load(); err == nil {
+		t.Fatal("invalid WebSocket setting was accepted")
+	}
+}
 func TestLoadRejectsMissingAdminPassword(t *testing.T) {
 	setValidEnv(t)
 	t.Setenv("SUBPOOL_ADMIN_PASSWORD", "")

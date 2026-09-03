@@ -37,6 +37,8 @@ const (
 	retryRefresh     retryReason = "refresh"
 	retryRateLimit   retryReason = "rate_limit"
 	retryInvalid     retryReason = "invalid_request"
+	retryTransport   retryReason = "transport"
+	retryProvider5xx retryReason = "provider_5xx"
 )
 
 type Cipher interface {
@@ -54,17 +56,18 @@ type OpenAICompatibleClient interface {
 }
 
 type Server struct {
-	store      store.Store
-	keys       *auth.APIKeys
-	cipher     Cipher
-	codex      CodexClient
-	compatible OpenAICompatibleClient
-	refresher  credential.AccountRefresher
-	activity   *requestActivityThrottle
-	catalog    *catalog.Service
-	models     *modelCache
-	now        func() time.Time
-	eventSeq   atomic.Uint64
+	store       store.Store
+	keys        *auth.APIKeys
+	cipher      Cipher
+	codex       CodexClient
+	compatible  OpenAICompatibleClient
+	refresher   credential.AccountRefresher
+	activity    *requestActivityThrottle
+	catalog     *catalog.Service
+	models      *modelCache
+	responsesWS *responsesWSHub
+	now         func() time.Time
+	eventSeq    atomic.Uint64
 }
 
 func New(st store.Store, keys *auth.APIKeys, cipher Cipher, client CodexClient, refresher credential.AccountRefresher, compatible ...OpenAICompatibleClient) *Server {
@@ -72,8 +75,10 @@ func New(st store.Store, keys *auth.APIKeys, cipher Cipher, client CodexClient, 
 	if len(compatible) > 0 {
 		compatibleClient = compatible[0]
 	}
-	return &Server{store: st, keys: keys, cipher: cipher, codex: client, compatible: compatibleClient, refresher: refresher,
+	server := &Server{store: st, keys: keys, cipher: cipher, codex: client, compatible: compatibleClient, refresher: refresher,
 		activity: newRequestActivityThrottle(), models: newModelCache(), now: time.Now}
+	server.responsesWS = newResponsesWSHub(server)
+	return server
 }
 
 func (s *Server) WithModelProviders(codexModels catalog.CodexModels, compatibleModels catalog.CompatibleModels) *Server {
@@ -81,8 +86,16 @@ func (s *Server) WithModelProviders(codexModels catalog.CodexModels, compatibleM
 	return s
 }
 
+func (s *Server) WithResponsesWebSocket(enabled, forceHTTPBridge bool, codexUpstreamURL string) *Server {
+	s.responsesWS.configure(enabled, forceHTTPBridge, codexUpstreamURL)
+	return s
+}
+
 func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/responses", s.handleResponses)
+	if s.responsesWS.enabled {
+		mux.HandleFunc("GET /v1/responses", s.responsesWS.handle)
+	}
 	mux.HandleFunc("POST /v1/chat/completions", s.handleChat)
 	mux.HandleFunc("GET /v1/models", s.handleModels)
 }
@@ -170,30 +183,50 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) authorize(w http.ResponseWriter, r *http.Request, requiredScope string) (domain.KeyRoute, bool) {
-	plain, err := auth.Bearer(r.Header.Get("Authorization"))
-	if err != nil {
-		writeOpenAIError(w, http.StatusUnauthorized, "invalid API key", "invalid_api_key")
+	route, requestErr := s.authenticate(r.Context(), r.Header.Get("Authorization"), requiredScope)
+	if requestErr != nil {
+		writeOpenAIError(w, requestErr.status, requestErr.message, requestErr.code)
 		return domain.KeyRoute{}, false
 	}
-	route, err := s.store.ResolveAPIKey(r.Context(), s.keys.Digest(plain))
-	if err != nil {
-		writeOpenAIError(w, http.StatusUnauthorized, "invalid API key", "invalid_api_key")
-		return domain.KeyRoute{}, false
-	}
-	allowed, err := s.store.AllowAPIKeyRequest(r.Context(), route.Key.ID, route.Key.RateLimit, s.now())
-	if err != nil {
-		writeOpenAIError(w, http.StatusServiceUnavailable, "rate limit state is unavailable", "server_error")
-		return domain.KeyRoute{}, false
-	}
-	if !allowed {
-		writeOpenAIError(w, http.StatusTooManyRequests, "API key rate limit exceeded", "subpool_rate_limited")
-		return domain.KeyRoute{}, false
-	}
-	if !scopeAllowed(route.Key.Scopes, requiredScope) {
-		writeOpenAIError(w, http.StatusForbidden, "API key scope does not allow this endpoint", "insufficient_scope")
+	if requestErr = s.allowAPIKeyRequest(r.Context(), route); requestErr != nil {
+		writeOpenAIError(w, requestErr.status, requestErr.message, requestErr.code)
 		return domain.KeyRoute{}, false
 	}
 	return route, true
+}
+
+type gatewayError struct {
+	status  int
+	message string
+	code    string
+}
+
+func (e *gatewayError) Error() string { return e.message }
+
+func (s *Server) authenticate(ctx context.Context, authorization, requiredScope string) (domain.KeyRoute, *gatewayError) {
+	plain, err := auth.Bearer(authorization)
+	if err != nil {
+		return domain.KeyRoute{}, &gatewayError{http.StatusUnauthorized, "invalid API key", "invalid_api_key"}
+	}
+	route, err := s.store.ResolveAPIKey(ctx, s.keys.Digest(plain))
+	if err != nil {
+		return domain.KeyRoute{}, &gatewayError{http.StatusUnauthorized, "invalid API key", "invalid_api_key"}
+	}
+	if !scopeAllowed(route.Key.Scopes, requiredScope) {
+		return domain.KeyRoute{}, &gatewayError{http.StatusForbidden, "API key scope does not allow this endpoint", "insufficient_scope"}
+	}
+	return route, nil
+}
+
+func (s *Server) allowAPIKeyRequest(ctx context.Context, route domain.KeyRoute) *gatewayError {
+	allowed, err := s.store.AllowAPIKeyRequest(ctx, route.Key.ID, route.Key.RateLimit, s.now())
+	if err != nil {
+		return &gatewayError{http.StatusServiceUnavailable, "rate limit state is unavailable", "server_error"}
+	}
+	if !allowed {
+		return &gatewayError{http.StatusTooManyRequests, "API key rate limit exceeded", "subpool_rate_limited"}
+	}
+	return nil
 }
 
 func scopeAllowed(scopes []string, required string) bool {
@@ -223,11 +256,23 @@ func readRequest(w http.ResponseWriter, r *http.Request) ([]byte, requestMeta, b
 }
 
 func normalizeCodexRequest(body []byte, installationID string) ([]byte, error) {
+	return normalizeCodexPayload(body, installationID, false)
+}
+
+func normalizeCodexWebSocketRequest(body []byte, installationID string) ([]byte, error) {
+	return normalizeCodexPayload(body, installationID, true)
+}
+
+func normalizeCodexPayload(body []byte, installationID string, webSocket bool) ([]byte, error) {
 	var value map[string]any
 	if err := json.Unmarshal(body, &value); err != nil {
 		return nil, fmt.Errorf("decode Codex request: %w", err)
 	}
-	value["stream"] = true
+	if webSocket {
+		delete(value, "stream")
+	} else {
+		value["stream"] = true
+	}
 	value["store"] = false
 	for _, unsupported := range []string{"temperature", "top_p", "logprobs", "top_logprobs"} {
 		delete(value, unsupported)
@@ -337,7 +382,7 @@ func (s *Server) attemptAccount(r *http.Request, route domain.KeyRoute, request 
 			return nil, retryInvalid, false
 		}
 		s.recordHealthFailure(r.Context(), account.ID, "connection_failed")
-		return nil, retryUnavailable, false
+		return nil, retryTransport, false
 	}
 	if !isAuthenticationStatus(resp.StatusCode) {
 		return s.evaluateResponse(r.Context(), route.Key.ID, account.ID, resp)
@@ -369,7 +414,7 @@ func (s *Server) retryRefreshedAccount(r *http.Request, route domain.KeyRoute, r
 			return nil, retryInvalid, false
 		}
 		s.recordHealthFailure(r.Context(), refreshed.ID, "connection_failed")
-		return nil, retryUnavailable, false
+		return nil, retryTransport, false
 	}
 	if isAuthenticationStatus(resp.StatusCode) {
 		drainAndClose(resp)
@@ -396,7 +441,7 @@ func (s *Server) evaluateResponse(ctx context.Context, keyID, accountID string, 
 	if resp.StatusCode >= 500 {
 		s.recordHealthFailure(ctx, accountID, "provider_5xx")
 		drainAndClose(resp)
-		return nil, retryUnavailable, false
+		return nil, retryProvider5xx, false
 	}
 	resp.Header.Set(accountHeader, accountID)
 	return resp, "", true
