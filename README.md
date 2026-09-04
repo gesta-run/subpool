@@ -52,10 +52,10 @@ openssl rand -base64 32
 openssl rand -base64 32
 openssl rand -hex 32
 
-docker compose up -d --build
+docker compose up -d
 ```
 
-Replace every `replace-with-*` value, then open [http://localhost:8080](http://localhost:8080) and sign in with the administrator credentials from `.env`.
+Replace every `replace-with-*` value. Docker Compose pulls the latest published Subpool image from ECR Public; no local image build is required. Open [http://localhost:8080](http://localhost:8080) and sign in with the administrator credentials from `.env`.
 
 ## Connect and use
 
@@ -105,10 +105,12 @@ See [.env.example](.env.example) for configuration options.
 ## Development
 
 ```bash
-docker compose up -d --build
+make compose-dev-up
 make web-install
 make dev
 ```
+
+`compose.dev.yaml` builds `subpool:local` from the current source tree instead of pulling the published image.
 
 Before opening a pull request:
 
