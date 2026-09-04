@@ -29,7 +29,7 @@ func ResponsesWebSocketURL(baseURL string) (string, error) {
 	return parsed.String(), nil
 }
 
-func ResponsesWebSocketHeaders(downstream http.Header, credentials Credentials, installationID string) http.Header {
+func ResponsesWebSocketHeaders(downstream http.Header, credentials Credentials, installationID, model string, fastMode bool) http.Header {
 	headers := make(http.Header)
 	headers.Set("Authorization", "Bearer "+credentials.AccessToken)
 	headers.Set("Originator", "codex_cli_rs")
@@ -46,5 +46,7 @@ func ResponsesWebSocketHeaders(downstream http.Header, credentials Credentials, 
 			headers.Add(name, value)
 		}
 	}
-	return DeviceIdentityHeaders(headers, installationID)
+	headers = DeviceIdentityHeaders(headers, installationID)
+	SetRoutingHint(headers, model, fastMode)
+	return headers
 }

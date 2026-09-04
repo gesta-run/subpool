@@ -59,13 +59,14 @@ func main() {
 		os.Exit(1)
 	}
 	mux := http.NewServeMux()
-	control.New(database, sessions, keys, cipher, deviceAuth, refreshManager, sources, healthChecker).
-		WithResetCredits(resetCredits).
-		WithModelProviders(resetCredits, compatibleProvider).
-		Register(mux)
 	gatewayServer := gateway.New(database, keys, cipher, provider, refreshManager, compatibleProvider).
 		WithModelProviders(resetCredits, compatibleProvider).
 		WithResponsesWebSocket(cfg.ResponsesWSEnabled, cfg.ResponsesWSForceHTTPBridge, cfg.CodexUpstreamURL)
+	control.New(database, sessions, keys, cipher, deviceAuth, refreshManager, sources, healthChecker).
+		WithResetCredits(resetCredits).
+		WithModelProviders(resetCredits, compatibleProvider).
+		WithAccountRoutingChange(gatewayServer.CloseResponsesWebSocketsForAccount).
+		Register(mux)
 	gatewayServer.Register(mux)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

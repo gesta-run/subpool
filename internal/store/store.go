@@ -23,7 +23,7 @@ type Store interface {
 	ListProviderAccounts(context.Context) ([]domain.ProviderAccount, error)
 	ListPoolProviderAccounts(context.Context, string) ([]domain.ProviderAccount, error)
 	GetProviderAccount(context.Context, string) (domain.ProviderAccount, error)
-	UpdateProviderAccount(context.Context, domain.ProviderAccount) error
+	UpdateProviderAccount(context.Context, string, domain.ProviderAccountUpdate) error
 	UpdateProviderDetails(context.Context, string, string, []byte) error
 	DeleteProviderAccount(context.Context, string) error
 	UpdateProviderCredentialCAS(context.Context, string, int, []byte, int) (bool, error)

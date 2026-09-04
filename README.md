@@ -65,6 +65,8 @@ Replace every `replace-with-*` value. Docker Compose pulls the latest published 
 
 Codex subscriptions use [device-code authorization](https://developers.openai.com/codex/auth/). Copy the one-time code from Subpool, continue to OpenAI, and confirm it there. This works on remote and headless deployments without a localhost callback or an extra exposed port. Device-code login must be enabled in ChatGPT security or workspace settings.
 
+Fast mode is controlled per Codex subscription account from the **Accounts** page. Subpool enforces the selected mode, so employees do not need to configure Fast mode in Codex.
+
 After creating an employee API key, configure Codex on each user's machine to route requests through Subpool. Edit the user-level Codex configuration file:
 
 - Linux: `/home/<username>/.codex/config.toml` (or `~/.codex/config.toml`)

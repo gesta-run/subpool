@@ -87,6 +87,33 @@ func TestResponsesWebSocketHTTPBridge(t *testing.T) {
 	}
 }
 
+func TestResponsesWebSocketCodexHTTPBridgePreservesFastRouting(t *testing.T) {
+	server, st, provider, plain := newTestServer(t)
+	st.route.Account.FastModeEnabled = true
+	provider.responses = []*http.Response{sseResponse(http.StatusOK, "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-bridge\",\"model\":\"gpt-test\",\"usage\":{}}}\n\n")}
+	server.WithResponsesWebSocket(true, true, "")
+
+	client, cleanup := dialResponsesWSTestServer(t, server, plain)
+	defer cleanup()
+	writeResponsesWSMessage(t, client, `{"type":"response.create","model":"gpt-test","service_tier":"flex","input":"hello"}`)
+	if event := readResponsesWSMessage(t, client); event["type"] != "response.completed" {
+		t.Fatalf("event = %#v", event)
+	}
+	if len(provider.bodies) != 1 || len(provider.headers) != 1 {
+		t.Fatalf("requests=%d headers=%d", len(provider.bodies), len(provider.headers))
+	}
+	var body map[string]any
+	if err := json.Unmarshal(provider.bodies[0], &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["service_tier"] != "priority" {
+		t.Fatalf("service_tier = %#v", body["service_tier"])
+	}
+	if got := provider.headers[0].Get(codex.RoutingHintHeader); got != "model=gpt-test;tier=priority" {
+		t.Fatalf("routing hint = %q", got)
+	}
+}
+
 type responsesWSRetryProvider struct{ calls atomic.Int32 }
 
 func (p *responsesWSRetryProvider) Responses(context.Context, []byte, http.Header, openaicompat.Credentials) (*http.Response, error) {
@@ -183,12 +210,13 @@ func TestResponsesWebSocketNativeCodex(t *testing.T) {
 	defer upstream.Close()
 
 	server, st, _, plain := newTestServer(t)
+	st.route.Account.FastModeEnabled = true
 	server.WithResponsesWebSocket(true, false, upstream.URL)
 	client, cleanup := dialResponsesWSTestServer(t, server, plain)
 	defer cleanup()
 	defer close(release)
 	writeCtx, cancelWrite := context.WithTimeout(context.Background(), time.Second)
-	err := client.Write(writeCtx, websocket.MessageText, []byte(`{"type":"response.create","model":"gpt-test","stream":true,"input":"hello"}`))
+	err := client.Write(writeCtx, websocket.MessageText, []byte(`{"type":"response.create","model":"gpt-test","stream":true,"service_tier":"flex","input":"hello"}`))
 	cancelWrite()
 	if err != nil {
 		t.Fatal(err)
@@ -209,7 +237,7 @@ func TestResponsesWebSocketNativeCodex(t *testing.T) {
 		}
 		metadata, _ := body["client_metadata"].(map[string]any)
 		installationID, _ := codex.InstallationID(st.route.Account.ID)
-		if body["store"] != false || body["stream"] != nil || metadata["x-codex-installation-id"] != installationID {
+		if body["store"] != false || body["stream"] != nil || body["service_tier"] != "priority" || metadata["x-codex-installation-id"] != installationID {
 			t.Fatalf("unexpected native body: %s", payload)
 		}
 	case <-time.After(time.Second):
@@ -217,11 +245,57 @@ func TestResponsesWebSocketNativeCodex(t *testing.T) {
 	}
 	select {
 	case headers := <-upstreamHeaders:
-		if headers.Get("OpenAI-Beta") == "" || headers.Get("X-Codex-Installation-Id") == "" {
+		if headers.Get("OpenAI-Beta") == "" || headers.Get("X-Codex-Installation-Id") == "" || headers.Get("X-Codex-Routing-Hint") != "model=gpt-test;tier=priority" {
 			t.Fatalf("missing Codex WebSocket headers: %#v", headers)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("native WebSocket was not dialed")
+	}
+	server.CloseResponsesWebSocketsForAccount(st.route.Account.ID)
+	readCtx, cancelRead := context.WithTimeout(context.Background(), time.Second)
+	_, _, err = client.Read(readCtx)
+	cancelRead()
+	if err == nil {
+		t.Fatal("account routing change did not close the WebSocket")
+	}
+}
+
+func TestResponsesWebSocketNativeCodexClosesWhenModelChanges(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.CloseNow()
+		messageType, _, err := conn.Read(r.Context())
+		if err != nil || messageType != websocket.MessageText {
+			return
+		}
+		_ = conn.Write(r.Context(), websocket.MessageText, []byte(`{"type":"response.completed","response":{"id":"resp-native","model":"gpt-first","usage":{}}}`))
+		<-r.Context().Done()
+	}))
+	defer upstream.Close()
+
+	server, _, _, plain := newTestServer(t)
+	server.WithResponsesWebSocket(true, false, upstream.URL)
+	client, cleanup := dialResponsesWSTestServer(t, server, plain)
+	defer cleanup()
+	writeResponsesWSMessage(t, client, `{"type":"response.create","model":"gpt-first","input":"first"}`)
+	if event := readResponsesWSMessage(t, client); event["type"] != "response.completed" {
+		t.Fatalf("first event = %#v", event)
+	}
+
+	writeResponsesWSMessage(t, client, `{"type":"response.create","model":"gpt-second","input":"second"}`)
+	event := readResponsesWSMessage(t, client)
+	errorValue, _ := event["error"].(map[string]any)
+	if event["type"] != "error" || errorValue["code"] != "subpool_websocket_model_changed" {
+		t.Fatalf("event = %#v", event)
+	}
+	readCtx, cancelRead := context.WithTimeout(context.Background(), time.Second)
+	_, _, err := client.Read(readCtx)
+	cancelRead()
+	if err == nil {
+		t.Fatal("model change did not close the downstream WebSocket")
 	}
 }
 

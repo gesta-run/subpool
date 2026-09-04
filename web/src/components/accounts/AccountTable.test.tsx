@@ -31,12 +31,23 @@ function renderTable(account: ProviderAccount) {
     onRefresh={noop}
     onResetLoad={noop}
     onReset={noop}
+    onFastMode={noop}
     onToggle={noop}
     onRemove={noop}
   />)
 }
 
 describe('AccountTable health states', () => {
+  it('shows the account-level Fast mode state', () => {
+    renderTable({ ...baseAccount, fast_mode_enabled: true })
+    expect(screen.getByRole('button', { name: 'Disable Fast mode for Team account' })).toHaveAttribute('aria-pressed', 'true')
+  })
+
+  it('does not offer Fast mode for OpenAI-compatible accounts', () => {
+    renderTable({ ...baseAccount, provider: 'openai_compatible', credential_type: 'api_key' })
+    expect(screen.queryByRole('button', { name: /Fast mode/ })).not.toBeInTheDocument()
+  })
+
   it('shows an active account as degraded while a failed probe is being retried', () => {
     renderTable({
       ...baseAccount,

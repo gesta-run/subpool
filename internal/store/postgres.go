@@ -96,6 +96,7 @@ func (p *Postgres) CreateProviderAccount(ctx context.Context, a domain.ProviderA
 
 func (p *Postgres) ListProviderAccounts(ctx context.Context) ([]domain.ProviderAccount, error) {
 	rows, err := p.pool.Query(ctx, `SELECT a.id,a.provider,a.credential_type,a.display_name,COALESCE(a.email,''),a.credential_version,a.status,
+		a.fast_mode_enabled,
 		(SELECT count(*) FROM api_key_account_bindings b JOIN api_keys k ON k.id=b.api_key_id WHERE b.provider_account_id=a.id AND k.revoked_at IS NULL AND (k.expires_at IS NULL OR k.expires_at>now())),
 		a.quota_snapshot,a.cooldown_until,a.last_success_at,a.last_failure_at,a.health_status,a.last_checked_at,COALESCE(a.last_health_error_code,''),a.consecutive_health_failures,a.next_health_check_at,a.created_at,a.updated_at
 		FROM provider_accounts a ORDER BY a.created_at`)
@@ -107,7 +108,7 @@ func (p *Postgres) ListProviderAccounts(ctx context.Context) ([]domain.ProviderA
 	for rows.Next() {
 		var a domain.ProviderAccount
 		if err = rows.Scan(&a.ID, &a.Provider, &a.CredentialType, &a.DisplayName, &a.Email, &a.CredentialVersion, &a.Status,
-			&a.AssignedAPIKeys, &a.QuotaSnapshot, &a.CooldownUntil, &a.LastSuccessAt, &a.LastFailureAt, &a.HealthStatus, &a.LastCheckedAt, &a.LastHealthErrorCode, &a.ConsecutiveFailures, &a.NextHealthCheckAt, &a.CreatedAt, &a.UpdatedAt); err != nil {
+			&a.FastModeEnabled, &a.AssignedAPIKeys, &a.QuotaSnapshot, &a.CooldownUntil, &a.LastSuccessAt, &a.LastFailureAt, &a.HealthStatus, &a.LastCheckedAt, &a.LastHealthErrorCode, &a.ConsecutiveFailures, &a.NextHealthCheckAt, &a.CreatedAt, &a.UpdatedAt); err != nil {
 			return nil, wrapDB("scan provider account", err)
 		}
 		out = append(out, a)
@@ -117,7 +118,7 @@ func (p *Postgres) ListProviderAccounts(ctx context.Context) ([]domain.ProviderA
 
 func (p *Postgres) ListPoolProviderAccounts(ctx context.Context, poolID string) ([]domain.ProviderAccount, error) {
 	rows, err := p.pool.Query(ctx, `SELECT a.id,a.provider,a.credential_type,a.display_name,COALESCE(a.email,''),a.credential_ciphertext,a.credential_version,a.status,
-		a.health_status,a.quota_snapshot,a.cooldown_until,a.last_success_at,a.last_failure_at,a.created_at,a.updated_at
+		a.fast_mode_enabled,a.health_status,a.quota_snapshot,a.cooldown_until,a.last_success_at,a.last_failure_at,a.created_at,a.updated_at
 		FROM provider_accounts a JOIN pool_accounts pa ON pa.provider_account_id=a.id
 		WHERE pa.pool_id=$1 AND pa.enabled
 		AND (a.status='active' OR (a.status='cooling_down' AND a.cooldown_until<=now()))
@@ -131,7 +132,7 @@ func (p *Postgres) ListPoolProviderAccounts(ctx context.Context, poolID string) 
 	for rows.Next() {
 		var account domain.ProviderAccount
 		if err = rows.Scan(&account.ID, &account.Provider, &account.CredentialType, &account.DisplayName, &account.Email, &account.CredentialCiphertext, &account.CredentialVersion, &account.Status,
-			&account.HealthStatus, &account.QuotaSnapshot, &account.CooldownUntil, &account.LastSuccessAt, &account.LastFailureAt, &account.CreatedAt, &account.UpdatedAt); err != nil {
+			&account.FastModeEnabled, &account.HealthStatus, &account.QuotaSnapshot, &account.CooldownUntil, &account.LastSuccessAt, &account.LastFailureAt, &account.CreatedAt, &account.UpdatedAt); err != nil {
 			return nil, wrapDB("scan pool provider account", err)
 		}
 		accounts = append(accounts, account)
@@ -142,9 +143,9 @@ func (p *Postgres) ListPoolProviderAccounts(ctx context.Context, poolID string) 
 func (p *Postgres) GetProviderAccount(ctx context.Context, id string) (domain.ProviderAccount, error) {
 	var a domain.ProviderAccount
 	err := p.pool.QueryRow(ctx, `SELECT id,provider,credential_type,display_name,COALESCE(email,''),credential_ciphertext,credential_version,status,
-		quota_snapshot,cooldown_until,last_success_at,last_failure_at,health_status,last_checked_at,COALESCE(last_health_error_code,''),consecutive_health_failures,next_health_check_at,created_at,updated_at FROM provider_accounts WHERE id=$1`, id).
+		fast_mode_enabled,quota_snapshot,cooldown_until,last_success_at,last_failure_at,health_status,last_checked_at,COALESCE(last_health_error_code,''),consecutive_health_failures,next_health_check_at,created_at,updated_at FROM provider_accounts WHERE id=$1`, id).
 		Scan(&a.ID, &a.Provider, &a.CredentialType, &a.DisplayName, &a.Email, &a.CredentialCiphertext, &a.CredentialVersion, &a.Status,
-			&a.QuotaSnapshot, &a.CooldownUntil, &a.LastSuccessAt, &a.LastFailureAt, &a.HealthStatus, &a.LastCheckedAt, &a.LastHealthErrorCode, &a.ConsecutiveFailures, &a.NextHealthCheckAt, &a.CreatedAt, &a.UpdatedAt)
+			&a.FastModeEnabled, &a.QuotaSnapshot, &a.CooldownUntil, &a.LastSuccessAt, &a.LastFailureAt, &a.HealthStatus, &a.LastCheckedAt, &a.LastHealthErrorCode, &a.ConsecutiveFailures, &a.NextHealthCheckAt, &a.CreatedAt, &a.UpdatedAt)
 	return a, wrapDB("get provider account", err)
 }
 
@@ -181,10 +182,11 @@ func (p *Postgres) ReleaseProviderResetCreditRefresh(ctx context.Context, id str
 	return wrapMutation("release provider reset credit refresh", tag.RowsAffected(), err)
 }
 
-func (p *Postgres) UpdateProviderAccount(ctx context.Context, account domain.ProviderAccount) error {
-	tag, err := p.pool.Exec(ctx, `UPDATE provider_accounts SET display_name=$2,status=$3,
+func (p *Postgres) UpdateProviderAccount(ctx context.Context, id string, update domain.ProviderAccountUpdate) error {
+	tag, err := p.pool.Exec(ctx, `UPDATE provider_accounts SET
+		display_name=COALESCE($2,display_name),status=COALESCE($3,status),fast_mode_enabled=COALESCE($4,fast_mode_enabled),
 		cooldown_until=CASE WHEN $3='active' THEN NULL ELSE cooldown_until END,updated_at=now() WHERE id=$1`,
-		account.ID, account.DisplayName, account.Status)
+		id, update.DisplayName, update.Status, update.FastModeEnabled)
 	return wrapMutation("update provider account", tag.RowsAffected(), err)
 }
 

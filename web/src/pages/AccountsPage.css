@@ -25,7 +25,7 @@
 .account-table__availability { width: 14%; }
 .account-table__subscription { width: 36%; }
 .account-table__checked { width: 12%; }
-.account-table__actions { width: 126px; }
+.account-table__actions { width: 164px; }
 .account-table th { height: 44px; padding-inline: 18px; color: var(--ink-muted); font-size: 10px; font-weight: 600; letter-spacing: .01em; text-transform: none; }
 .account-table td { height: 106px; padding: 16px 18px; }
 .account-table tbody tr { position: relative; }
@@ -77,6 +77,7 @@
 .row-action-button { width: 34px; height: 34px; flex: 0 0 auto; display: inline-grid; place-items: center; border: 1px solid transparent; border-radius: var(--radius-control); color: var(--ink-muted); background: transparent; transition: color 140ms ease, border-color 140ms ease, background-color 140ms ease, transform 140ms ease; }
 .row-action-button svg { width: 15px; height: 15px; }
 .row-action-button:hover:not(:disabled) { color: var(--ink); border-color: var(--line-strong); background: var(--panel-nested); transform: translateY(-1px); }
+.row-action-button--active { color: var(--acid-deep); border-color: var(--line-strong); background: var(--panel-nested); }
 .row-action-button:active:not(:disabled) { transform: translateY(0); }
 .row-action-button--danger:hover:not(:disabled) { color: oklch(0.82 0.13 25); border-color: oklch(0.55 0.12 25 / .55); background: oklch(0.24 0.04 25); }
 .modal--models { width: min(100%, 680px); }

@@ -46,7 +46,7 @@ export function Modal({ title, description, children, onClose, closeLabel = 'Clo
       >
         <header className="modal__header">
           <div>
-            <p className="eyebrow">{eyebrow}</p>
+            {eyebrow ? <p className="eyebrow">{eyebrow}</p> : null}
             <h2 id="modal-title">{title}</h2>
             {description ? <p>{description}</p> : null}
           </div>

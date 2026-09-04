@@ -181,8 +181,9 @@ func (f *fakeRefresher) RefreshAccount(context.Context, string, int) (domain.Pro
 
 func TestResponsesStreamMetersAndBindsSession(t *testing.T) {
 	server, st, provider, plain := newTestServer(t)
+	st.route.Account.FastModeEnabled = true
 	provider.responses = []*http.Response{sseResponse(http.StatusOK, "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp-1\"}}\n\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-1\",\"usage\":{\"input_tokens\":12,\"input_tokens_details\":{\"cached_tokens\":5},\"output_tokens\":4}}}\n\n")}
-	recorder := serveGateway(t, server, plain, "/v1/responses", `{"model":"gpt-test","stream":true,"input":"hello"}`)
+	recorder := serveGateway(t, server, plain, "/v1/responses", `{"model":"gpt-test","stream":true,"service_tier":"flex","input":"hello"}`)
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status = %d, body=%s", recorder.Code, recorder.Body.String())
 	}
@@ -199,6 +200,12 @@ func TestResponsesStreamMetersAndBindsSession(t *testing.T) {
 	_ = json.Unmarshal(provider.bodies[0], &upstream)
 	if upstream["stream"] != true {
 		t.Fatal("upstream request did not force streaming")
+	}
+	if upstream["service_tier"] != "priority" {
+		t.Fatalf("upstream service_tier = %#v", upstream["service_tier"])
+	}
+	if got := provider.headers[0].Get(codex.RoutingHintHeader); got != "model=gpt-test;tier=priority" {
+		t.Fatalf("routing hint = %q", got)
 	}
 	wantInstallationID, _ := codex.InstallationID("account-1")
 	metadata, _ := upstream["client_metadata"].(map[string]any)
@@ -240,7 +247,7 @@ func TestOpenAICompatibleChatPassesThroughAndMetersUsage(t *testing.T) {
 }
 
 func TestNormalizeCodexRequestConvertsStringInput(t *testing.T) {
-	body, err := normalizeCodexRequest([]byte(`{"model":"gpt-5.6-sol","input":"Reply with OK"}`), "11111111-1111-4111-8111-111111111111")
+	body, err := normalizeCodexRequest([]byte(`{"model":"gpt-5.6-sol","input":"Reply with OK"}`), "11111111-1111-4111-8111-111111111111", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -260,6 +267,31 @@ func TestNormalizeCodexRequestConvertsStringInput(t *testing.T) {
 	}
 	if !request.Stream || request.Store || len(request.Input) != 1 || request.Input[0].Role != "user" || len(request.Input[0].Content) != 1 || request.Input[0].Content[0].Type != "input_text" || request.Input[0].Content[0].Text != "Reply with OK" {
 		t.Fatalf("normalized request = %#v", request)
+	}
+}
+
+func TestNormalizeCodexRequestEnforcesAccountFastMode(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		enabled  bool
+		wantTier string
+	}{
+		{name: "enabled", enabled: true, wantTier: "priority"},
+		{name: "disabled", enabled: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			body, err := normalizeCodexRequest([]byte(`{"model":"gpt-test","service_tier":"flex","input":"hello"}`), "11111111-1111-4111-8111-111111111111", test.enabled)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var request map[string]any
+			if err = json.Unmarshal(body, &request); err != nil {
+				t.Fatal(err)
+			}
+			if got, _ := request["service_tier"].(string); got != test.wantTier {
+				t.Fatalf("service_tier = %#v", request["service_tier"])
+			}
+		})
 	}
 }
 
