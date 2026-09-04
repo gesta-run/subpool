@@ -35,6 +35,22 @@ func TestClientResponses(t *testing.T) {
 	resp.Body.Close()
 }
 
+func TestSetRoutingHint(t *testing.T) {
+	headers := http.Header{"x-codex-routing-hint": {"spoofed"}}
+	SetRoutingHint(headers, "gpt-5.6-sol", true)
+	if got := headers.Get(RoutingHintHeader); got != "model=gpt-5.6-sol;tier=priority" {
+		t.Fatalf("routing hint = %q", got)
+	}
+	SetRoutingHint(headers, "gpt-5.6-sol", false)
+	if got := headers.Get(RoutingHintHeader); got != "model=gpt-5.6-sol" {
+		t.Fatalf("standard routing hint = %q", got)
+	}
+	SetRoutingHint(headers, "invalid;model", false)
+	if got := headers.Get(RoutingHintHeader); got != "" {
+		t.Fatalf("invalid model routing hint = %q", got)
+	}
+}
+
 func TestClientUsage(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/usage" {

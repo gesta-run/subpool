@@ -188,14 +188,14 @@ func (p *Postgres) ResolveAPIKey(ctx context.Context, digest []byte) (domain.Key
 	var route domain.KeyRoute
 	err := p.pool.QueryRow(ctx, `SELECT k.id,k.pool_id,k.employee_name,k.key_hint,k.scopes,k.rate_limit,k.expires_at,k.revoked_at,k.last_used_at,k.created_at,
 		p.id,p.name,p.provider,p.created_at,p.updated_at,
-		a.id,a.provider,a.credential_type,a.display_name,a.credential_ciphertext,a.credential_version,a.status,a.health_status,a.quota_snapshot,a.cooldown_until,a.last_success_at,a.last_failure_at,a.created_at,a.updated_at,
+		a.id,a.provider,a.credential_type,a.display_name,a.credential_ciphertext,a.credential_version,a.status,a.fast_mode_enabled,a.health_status,a.quota_snapshot,a.cooldown_until,a.last_success_at,a.last_failure_at,a.created_at,a.updated_at,
 		pa.enabled
 		FROM api_keys k JOIN pools p ON p.id=k.pool_id JOIN api_key_account_bindings b ON b.api_key_id=k.id JOIN provider_accounts a ON a.id=b.provider_account_id
 		JOIN pool_accounts pa ON pa.pool_id=p.id AND pa.provider_account_id=a.id
 		WHERE k.key_hmac=$1 AND k.revoked_at IS NULL AND (k.expires_at IS NULL OR k.expires_at>now())`, digest).Scan(
 		&route.Key.ID, &route.Key.PoolID, &route.Key.EmployeeName, &route.Key.KeyHint, &route.Key.Scopes, &route.Key.RateLimit, &route.Key.ExpiresAt, &route.Key.RevokedAt, &route.Key.LastUsedAt, &route.Key.CreatedAt,
 		&route.Pool.ID, &route.Pool.Name, &route.Pool.Provider, &route.Pool.CreatedAt, &route.Pool.UpdatedAt,
-		&route.Account.ID, &route.Account.Provider, &route.Account.CredentialType, &route.Account.DisplayName, &route.Account.CredentialCiphertext, &route.Account.CredentialVersion, &route.Account.Status, &route.Account.HealthStatus, &route.Account.QuotaSnapshot, &route.Account.CooldownUntil, &route.Account.LastSuccessAt, &route.Account.LastFailureAt, &route.Account.CreatedAt, &route.Account.UpdatedAt,
+		&route.Account.ID, &route.Account.Provider, &route.Account.CredentialType, &route.Account.DisplayName, &route.Account.CredentialCiphertext, &route.Account.CredentialVersion, &route.Account.Status, &route.Account.FastModeEnabled, &route.Account.HealthStatus, &route.Account.QuotaSnapshot, &route.Account.CooldownUntil, &route.Account.LastSuccessAt, &route.Account.LastFailureAt, &route.Account.CreatedAt, &route.Account.UpdatedAt,
 		&route.MembershipEnabled)
 	return route, wrapDB("resolve API key", err)
 }
@@ -204,7 +204,7 @@ func (p *Postgres) ResolvePinnedAPIKey(ctx context.Context, digest []byte, poolI
 	var route domain.KeyRoute
 	err := p.pool.QueryRow(ctx, `SELECT k.id,k.pool_id,k.employee_name,k.key_hint,k.scopes,k.rate_limit,k.expires_at,k.revoked_at,k.last_used_at,k.created_at,
 		p.id,p.name,p.provider,p.created_at,p.updated_at,
-		a.id,a.provider,a.credential_type,a.display_name,a.credential_ciphertext,a.credential_version,a.status,a.health_status,a.quota_snapshot,a.cooldown_until,a.last_success_at,a.last_failure_at,a.created_at,a.updated_at,
+		a.id,a.provider,a.credential_type,a.display_name,a.credential_ciphertext,a.credential_version,a.status,a.fast_mode_enabled,a.health_status,a.quota_snapshot,a.cooldown_until,a.last_success_at,a.last_failure_at,a.created_at,a.updated_at,
 		pa.enabled
 		FROM api_keys k JOIN pools p ON p.id=k.pool_id
 		JOIN pool_accounts pa ON pa.pool_id=p.id AND pa.provider_account_id=$3
@@ -212,7 +212,7 @@ func (p *Postgres) ResolvePinnedAPIKey(ctx context.Context, digest []byte, poolI
 		WHERE k.key_hmac=$1 AND k.pool_id=$2 AND k.revoked_at IS NULL AND (k.expires_at IS NULL OR k.expires_at>now())`, digest, poolID, accountID).Scan(
 		&route.Key.ID, &route.Key.PoolID, &route.Key.EmployeeName, &route.Key.KeyHint, &route.Key.Scopes, &route.Key.RateLimit, &route.Key.ExpiresAt, &route.Key.RevokedAt, &route.Key.LastUsedAt, &route.Key.CreatedAt,
 		&route.Pool.ID, &route.Pool.Name, &route.Pool.Provider, &route.Pool.CreatedAt, &route.Pool.UpdatedAt,
-		&route.Account.ID, &route.Account.Provider, &route.Account.CredentialType, &route.Account.DisplayName, &route.Account.CredentialCiphertext, &route.Account.CredentialVersion, &route.Account.Status, &route.Account.HealthStatus, &route.Account.QuotaSnapshot, &route.Account.CooldownUntil, &route.Account.LastSuccessAt, &route.Account.LastFailureAt, &route.Account.CreatedAt, &route.Account.UpdatedAt,
+		&route.Account.ID, &route.Account.Provider, &route.Account.CredentialType, &route.Account.DisplayName, &route.Account.CredentialCiphertext, &route.Account.CredentialVersion, &route.Account.Status, &route.Account.FastModeEnabled, &route.Account.HealthStatus, &route.Account.QuotaSnapshot, &route.Account.CooldownUntil, &route.Account.LastSuccessAt, &route.Account.LastFailureAt, &route.Account.CreatedAt, &route.Account.UpdatedAt,
 		&route.MembershipEnabled)
 	err = wrapDB("resolve pinned API key", err)
 	if !errors.Is(err, ErrNotFound) {
@@ -233,12 +233,12 @@ func (p *Postgres) ResolvePinnedAPIKey(ctx context.Context, digest []byte, poolI
 func (p *Postgres) ResolveSessionAccount(ctx context.Context, keyID string, sessionHash []byte) (domain.ProviderAccount, error) {
 	var account domain.ProviderAccount
 	err := p.pool.QueryRow(ctx, `SELECT a.id,a.provider,a.credential_type,a.display_name,a.credential_ciphertext,a.credential_version,a.status,
-		a.health_status,a.quota_snapshot,a.cooldown_until,a.last_success_at,a.last_failure_at,a.created_at,a.updated_at
+		a.fast_mode_enabled,a.health_status,a.quota_snapshot,a.cooldown_until,a.last_success_at,a.last_failure_at,a.created_at,a.updated_at
 		FROM session_bindings s JOIN provider_accounts a ON a.id=s.provider_account_id
 		JOIN pool_accounts pa ON pa.pool_id=s.pool_id AND pa.provider_account_id=a.id AND pa.enabled
 		WHERE s.api_key_id=$1 AND s.session_hash=$2 AND s.expires_at>now()`, keyID, sessionHash).Scan(
 		&account.ID, &account.Provider, &account.CredentialType, &account.DisplayName, &account.CredentialCiphertext, &account.CredentialVersion, &account.Status,
-		&account.HealthStatus, &account.QuotaSnapshot, &account.CooldownUntil, &account.LastSuccessAt, &account.LastFailureAt, &account.CreatedAt, &account.UpdatedAt)
+		&account.FastModeEnabled, &account.HealthStatus, &account.QuotaSnapshot, &account.CooldownUntil, &account.LastSuccessAt, &account.LastFailureAt, &account.CreatedAt, &account.UpdatedAt)
 	return account, wrapDB("resolve session account", err)
 }
 
@@ -267,8 +267,8 @@ func (p *Postgres) ReassignAPIKey(ctx context.Context, keyID, poolID string, exc
 		return domain.ProviderAccount{}, wrapDB("reassign API key", err)
 	}
 	var account domain.ProviderAccount
-	err = tx.QueryRow(ctx, `SELECT id,provider,credential_type,display_name,credential_ciphertext,credential_version,status,health_status,quota_snapshot,cooldown_until,last_success_at,last_failure_at,created_at,updated_at FROM provider_accounts WHERE id=$1`, id).Scan(
-		&account.ID, &account.Provider, &account.CredentialType, &account.DisplayName, &account.CredentialCiphertext, &account.CredentialVersion, &account.Status, &account.HealthStatus, &account.QuotaSnapshot, &account.CooldownUntil, &account.LastSuccessAt, &account.LastFailureAt, &account.CreatedAt, &account.UpdatedAt)
+	err = tx.QueryRow(ctx, `SELECT id,provider,credential_type,display_name,credential_ciphertext,credential_version,status,fast_mode_enabled,health_status,quota_snapshot,cooldown_until,last_success_at,last_failure_at,created_at,updated_at FROM provider_accounts WHERE id=$1`, id).Scan(
+		&account.ID, &account.Provider, &account.CredentialType, &account.DisplayName, &account.CredentialCiphertext, &account.CredentialVersion, &account.Status, &account.FastModeEnabled, &account.HealthStatus, &account.QuotaSnapshot, &account.CooldownUntil, &account.LastSuccessAt, &account.LastFailureAt, &account.CreatedAt, &account.UpdatedAt)
 	if err != nil {
 		return domain.ProviderAccount{}, wrapDB("read reassigned account", err)
 	}

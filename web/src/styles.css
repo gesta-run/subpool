@@ -402,9 +402,18 @@ td small { color: var(--ink-muted); }
 
 .inline-alert { color: oklch(0.82 0.12 22); border-color: oklch(0.55 0.12 22 / 0.55); border-radius: var(--radius-nested); background: oklch(0.24 0.045 22); }
 .inline-alert--warning { color: oklch(0.9 0.12 78); border-color: oklch(0.6 0.12 78 / 0.5); background: oklch(0.24 0.035 78); }
-.modal-layer { background: oklch(0.05 0 0 / 0.78); backdrop-filter: blur(6px); }
+.modal-layer { background: oklch(0.05 0 0 / 0.72); backdrop-filter: none; }
 .modal { border-color: var(--line-strong); border-radius: var(--radius-overlay); background: var(--panel); box-shadow: 0 24px 64px rgb(0 0 0 / 0.52); }
 .modal__header { border-color: var(--line); }
+.modal--confirm { width: min(100%, 512px); border-color: var(--line); border-radius: 10px; background: var(--paper); box-shadow: 0 16px 40px rgb(0 0 0 / 0.42); }
+.modal--confirm .modal__header { padding: 24px 24px 0; }
+.modal--confirm .modal__header h2 { max-width: none; margin: 0; font-size: 18px; font-weight: 600; line-height: 1.35; letter-spacing: -0.01em; }
+.modal--confirm .modal__header p:last-child { max-width: none; margin-top: 6px; color: var(--ink-muted); font-size: 14px; line-height: 1.5; }
+.modal--confirm .modal__body { padding: 0 24px 24px; }
+.confirm-dialog__actions { margin-top: 16px; padding: 0; gap: 8px; border: 0; }
+.modal--confirm .button { min-height: 36px; font-size: 14px; font-weight: 600; }
+.modal--confirm .button--secondary { background: transparent; }
+.modal--confirm .button--secondary:hover:not(:disabled) { background: var(--panel-nested); }
 .field label,
 .account-picker legend { color: var(--ink); }
 .field input,
@@ -505,6 +514,10 @@ td small { color: var(--ink-muted); }
   .pool-row { grid-template-columns: 22px minmax(170px, 1fr) 36px; }
   .pool-row__main { grid-column: 2; }
   .pool-row__meta { grid-column: 2 / 4; }
+  .modal--confirm .modal__header { padding: 24px 20px 0; }
+  .modal--confirm .modal__body { padding: 0 20px 24px; }
+  .confirm-dialog__actions { flex-direction: column-reverse; }
+  .confirm-dialog__actions .button { width: 100%; min-height: 44px; }
 }
 
 .brand__logo {

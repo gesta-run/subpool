@@ -127,7 +127,33 @@ describe('Subpool console', () => {
 
     await waitFor(() => expect(screen.getByRole('button', { name: 'Enable Primary Codex' })).toBeInTheDocument())
     const update = vi.mocked(fetch).mock.calls.find(([path, init]) => String(path).endsWith('/account-1') && init?.method === 'PUT')
-    expect(JSON.parse(String(update?.[1]?.body))).toEqual({ display_name: 'Primary Codex', status: 'disabled' })
+    expect(JSON.parse(String(update?.[1]?.body))).toEqual({ status: 'disabled' })
+  })
+
+  it('updates Fast mode without overwriting a cooling-down account status', async () => {
+    let fastModeEnabled = false
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const path = String(input)
+      if (path === '/api/v1/provider-accounts/account-1' && init?.method === 'PUT') {
+        fastModeEnabled = true
+        return json({ id: 'account-1', status: 'cooling_down', fast_mode_enabled: fastModeEnabled })
+      }
+      if (path === '/api/v1/provider-accounts') return json({ data: [{
+        id: 'account-1', display_name: 'Primary Codex', provider: 'codex', credential_type: 'subscription_oauth',
+        status: 'cooling_down', fast_mode_enabled: fastModeEnabled, assigned_api_keys: 1,
+      }] })
+      if (path === '/api/v1/provider-accounts/account-1/reset-credits') return json({ reset_credits: null })
+      throw new Error(`Unexpected request: ${path}`)
+    })
+
+    render(<AccountsPage />)
+    const user = userEvent.setup()
+    await user.click(await screen.findByRole('button', { name: 'Enable Fast mode for Primary Codex' }))
+    await user.click((await screen.findAllByRole('button', { name: 'Enable Fast mode' })).at(-1)!)
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Disable Fast mode for Primary Codex' })).toBeInTheDocument())
+    const update = vi.mocked(fetch).mock.calls.find(([path, init]) => String(path).endsWith('/account-1') && init?.method === 'PUT')
+    expect(JSON.parse(String(update?.[1]?.body))).toEqual({ fast_mode_enabled: true })
   })
 
   it('keeps focus in the account name field while typing', async () => {

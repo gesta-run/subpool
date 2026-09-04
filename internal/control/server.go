@@ -32,18 +32,19 @@ type ResetCredits interface {
 	ConsumeResetCredit(context.Context, codex.Credentials, string, string) (codex.ConsumeResetCreditResult, error)
 }
 type Server struct {
-	store      store.Store
-	sessions   *auth.AdminSessions
-	keys       *auth.APIKeys
-	cipher     Cipher
-	deviceAuth DeviceAuth
-	resets     ResetCredits
-	catalog    *catalog.Service
-	refresher  credential.AccountRefresher
-	sources    *auth.SourceResolver
-	health     *providerhealth.Checker
-	loginMu    sync.Mutex
-	logins     map[string]*deviceLoginAttempt
+	store                  store.Store
+	sessions               *auth.AdminSessions
+	keys                   *auth.APIKeys
+	cipher                 Cipher
+	deviceAuth             DeviceAuth
+	resets                 ResetCredits
+	catalog                *catalog.Service
+	refresher              credential.AccountRefresher
+	sources                *auth.SourceResolver
+	health                 *providerhealth.Checker
+	onAccountRoutingChange func(string)
+	loginMu                sync.Mutex
+	logins                 map[string]*deviceLoginAttempt
 }
 
 func New(st store.Store, sessions *auth.AdminSessions, keys *auth.APIKeys, cipher Cipher, deviceAuth DeviceAuth, refresher credential.AccountRefresher, sources *auth.SourceResolver, healthChecker ...*providerhealth.Checker) *Server {
@@ -61,6 +62,11 @@ func (s *Server) WithResetCredits(resets ResetCredits) *Server {
 
 func (s *Server) WithModelProviders(codexModels catalog.CodexModels, compatibleModels catalog.CompatibleModels) *Server {
 	s.catalog = catalog.New(s.cipher, s.refresher, codexModels, compatibleModels)
+	return s
+}
+
+func (s *Server) WithAccountRoutingChange(callback func(string)) *Server {
+	s.onAccountRoutingChange = callback
 	return s
 }
 
@@ -286,28 +292,48 @@ func (s *Server) decryptCredentials(account domain.ProviderAccount) (codex.Crede
 }
 
 func (s *Server) updateProviderAccount(w http.ResponseWriter, r *http.Request) {
-	var request struct {
-		DisplayName string `json:"display_name"`
-		Status      string `json:"status"`
-	}
+	var request domain.ProviderAccountUpdate
 	if !decode(w, r, &request) {
 		return
 	}
-	request.DisplayName = strings.TrimSpace(request.DisplayName)
-	if request.DisplayName == "" {
-		writeError(w, http.StatusBadRequest, "display_name is required")
-		return
+	if request.DisplayName != nil {
+		displayName := strings.TrimSpace(*request.DisplayName)
+		if displayName == "" {
+			writeError(w, http.StatusBadRequest, "display_name is required")
+			return
+		}
+		request.DisplayName = &displayName
 	}
-	if request.Status != domain.AccountActive && request.Status != domain.AccountDisabled {
+	if request.Status != nil && *request.Status != domain.AccountActive && *request.Status != domain.AccountDisabled {
 		writeError(w, http.StatusBadRequest, "status must be active or disabled")
 		return
 	}
-	account := domain.ProviderAccount{ID: r.PathValue("id"), DisplayName: request.DisplayName, Status: request.Status}
-	if err := s.store.UpdateProviderAccount(r.Context(), account); err != nil {
+	account, err := s.store.GetProviderAccount(r.Context(), r.PathValue("id"))
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	if request.FastModeEnabled != nil {
+		if *request.FastModeEnabled && (account.Provider != domain.ProviderCodex || account.CredentialType != domain.CredentialSubscription) {
+			writeError(w, http.StatusBadRequest, "fast mode is only available for Codex subscription accounts")
+			return
+		}
+		account.FastModeEnabled = *request.FastModeEnabled
+	}
+	if request.DisplayName != nil {
+		account.DisplayName = *request.DisplayName
+	}
+	if request.Status != nil {
+		account.Status = *request.Status
+	}
+	if err := s.store.UpdateProviderAccount(r.Context(), account.ID, request); err != nil {
 		writeStoreError(w, err)
 		return
 	}
 	s.audit(r.Context(), "provider_account.update", "provider_account", account.ID, "success")
+	if request.FastModeEnabled != nil && s.onAccountRoutingChange != nil {
+		s.onAccountRoutingChange(account.ID)
+	}
 	writeJSON(w, http.StatusOK, account)
 }
 

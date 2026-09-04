@@ -15,7 +15,7 @@ import type { ProviderAccount } from '../types'
 import './AccountsPage.css'
 
 type PendingAction =
-  | { type: 'disable' | 'remove'; account: ProviderAccount }
+  | { type: 'disable' | 'remove' | 'fast'; account: ProviderAccount }
   | { type: 'reset'; account: ProviderAccount; creditID?: string }
 
 function AccountSummary({ accounts }: { accounts: ProviderAccount[] }) {
@@ -47,11 +47,17 @@ export function AccountsPage() {
     else setPending({ type: 'disable', account })
   }
 
+  function toggleFastMode(account: ProviderAccount) {
+    if (account.fast_mode_enabled) void mutations.updateFastMode(account, false)
+    else setPending({ type: 'fast', account })
+  }
+
   function confirmPending() {
     if (!pending) return
     setPending(null)
     if (pending.type === 'remove') void mutations.remove(pending.account)
     else if (pending.type === 'reset') void resets.consume(pending.account, pending.creditID)
+    else if (pending.type === 'fast') void mutations.updateFastMode(pending.account, true)
     else void mutations.updateStatus(pending.account, 'disabled')
   }
 
@@ -66,15 +72,16 @@ export function AccountsPage() {
         accounts={list.items} busyID={mutations.busyID} resetBusyID={resets.busyID} resetStates={resets.states}
         onModels={models.open} onRefresh={(account) => void mutations.refresh(account.id, () => resets.load(account.id, true))}
         onResetLoad={(account) => void resets.load(account.id, true)} onReset={(account, creditID) => setPending({ type: 'reset', account, creditID })}
-        onToggle={toggle} onRemove={(account) => setPending({ type: 'remove', account })}
+        onFastMode={toggleFastMode} onToggle={toggle} onRemove={(account) => setPending({ type: 'remove', account })}
       />}
     </>}
     {connect.open ? <ConnectAccountDialog apiKey={connect.apiKey} baseURL={connect.baseURL} busy={connect.busy} displayName={connect.displayName} deviceLogin={connect.deviceLogin} error={connect.error} fieldErrors={connect.fieldErrors} provider={connect.provider} copyStatus={connect.copyStatus} onAPIKeyChange={connect.setAPIKey} onBaseURLChange={connect.setBaseURL} onClose={connect.close} onContinueToOpenAI={() => void connect.continueToOpenAI()} onDisplayNameChange={connect.setDisplayName} onFieldErrorsChange={connect.setFieldErrors} onProviderChange={connect.changeProvider} onSubmit={() => void connect.submit()} /> : null}
     {models.account ? <ModelsDialog account={models.account} models={models.models} loading={models.loading} error={models.error} onClose={models.close} onReload={() => void models.reload()} /> : null}
     {pending ? <ConfirmDialog
-      title={pending.type === 'remove' ? `Remove ${pending.account.display_name}?` : pending.type === 'reset' ? `Reset ${pending.account.display_name} quota?` : `Disable ${pending.account.display_name}?`}
-      description={pending.type === 'remove' ? 'This permanently deletes its stored credentials and removes it from every pool.' : pending.type === 'reset' ? 'This consumes one earned Codex reset credit. The action cannot be undone.' : 'Existing API keys will stop routing requests to this account.'}
-      confirmLabel={pending.type === 'remove' ? 'Remove account' : pending.type === 'reset' ? 'Use full reset' : 'Disable account'} onCancel={() => setPending(null)} onConfirm={confirmPending}
+      title={pending.type === 'remove' ? `Remove ${pending.account.display_name}?` : pending.type === 'reset' ? `Reset ${pending.account.display_name} quota?` : pending.type === 'fast' ? `Enable Fast mode for ${pending.account.display_name}?` : `Disable ${pending.account.display_name}?`}
+      description={pending.type === 'remove' ? 'This permanently deletes its stored credentials and removes it from every pool.' : pending.type === 'reset' ? 'This consumes one earned Codex reset credit. The action cannot be undone.' : pending.type === 'fast' ? 'Use OpenAI’s priority tier for every request routed to this account. Subscription credits may be consumed faster.' : 'Existing API keys will stop routing requests to this account.'}
+      variant={pending.type === 'fast' ? 'default' : 'danger'}
+      confirmLabel={pending.type === 'remove' ? 'Remove account' : pending.type === 'reset' ? 'Use full reset' : pending.type === 'fast' ? 'Enable Fast mode' : 'Disable account'} onCancel={() => setPending(null)} onConfirm={confirmPending}
     /> : null}
   </section>
 }

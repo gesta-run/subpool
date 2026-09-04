@@ -12,6 +12,7 @@ export interface ProviderAccount {
   display_name: string
   email?: string
   status: AccountStatus
+  fast_mode_enabled?: boolean
   health_status?: 'unknown' | 'healthy' | 'unhealthy'
   last_checked_at?: string | null
   last_health_error_code?: string | null

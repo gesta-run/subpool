@@ -31,6 +31,7 @@ type ProviderAccount struct {
 	CredentialCiphertext []byte          `json:"-"`
 	CredentialVersion    int             `json:"credential_version"`
 	Status               string          `json:"status"`
+	FastModeEnabled      bool            `json:"fast_mode_enabled"`
 	HealthStatus         string          `json:"health_status"`
 	LastHealthErrorCode  string          `json:"last_health_error_code,omitempty"`
 	ConsecutiveFailures  int             `json:"consecutive_health_failures"`
@@ -43,6 +44,12 @@ type ProviderAccount struct {
 	LastFailureAt        *time.Time      `json:"last_failure_at,omitempty"`
 	CreatedAt            time.Time       `json:"created_at"`
 	UpdatedAt            time.Time       `json:"updated_at"`
+}
+
+type ProviderAccountUpdate struct {
+	DisplayName     *string `json:"display_name,omitempty"`
+	Status          *string `json:"status,omitempty"`
+	FastModeEnabled *bool   `json:"fast_mode_enabled,omitempty"`
 }
 
 type ProviderModel struct {

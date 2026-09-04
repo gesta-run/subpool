@@ -103,6 +103,19 @@ func (f *controlStore) AddPoolAccount(_ context.Context, membership domain.PoolA
 func (f *controlStore) ListProviderAccounts(context.Context) ([]domain.ProviderAccount, error) {
 	return f.accounts, nil
 }
+func (f *controlStore) UpdateProviderAccount(_ context.Context, id string, update domain.ProviderAccountUpdate) error {
+	f.account.ID = id
+	if update.DisplayName != nil {
+		f.account.DisplayName = *update.DisplayName
+	}
+	if update.Status != nil {
+		f.account.Status = *update.Status
+	}
+	if update.FastModeEnabled != nil {
+		f.account.FastModeEnabled = *update.FastModeEnabled
+	}
+	return nil
+}
 func (f *controlStore) UpdateProviderStatus(_ context.Context, _ string, status string, cooldown *time.Time) error {
 	f.status = status
 	f.cooldown = cooldown
@@ -552,6 +565,48 @@ func TestDeleteProviderAccount(t *testing.T) {
 	}
 	if len(st.audits) != 1 || st.audits[0].Action != "provider_account.delete" {
 		t.Fatalf("audits = %#v", st.audits)
+	}
+}
+
+func TestUpdateProviderAccountFastModePreservesCoolingDownStatus(t *testing.T) {
+	server, st, _ := newControlServer(t)
+	st.account = domain.ProviderAccount{
+		ID:             "account-1",
+		Provider:       domain.ProviderCodex,
+		CredentialType: domain.CredentialSubscription,
+		DisplayName:    "Team account",
+		Status:         domain.AccountCoolingDown,
+	}
+	changedAccountID := ""
+	server.WithAccountRoutingChange(func(accountID string) { changedAccountID = accountID })
+	mux := http.NewServeMux()
+	server.Register(mux)
+	request := httptest.NewRequest(http.MethodPut, "/api/v1/provider-accounts/account-1", strings.NewReader(`{"fast_mode_enabled":true}`))
+	request.AddCookie(loginCookie(t, mux))
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK || !st.account.FastModeEnabled || st.account.Status != domain.AccountCoolingDown || changedAccountID != "account-1" {
+		t.Fatalf("status=%d account=%#v changed=%q body=%s", recorder.Code, st.account, changedAccountID, recorder.Body.String())
+	}
+}
+
+func TestUpdateProviderAccountRejectsFastModeForAPIKeyAccount(t *testing.T) {
+	server, st, _ := newControlServer(t)
+	st.account = domain.ProviderAccount{
+		ID:             "account-1",
+		Provider:       domain.ProviderOpenAICompatible,
+		CredentialType: domain.CredentialAPIKey,
+		DisplayName:    "API account",
+		Status:         domain.AccountActive,
+	}
+	mux := http.NewServeMux()
+	server.Register(mux)
+	request := httptest.NewRequest(http.MethodPut, "/api/v1/provider-accounts/account-1", strings.NewReader(`{"fast_mode_enabled":true}`))
+	request.AddCookie(loginCookie(t, mux))
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusBadRequest || st.account.FastModeEnabled {
+		t.Fatalf("status=%d account=%#v body=%s", recorder.Code, st.account, recorder.Body.String())
 	}
 }
 

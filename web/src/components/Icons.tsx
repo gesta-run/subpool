@@ -67,6 +67,9 @@ export const CheckIcon = (props: IconProps) => (
 export const PowerIcon = (props: IconProps) => (
   <Icon {...props}><path d="M12 3v9" /><path d="M7.1 5.7a8 8 0 1 0 9.8 0" /></Icon>
 )
+export const FastIcon = (props: IconProps) => (
+  <Icon {...props}><path d="m13 2-8 12h7l-1 8 8-12h-7l1-8Z" /></Icon>
+)
 export const TrashIcon = (props: IconProps) => (
   <Icon {...props}><path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5" /></Icon>
 )

@@ -108,6 +108,7 @@ type requestMeta struct {
 
 type upstreamRequest struct {
 	kind      string
+	model     string
 	body      []byte
 	codexBody []byte
 }
@@ -122,7 +123,7 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	compatibleBody := forceProviderStream(body)
-	resp, ok := s.call(w, r, route, upstreamRequest{kind: "responses", body: compatibleBody, codexBody: body}, meta.PreviousResponseID)
+	resp, ok := s.call(w, r, route, upstreamRequest{kind: "responses", model: meta.Model, body: compatibleBody, codexBody: body}, meta.PreviousResponseID)
 	if !ok {
 		return
 	}
@@ -155,7 +156,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		writeOpenAIError(w, http.StatusBadRequest, err.Error(), "invalid_request_error")
 		return
 	}
-	resp, ok := s.call(w, r, route, upstreamRequest{kind: "chat_completions", body: body, codexBody: responseBody}, "")
+	resp, ok := s.call(w, r, route, upstreamRequest{kind: "chat_completions", model: meta.Model, body: body, codexBody: responseBody}, "")
 	if !ok {
 		return
 	}
@@ -255,15 +256,15 @@ func readRequest(w http.ResponseWriter, r *http.Request) ([]byte, requestMeta, b
 	return body, meta, true
 }
 
-func normalizeCodexRequest(body []byte, installationID string) ([]byte, error) {
-	return normalizeCodexPayload(body, installationID, false)
+func normalizeCodexRequest(body []byte, installationID string, fastMode bool) ([]byte, error) {
+	return normalizeCodexPayload(body, installationID, fastMode, false)
 }
 
-func normalizeCodexWebSocketRequest(body []byte, installationID string) ([]byte, error) {
-	return normalizeCodexPayload(body, installationID, true)
+func normalizeCodexWebSocketRequest(body []byte, installationID string, fastMode bool) ([]byte, error) {
+	return normalizeCodexPayload(body, installationID, fastMode, true)
 }
 
-func normalizeCodexPayload(body []byte, installationID string, webSocket bool) ([]byte, error) {
+func normalizeCodexPayload(body []byte, installationID string, fastMode, webSocket bool) ([]byte, error) {
 	var value map[string]any
 	if err := json.Unmarshal(body, &value); err != nil {
 		return nil, fmt.Errorf("decode Codex request: %w", err)
@@ -274,6 +275,11 @@ func normalizeCodexPayload(body []byte, installationID string, webSocket bool) (
 		value["stream"] = true
 	}
 	value["store"] = false
+	if fastMode {
+		value["service_tier"] = "priority"
+	} else {
+		delete(value, "service_tier")
+	}
 	for _, unsupported := range []string{"temperature", "top_p", "logprobs", "top_logprobs"} {
 		delete(value, unsupported)
 	}
@@ -539,12 +545,14 @@ func (s *Server) providerAccountResponse(ctx context.Context, request upstreamRe
 			err = identityErr
 			break
 		}
-		codexBody, normalizeErr := normalizeCodexRequest(request.codexBody, installationID)
+		codexBody, normalizeErr := normalizeCodexRequest(request.codexBody, installationID, account.FastModeEnabled)
 		if normalizeErr != nil {
 			err = normalizeErr
 			break
 		}
-		resp, err = s.codex.Responses(ctx, codexBody, codex.DeviceIdentityHeaders(header, installationID), codexCredentials)
+		upstreamHeaders := codex.DeviceIdentityHeaders(header, installationID)
+		codex.SetRoutingHint(upstreamHeaders, request.model, account.FastModeEnabled)
+		resp, err = s.codex.Responses(ctx, codexBody, upstreamHeaders, codexCredentials)
 		responseFormat = "responses"
 	case domain.ProviderOpenAICompatible:
 		if s.compatible == nil {

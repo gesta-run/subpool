@@ -4,16 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/coder/websocket"
-	"github.com/gesta-run/subpool/internal/auth"
 	"github.com/gesta-run/subpool/internal/domain"
 	"github.com/gesta-run/subpool/internal/provider/codex"
 	"github.com/gesta-run/subpool/internal/store"
@@ -33,41 +30,21 @@ const (
 	responsesWSDialTimeout           = 10 * time.Second
 )
 
-type responsesWSHub struct {
-	server          *Server
-	enabled         bool
-	forceHTTPBridge bool
-	codexUpstream   string
-
-	mu                sync.Mutex
-	sessions          map[*responsesWSSession]struct{}
-	connections       map[string]int
-	accountTurns      map[string]int
-	activeConnections int
-	closing           bool
-
-	connectionsTotal  atomic.Int64
-	connectionsReject atomic.Int64
-	turnsTotal        atomic.Int64
-	turnsRejected     atomic.Int64
-	upstreamDials     atomic.Int64
-	upstreamFailures  atomic.Int64
-}
-
 type responsesWSSession struct {
-	hub        *responsesWSHub
-	conn       *websocket.Conn
-	ctx        context.Context
-	cancel     context.CancelFunc
-	keyDigest  []byte
-	keyID      string
-	poolID     string
-	headers    http.Header
-	account    domain.ProviderAccount
-	upstream   *websocket.Conn
-	native     bool
-	pinned     bool
-	lastActive atomic.Int64
+	hub           *responsesWSHub
+	conn          *websocket.Conn
+	ctx           context.Context
+	cancel        context.CancelFunc
+	keyDigest     []byte
+	keyID         string
+	poolID        string
+	headers       http.Header
+	account       domain.ProviderAccount
+	upstream      *websocket.Conn
+	upstreamModel string
+	native        bool
+	pinned        bool
+	lastActive    atomic.Int64
 
 	mu        sync.Mutex
 	writeMu   sync.Mutex
@@ -110,167 +87,6 @@ type responsesWSEvent struct {
 	Type     string `json:"type"`
 	StreamID string `json:"stream_id"`
 }
-
-func newResponsesWSHub(server *Server) *responsesWSHub {
-	return &responsesWSHub{
-		server:       server,
-		sessions:     make(map[*responsesWSSession]struct{}),
-		connections:  make(map[string]int),
-		accountTurns: make(map[string]int),
-	}
-}
-
-func (h *responsesWSHub) configure(enabled, forceHTTPBridge bool, codexUpstream string) {
-	h.enabled = enabled
-	h.forceHTTPBridge = forceHTTPBridge
-	h.codexUpstream = strings.TrimRight(strings.TrimSpace(codexUpstream), "/")
-}
-
-func (h *responsesWSHub) handle(w http.ResponseWriter, r *http.Request) {
-	route, requestErr := h.server.authenticate(r.Context(), r.Header.Get("Authorization"), "responses")
-	if requestErr != nil {
-		writeOpenAIError(w, requestErr.status, requestErr.message, requestErr.code)
-		return
-	}
-	plain, _ := auth.Bearer(r.Header.Get("Authorization"))
-	if !h.reserveConnection(route.Key.ID) {
-		writeOpenAIError(w, http.StatusServiceUnavailable, "WebSocket connection capacity exceeded", "subpool_capacity_exceeded")
-		return
-	}
-	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{CompressionMode: websocket.CompressionDisabled})
-	if err != nil {
-		h.releaseConnection(route.Key.ID)
-		return
-	}
-	conn.SetReadLimit(maxRequestBody)
-	ctx, cancel := context.WithTimeout(r.Context(), responsesWSLifetime)
-	session := &responsesWSSession{
-		hub: h, conn: conn, ctx: ctx, cancel: cancel, keyDigest: h.server.keys.Digest(plain),
-		keyID: route.Key.ID, poolID: route.Pool.ID, headers: r.Header.Clone(), done: make(chan struct{}),
-		streams: make(map[string]*responsesWSStream),
-		named:   make(map[string]struct{}), responses: make(map[string]struct{}),
-	}
-	session.touch()
-	if !h.addSession(session) {
-		cancel()
-		_ = conn.CloseNow()
-		h.releaseConnection(route.Key.ID)
-		return
-	}
-	h.connectionsTotal.Add(1)
-	defer func() {
-		session.close(websocket.StatusNormalClosure, "")
-		session.workers.Wait()
-		h.removeSession(session)
-		close(session.done)
-	}()
-	session.startWorker(session.monitorIdle)
-	session.readClient()
-}
-
-func (h *responsesWSHub) reserveConnection(keyID string) bool {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if h.closing || h.activeConnections >= responsesWSMaxConnections || h.connections[keyID] >= responsesWSMaxConnectionsPerKey {
-		h.connectionsReject.Add(1)
-		return false
-	}
-	h.activeConnections++
-	h.connections[keyID]++
-	return true
-}
-
-func (h *responsesWSHub) addSession(session *responsesWSSession) bool {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if h.closing {
-		return false
-	}
-	h.sessions[session] = struct{}{}
-	return true
-}
-
-func (h *responsesWSHub) releaseConnection(keyID string) {
-	h.mu.Lock()
-	if h.activeConnections > 0 {
-		h.activeConnections--
-	}
-	if h.connections[keyID] <= 1 {
-		delete(h.connections, keyID)
-	} else {
-		h.connections[keyID]--
-	}
-	h.mu.Unlock()
-}
-
-func (h *responsesWSHub) removeSession(session *responsesWSSession) {
-	h.mu.Lock()
-	delete(h.sessions, session)
-	h.mu.Unlock()
-	h.releaseConnection(session.keyID)
-}
-
-func (h *responsesWSHub) reserveAccountTurn(accountID string) bool {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if h.accountTurns[accountID] >= responsesWSMaxTurnsPerAccount {
-		return false
-	}
-	h.accountTurns[accountID]++
-	return true
-}
-
-func (h *responsesWSHub) releaseAccountTurn(accountID string) {
-	h.mu.Lock()
-	if h.accountTurns[accountID] <= 1 {
-		delete(h.accountTurns, accountID)
-	} else {
-		h.accountTurns[accountID]--
-	}
-	h.mu.Unlock()
-}
-
-func (h *responsesWSHub) closeAll() {
-	h.mu.Lock()
-	h.closing = true
-	sessions := make([]*responsesWSSession, 0, len(h.sessions))
-	for session := range h.sessions {
-		sessions = append(sessions, session)
-	}
-	h.mu.Unlock()
-	for _, session := range sessions {
-		go session.close(websocket.StatusServiceRestart, "service restart")
-	}
-	for _, session := range sessions {
-		<-session.done
-	}
-}
-
-func (h *responsesWSHub) metrics() string {
-	h.mu.Lock()
-	activeConnections := len(h.sessions)
-	activeTurns := 0
-	for _, count := range h.accountTurns {
-		activeTurns += count
-	}
-	h.mu.Unlock()
-	return fmt.Sprintf(
-		"# TYPE subpool_responses_ws_connections_active gauge\nsubpool_responses_ws_connections_active %d\n"+
-			"# TYPE subpool_responses_ws_connections_total counter\nsubpool_responses_ws_connections_total %d\n"+
-			"# TYPE subpool_responses_ws_connections_rejected_total counter\nsubpool_responses_ws_connections_rejected_total %d\n"+
-			"# TYPE subpool_responses_ws_turns_active gauge\nsubpool_responses_ws_turns_active %d\n"+
-			"# TYPE subpool_responses_ws_turns_total counter\nsubpool_responses_ws_turns_total %d\n"+
-			"# TYPE subpool_responses_ws_turns_rejected_total counter\nsubpool_responses_ws_turns_rejected_total %d\n"+
-			"# TYPE subpool_responses_ws_upstream_dials_total counter\nsubpool_responses_ws_upstream_dials_total %d\n"+
-			"# TYPE subpool_responses_ws_upstream_failures_total counter\nsubpool_responses_ws_upstream_failures_total %d\n",
-		activeConnections, h.connectionsTotal.Load(), h.connectionsReject.Load(), activeTurns,
-		h.turnsTotal.Load(), h.turnsRejected.Load(), h.upstreamDials.Load(), h.upstreamFailures.Load(),
-	)
-}
-
-func (s *Server) CloseResponsesWebSockets() { s.responsesWS.closeAll() }
-
-func (s *Server) ResponsesWebSocketMetrics() string { return s.responsesWS.metrics() }
 
 func (s *responsesWSSession) readClient() {
 	first := true
@@ -323,6 +139,10 @@ func (s *responsesWSSession) handleRequest(request responsesWSRequest) bool {
 	if requestErr != nil {
 		s.hub.turnsRejected.Add(1)
 		s.sendError(request.streamID(), requestErr.code, requestErr.message)
+		if requestErr.code == "subpool_websocket_model_changed" {
+			s.close(websocket.StatusPolicyViolation, "model changed; reconnect required")
+			return false
+		}
 		return true
 	}
 	if requestErr = s.validateContinuation(request.PreviousResponseID); requestErr != nil {
@@ -402,7 +222,12 @@ func (s *responsesWSSession) resolveRoute() (domain.KeyRoute, *gatewayError) {
 func (s *responsesWSSession) ensurePinned(request responsesWSRequest, route domain.KeyRoute) (bool, bool, *gatewayError) {
 	s.mu.Lock()
 	if s.pinned {
+		native := s.native
+		upstreamModel := s.upstreamModel
 		s.mu.Unlock()
+		if native && request.Model != upstreamModel {
+			return false, false, &gatewayError{http.StatusConflict, "model changed; reconnect to create a new upstream WebSocket", "subpool_websocket_model_changed"}
+		}
 		return false, false, nil
 	}
 	s.mu.Unlock()
@@ -412,11 +237,11 @@ func (s *responsesWSSession) ensurePinned(request responsesWSRequest, route doma
 	}
 	if account.Provider == "" || account.Provider == domain.ProviderCodex {
 		if !s.hub.forceHTTPBridge {
-			bridge, pinErr := s.pinNativeAccount(route, account, continuation)
+			bridge, pinErr := s.pinNativeAccount(route, account, continuation, request.Model)
 			return bridge, bridge && !continuation, pinErr
 		}
 	}
-	if !s.pinAccount(account, nil, false) {
+	if !s.pinAccount(account, nil, false, "") {
 		return false, false, &gatewayError{http.StatusServiceUnavailable, "WebSocket session is closing", "server_error"}
 	}
 	return true, !continuation, nil
@@ -452,20 +277,20 @@ func (s *responsesWSSession) initialAccount(request responsesWSRequest, route do
 	return reassigned, false, nil
 }
 
-func (s *responsesWSSession) pinNativeAccount(route domain.KeyRoute, first domain.ProviderAccount, continuation bool) (bool, *gatewayError) {
+func (s *responsesWSSession) pinNativeAccount(route domain.KeyRoute, first domain.ProviderAccount, continuation bool, model string) (bool, *gatewayError) {
 	account := first
 	attempted := make([]string, 0, maxProviderAttempts)
 	for attempt := 0; attempt < maxProviderAttempts; attempt++ {
 		attempted = append(attempted, account.ID)
 		if account.Provider == domain.ProviderOpenAICompatible {
-			if !s.pinAccount(account, nil, false) {
+			if !s.pinAccount(account, nil, false, "") {
 				return false, &gatewayError{http.StatusServiceUnavailable, "WebSocket session is closing", "server_error"}
 			}
 			return true, nil
 		}
-		conn, current, retry, requestErr := s.dialCodex(account)
+		conn, current, retry, requestErr := s.dialCodex(account, model)
 		if requestErr == nil {
-			if !s.pinAccount(current, conn, true) {
+			if !s.pinAccount(current, conn, true, model) {
 				_ = conn.CloseNow()
 				return false, &gatewayError{http.StatusServiceUnavailable, "WebSocket session is closing", "server_error"}
 			}
@@ -487,8 +312,8 @@ func (s *responsesWSSession) pinNativeAccount(route domain.KeyRoute, first domai
 	return false, &gatewayError{http.StatusServiceUnavailable, "no eligible account", "subpool_no_eligible_account"}
 }
 
-func (s *responsesWSSession) dialCodex(account domain.ProviderAccount) (*websocket.Conn, domain.ProviderAccount, bool, *gatewayError) {
-	conn, status, headers, err := s.dialCodexOnce(account)
+func (s *responsesWSSession) dialCodex(account domain.ProviderAccount, model string) (*websocket.Conn, domain.ProviderAccount, bool, *gatewayError) {
+	conn, status, headers, err := s.dialCodexOnce(account, model)
 	if err == nil {
 		return conn, account, false, nil
 	}
@@ -501,7 +326,7 @@ func (s *responsesWSSession) dialCodex(account domain.ProviderAccount) (*websock
 			}
 			return nil, account, true, &gatewayError{http.StatusServiceUnavailable, "provider credential refresh is unavailable", "provider_error"}
 		}
-		conn, status, headers, err = s.dialCodexOnce(refreshed)
+		conn, status, headers, err = s.dialCodexOnce(refreshed, model)
 		if err == nil {
 			return conn, refreshed, false, nil
 		}
@@ -524,7 +349,7 @@ func (s *responsesWSSession) dialCodex(account domain.ProviderAccount) (*websock
 	}
 }
 
-func (s *responsesWSSession) dialCodexOnce(account domain.ProviderAccount) (*websocket.Conn, int, http.Header, error) {
+func (s *responsesWSSession) dialCodexOnce(account domain.ProviderAccount, model string) (*websocket.Conn, int, http.Header, error) {
 	credentials, err := s.hub.server.credentials(account)
 	if err != nil {
 		return nil, 0, nil, err
@@ -537,7 +362,7 @@ func (s *responsesWSSession) dialCodexOnce(account domain.ProviderAccount) (*web
 	if err != nil {
 		return nil, 0, nil, err
 	}
-	headers := codex.ResponsesWebSocketHeaders(s.headers, credentials, installationID)
+	headers := codex.ResponsesWebSocketHeaders(s.headers, credentials, installationID, model, account.FastModeEnabled)
 	dialCtx, cancel := context.WithTimeout(s.ctx, responsesWSDialTimeout)
 	defer cancel()
 	s.hub.upstreamDials.Add(1)
@@ -561,7 +386,7 @@ func (s *responsesWSSession) dialCodexOnce(account domain.ProviderAccount) (*web
 	return conn, 0, nil, nil
 }
 
-func (s *responsesWSSession) pinAccount(account domain.ProviderAccount, upstream *websocket.Conn, native bool) bool {
+func (s *responsesWSSession) pinAccount(account domain.ProviderAccount, upstream *websocket.Conn, native bool, upstreamModel string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
@@ -569,6 +394,7 @@ func (s *responsesWSSession) pinAccount(account domain.ProviderAccount, upstream
 	}
 	s.account = account
 	s.upstream = upstream
+	s.upstreamModel = upstreamModel
 	s.native = native
 	s.pinned = true
 	return true
@@ -608,7 +434,7 @@ func (s *responsesWSSession) preparePayload(request responsesWSRequest) ([]byte,
 		if err != nil {
 			return nil, &gatewayError{http.StatusInternalServerError, "device identity is unavailable", "server_error"}
 		}
-		payload, err := normalizeCodexWebSocketRequest(request.raw, installationID)
+		payload, err := normalizeCodexWebSocketRequest(request.raw, installationID, account.FastModeEnabled)
 		if err != nil {
 			return nil, &gatewayError{http.StatusBadRequest, err.Error(), "invalid_request_error"}
 		}
@@ -861,7 +687,7 @@ func (s *responsesWSSession) bridgeResponse(turn *responsesWSTurn, route domain.
 	}
 	request.Header = s.headers.Clone()
 	request.Header.Set("Accept", "text/event-stream")
-	upstreamRequest := upstreamRequest{kind: "responses", body: turn.payload, codexBody: turn.payload}
+	upstreamRequest := upstreamRequest{kind: "responses", model: turn.model, body: turn.payload, codexBody: turn.payload}
 	return s.hub.server.attemptAccount(request, route, upstreamRequest, account)
 }
 
