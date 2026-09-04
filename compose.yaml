@@ -2,9 +2,8 @@ name: subpool
 
 services:
   subpool:
-    image: subpool:local
-    build:
-      context: .
+    image: ${SUBPOOL_IMAGE:-public.ecr.aws/cloudpilotai/subpool:latest}
+    pull_policy: always
     restart: unless-stopped
     depends_on:
       postgres:

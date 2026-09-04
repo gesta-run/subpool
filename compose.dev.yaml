@@ -1,0 +1,6 @@
+services:
+  subpool:
+    image: subpool:local
+    pull_policy: build
+    build:
+      context: .
