@@ -65,13 +65,13 @@ Replace every `replace-with-*` value, then open [http://localhost:8080](http://l
 
 Codex subscriptions use [device-code authorization](https://developers.openai.com/codex/auth/). Copy the one-time code from Subpool, continue to OpenAI, and confirm it there. This works on remote and headless deployments without a localhost callback or an extra exposed port. Device-code login must be enabled in ChatGPT security or workspace settings.
 
-Add the following settings to your Codex CLI user configuration file:
+After creating an employee API key, configure Codex on each user's machine to route requests through Subpool. Edit the user-level Codex configuration file:
 
 - Linux: `/home/<username>/.codex/config.toml` (or `~/.codex/config.toml`)
 - macOS: `/Users/<username>/.codex/config.toml` (or `~/.codex/config.toml`)
 - Windows: `C:\Users\<username>\.codex\config.toml` (or `%USERPROFILE%\.codex\config.toml`)
 
-Create the `.codex` directory and `config.toml` file if they do not already exist.
+Create the `.codex` directory and `config.toml` file if necessary. Replace `https://subpool.example.com` with your Subpool URL and `sk-example-not-a-real-key` with the employee API key created in Subpool.
 
 ```toml
 model = "gpt-5.6-sol"
@@ -90,7 +90,7 @@ supports_websockets = true
 responses_websockets_v2 = true
 ```
 
-Set `SUBPOOL_RESPONSES_WS_ENABLED=true` to accept Responses WebSocket connections. Codex subscription accounts use a dedicated upstream WebSocket; OpenAI-compatible accounts use the existing HTTP/SSE bridge. `SUBPOOL_RESPONSES_WS_FORCE_HTTP_BRIDGE=true` is an emergency rollback switch for the upstream Codex transport.
+Save the file, then restart Codex so the new provider and WebSocket settings are loaded. Codex subscription accounts use a dedicated upstream WebSocket, while OpenAI-compatible accounts use the existing HTTP/SSE bridge.
 
 Available endpoints include `GET/POST /v1/responses`, `POST /v1/chat/completions`, `GET /v1/models`, `GET /healthz`, `GET /readyz`, and `GET /metrics`.
 
