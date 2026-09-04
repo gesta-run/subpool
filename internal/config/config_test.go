@@ -25,17 +25,20 @@ func TestLoad(t *testing.T) {
 	if cfg.CodexUpstreamURL != "https://chatgpt.com/backend-api/codex" {
 		t.Fatalf("upstream = %s", cfg.CodexUpstreamURL)
 	}
+	if !cfg.ResponsesWSEnabled {
+		t.Fatal("Responses WebSocket should be enabled by default")
+	}
 }
 
-func TestLoadResponsesWebSocketSettings(t *testing.T) {
+func TestLoadResponsesWebSocketOverrides(t *testing.T) {
 	setValidEnv(t)
-	t.Setenv("SUBPOOL_RESPONSES_WS_ENABLED", "true")
+	t.Setenv("SUBPOOL_RESPONSES_WS_ENABLED", "false")
 	t.Setenv("SUBPOOL_RESPONSES_WS_FORCE_HTTP_BRIDGE", "true")
 	cfg, err := Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !cfg.ResponsesWSEnabled || !cfg.ResponsesWSForceHTTPBridge {
+	if cfg.ResponsesWSEnabled || !cfg.ResponsesWSForceHTTPBridge {
 		t.Fatalf("WebSocket settings = %#v", cfg)
 	}
 }

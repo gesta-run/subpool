@@ -42,7 +42,7 @@ func Load() (Config, error) {
 		CodexUpstreamURL: strings.TrimRight(envOr("SUBPOOL_CODEX_UPSTREAM_URL", "https://chatgpt.com/backend-api/codex"), "/"),
 	}
 	var err error
-	if cfg.ResponsesWSEnabled, err = envBool("SUBPOOL_RESPONSES_WS_ENABLED", false); err != nil {
+	if cfg.ResponsesWSEnabled, err = envBool("SUBPOOL_RESPONSES_WS_ENABLED", true); err != nil {
 		return Config{}, err
 	}
 	if cfg.ResponsesWSForceHTTPBridge, err = envBool("SUBPOOL_RESPONSES_WS_FORCE_HTTP_BRIDGE", false); err != nil {
