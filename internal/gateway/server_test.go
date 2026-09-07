@@ -41,6 +41,7 @@ type fakeStore struct {
 	allowCalls              int
 	usageCommitUncertain    bool
 	usageEvents             map[string]struct{}
+	healthFailureCodes      []string
 }
 
 func (f *fakeStore) ResolveAPIKey(context.Context, []byte) (domain.KeyRoute, error) {
@@ -113,7 +114,8 @@ func (f *fakeStore) UpdateProviderStatus(_ context.Context, _ string, status str
 	f.status = append(f.status, status)
 	return nil
 }
-func (f *fakeStore) RecordProviderHealthFailure(context.Context, string, string, time.Time, time.Time) error {
+func (f *fakeStore) RecordProviderHealthFailure(_ context.Context, _ string, code string, _ time.Time, _ time.Time) error {
+	f.healthFailureCodes = append(f.healthFailureCodes, code)
 	return nil
 }
 
@@ -125,6 +127,12 @@ type fakeProvider struct {
 	bodies      [][]byte
 	headers     []http.Header
 }
+
+type providerTimeoutError struct{}
+
+func (providerTimeoutError) Error() string   { return "timeout awaiting response headers" }
+func (providerTimeoutError) Timeout() bool   { return true }
+func (providerTimeoutError) Temporary() bool { return true }
 
 type fakeCompatibleProvider struct {
 	chatBody      []byte
@@ -435,6 +443,34 @@ func TestProviderAttemptsAreBoundedWithoutReassigningPastLimit(t *testing.T) {
 	}
 	if len(st.reassignExcludes) != maxProviderAttempts-1 || len(st.reassignedAccounts) != 1 {
 		t.Fatalf("reassignments=%d unconsumed accounts=%d", len(st.reassignExcludes), len(st.reassignedAccounts))
+	}
+}
+
+func TestProviderTimeoutIsReportedClearly(t *testing.T) {
+	server, st, provider, plain := newTestServer(t)
+	st.reassigned = accountWithCredentials(t, "account-2", "second-token")
+	provider.errors = []error{providerTimeoutError{}}
+	recorder := serveGateway(t, server, plain, "/v1/responses", `{"model":"gpt-test","input":"hello"}`)
+	if recorder.Code != http.StatusGatewayTimeout || !strings.Contains(recorder.Body.String(), `"code":"provider_timeout"`) {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if len(provider.credentials) != 1 || len(st.reassignExcludes) != 0 || len(st.healthFailureCodes) != 0 {
+		t.Fatalf("provider attempts=%d reassignments=%d health failures=%#v", len(provider.credentials), len(st.reassignExcludes), st.healthFailureCodes)
+	}
+}
+
+func TestCanceledRequestDoesNotPenalizeOrRetryProvider(t *testing.T) {
+	server, st, provider, plain := newTestServer(t)
+	st.reassigned = accountWithCredentials(t, "account-2", "second-token")
+	provider.errors = []error{context.Canceled}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	request := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"gpt-test","input":"hello"}`)).WithContext(ctx)
+	request.Header.Set("Authorization", "Bearer "+plain)
+	recorder := httptest.NewRecorder()
+	server.handleResponses(recorder, request)
+	if len(provider.credentials) != 1 || len(st.reassignExcludes) != 0 || len(st.healthFailureCodes) != 0 {
+		t.Fatalf("provider attempts=%d reassignments=%d health failures=%#v", len(provider.credentials), len(st.reassignExcludes), st.healthFailureCodes)
 	}
 }
 
