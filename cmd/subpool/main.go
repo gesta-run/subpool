@@ -19,6 +19,7 @@ import (
 	"github.com/gesta-run/subpool/internal/gateway"
 	providerhealth "github.com/gesta-run/subpool/internal/health"
 	"github.com/gesta-run/subpool/internal/provider/codex"
+	providerhttp "github.com/gesta-run/subpool/internal/provider/httpclient"
 	"github.com/gesta-run/subpool/internal/provider/openaicompat"
 	"github.com/gesta-run/subpool/internal/store"
 )
@@ -48,9 +49,10 @@ func main() {
 	tokenRefresher := codex.NewTokenRefresher(codex.TokenRefresherConfig{ClientID: cfg.CodexClientID, TokenURL: cfg.CodexTokenURL})
 	deviceAuth := codex.NewDeviceAuth()
 	defer deviceAuth.Close()
-	provider := codex.NewClient(cfg.CodexUpstreamURL, nil)
+	providerHTTPClient := providerhttp.NewWithResponseHeaderTimeout(cfg.UpstreamResponseHeaderTimeout)
+	provider := codex.NewClient(cfg.CodexUpstreamURL, providerHTTPClient)
 	resetCredits := codex.NewAppServer()
-	compatibleProvider := openaicompat.NewClient(nil)
+	compatibleProvider := openaicompat.NewClient(providerHTTPClient)
 	refreshManager := credential.NewRefreshManager(database, cipher, tokenRefresher)
 	healthChecker := providerhealth.NewChecker(database, cipher, provider, compatibleProvider)
 	sources, err := auth.NewSourceResolver(cfg.TrustedProxyCIDRs)

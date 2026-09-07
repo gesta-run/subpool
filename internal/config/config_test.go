@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"testing"
+	"time"
 )
 
 func setValidEnv(t *testing.T) {
@@ -27,6 +28,29 @@ func TestLoad(t *testing.T) {
 	}
 	if !cfg.ResponsesWSEnabled {
 		t.Fatal("Responses WebSocket should be enabled by default")
+	}
+	if cfg.UpstreamResponseHeaderTimeout != 3*time.Minute {
+		t.Fatalf("upstream response header timeout = %s", cfg.UpstreamResponseHeaderTimeout)
+	}
+}
+
+func TestLoadUpstreamResponseHeaderTimeoutOverride(t *testing.T) {
+	setValidEnv(t)
+	t.Setenv("SUBPOOL_UPSTREAM_RESPONSE_HEADER_TIMEOUT", "4m30s")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.UpstreamResponseHeaderTimeout != 4*time.Minute+30*time.Second {
+		t.Fatalf("upstream response header timeout = %s", cfg.UpstreamResponseHeaderTimeout)
+	}
+}
+
+func TestLoadRejectsInvalidUpstreamResponseHeaderTimeout(t *testing.T) {
+	setValidEnv(t)
+	t.Setenv("SUBPOOL_UPSTREAM_RESPONSE_HEADER_TIMEOUT", "0s")
+	if _, err := Load(); err == nil {
+		t.Fatal("invalid upstream response header timeout was accepted")
 	}
 }
 

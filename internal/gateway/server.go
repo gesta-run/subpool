@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -38,6 +39,8 @@ const (
 	retryRateLimit   retryReason = "rate_limit"
 	retryInvalid     retryReason = "invalid_request"
 	retryTransport   retryReason = "transport"
+	retryTimeout     retryReason = "timeout"
+	retryCanceled    retryReason = "canceled"
 	retryProvider5xx retryReason = "provider_5xx"
 )
 
@@ -358,6 +361,10 @@ func (s *Server) call(w http.ResponseWriter, r *http.Request, route domain.KeyRo
 			writeOpenAIError(w, http.StatusBadRequest, "client_metadata must be an object", "invalid_request_error")
 			return nil, false
 		}
+		if retry == retryTimeout {
+			writeRetryFailure(w, retry)
+			return nil, false
+		}
 		lastRetry = retry
 		if continuation {
 			writeRetryFailure(w, lastRetry)
@@ -384,11 +391,8 @@ func (s *Server) attemptAccount(r *http.Request, route domain.KeyRoute, request 
 	}
 	resp, err := s.providerAccountResponse(r.Context(), request, r.Header, credentials, account)
 	if err != nil {
-		if errors.Is(err, codex.ErrInvalidClientMetadata) {
-			return nil, retryInvalid, false
-		}
-		s.recordHealthFailure(r.Context(), account.ID, "connection_failed")
-		return nil, retryTransport, false
+		retry, complete := s.evaluateProviderError(r.Context(), account.ID, err)
+		return nil, retry, complete
 	}
 	if !isAuthenticationStatus(resp.StatusCode) {
 		return s.evaluateResponse(r.Context(), route.Key.ID, account.ID, resp)
@@ -416,11 +420,8 @@ func (s *Server) retryRefreshedAccount(r *http.Request, route domain.KeyRoute, r
 	}
 	resp, err := s.providerAccountResponse(r.Context(), request, r.Header, credentials, refreshed)
 	if err != nil {
-		if errors.Is(err, codex.ErrInvalidClientMetadata) {
-			return nil, retryInvalid, false
-		}
-		s.recordHealthFailure(r.Context(), refreshed.ID, "connection_failed")
-		return nil, retryTransport, false
+		retry, complete := s.evaluateProviderError(r.Context(), refreshed.ID, err)
+		return nil, retry, complete
 	}
 	if isAuthenticationStatus(resp.StatusCode) {
 		drainAndClose(resp)
@@ -472,6 +473,29 @@ func isAuthenticationStatus(status int) bool {
 	return status == http.StatusUnauthorized || status == http.StatusForbidden
 }
 
+func (s *Server) evaluateProviderError(ctx context.Context, accountID string, err error) (retryReason, bool) {
+	if ctx.Err() != nil {
+		return retryCanceled, true
+	}
+	if errors.Is(err, codex.ErrInvalidClientMetadata) {
+		return retryInvalid, false
+	}
+	retry, healthCode := classifyProviderError(err)
+	slog.Warn("provider request failed", "account_id", accountID, "reason", retry, "error", err)
+	if healthCode != "" {
+		s.recordHealthFailure(ctx, accountID, healthCode)
+	}
+	return retry, false
+}
+
+func classifyProviderError(err error) (retryReason, string) {
+	var networkError net.Error
+	if errors.As(err, &networkError) && networkError.Timeout() {
+		return retryTimeout, ""
+	}
+	return retryTransport, "connection_failed"
+}
+
 func writeRetryFailure(w http.ResponseWriter, reason retryReason) {
 	switch reason {
 	case retryAuth:
@@ -480,6 +504,8 @@ func writeRetryFailure(w http.ResponseWriter, reason retryReason) {
 		writeOpenAIError(w, http.StatusServiceUnavailable, "provider credential refresh is temporarily unavailable", "provider_error")
 	case retryRateLimit:
 		writeOpenAIError(w, http.StatusTooManyRequests, "all eligible accounts are rate limited", "subpool_rate_limited")
+	case retryTimeout:
+		writeOpenAIError(w, http.StatusGatewayTimeout, "provider response timed out", "provider_timeout")
 	default:
 		writeOpenAIError(w, http.StatusServiceUnavailable, "no eligible account", "subpool_no_eligible_account")
 	}
