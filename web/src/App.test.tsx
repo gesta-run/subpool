@@ -9,6 +9,7 @@ import { PoolsPage } from './pages/PoolsPage'
 import { UsagePage } from './pages/UsagePage'
 import { SettingsPage } from './pages/SettingsPage'
 import { request } from './api'
+import { createIdempotencyKey } from './hooks/useResetCredits'
 
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -289,6 +290,14 @@ describe('Subpool console', () => {
     const body = JSON.parse(String(consume?.[1]?.body))
     expect(body.credit_id).toBe('credit-1')
     expect(body.idempotency_key).toMatch(/^[0-9a-f-]{36}$/)
+  })
+
+  it('creates reset idempotency keys without secure-context randomUUID', () => {
+    const key = createIdempotencyKey(undefined, (values) => {
+      values.forEach((_, index) => { values[index] = index })
+    })
+
+    expect(key).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
   })
 
   it('opens the supported model list for an account', async () => {
