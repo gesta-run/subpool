@@ -28,6 +28,7 @@ type Store interface {
 	DeleteProviderAccount(context.Context, string) error
 	UpdateProviderCredentialCAS(context.Context, string, int, []byte, int) (bool, error)
 	UpdateProviderStatus(context.Context, string, string, *time.Time) error
+	SetProviderUsageAllowed(context.Context, string, bool) error
 	SetProviderHealth(context.Context, string, string, string, time.Time, time.Time) error
 	RecordProviderHealthFailure(context.Context, string, string, time.Time, time.Time) error
 	ClaimProviderHealthChecks(context.Context, int, time.Time, time.Time) ([]domain.ProviderAccount, error)

@@ -761,6 +761,23 @@ func TestManualRefreshClassifiesFailures(t *testing.T) {
 	}
 }
 
+func TestManualRefreshReportsPreservedExhaustedStatus(t *testing.T) {
+	server, st, _ := newControlServer(t)
+	st.account = domain.ProviderAccount{ID: "account-1", CredentialVersion: 1, Status: domain.AccountExhausted}
+	server.refresher.(*controlRefresher).account = st.account
+	mux := http.NewServeMux()
+	server.Register(mux)
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/provider-accounts/account-1/refresh", nil)
+	request.AddCookie(loginCookie(t, mux))
+	recorder := httptest.NewRecorder()
+
+	mux.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"status":"exhausted"`) {
+		t.Fatalf("response=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
 func TestDecodeRejectsTrailingJSON(t *testing.T) {
 	request := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"name":"Primary"} {"name":"Secondary"}`))
 	recorder := httptest.NewRecorder()

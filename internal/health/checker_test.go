@@ -25,6 +25,27 @@ func (c testCompatible) Models(context.Context, openaicompat.Credentials) (*http
 	return &http.Response{StatusCode: c.status, Body: io.NopCloser(strings.NewReader(`{}`))}, nil
 }
 
+type testCodexUsage struct{ snapshot codex.UsageSnapshot }
+
+func (c testCodexUsage) Usage(context.Context, codex.Credentials) (codex.UsageSnapshot, error) {
+	return c.snapshot, nil
+}
+
+func TestCodexHealthCheckReportsExhaustedUsage(t *testing.T) {
+	credentials, _ := json.Marshal(codex.Credentials{AccessToken: "access", AccountID: "account"})
+	allowed := false
+	account := domain.ProviderAccount{Provider: domain.ProviderCodex, Status: domain.AccountActive, CredentialCiphertext: []byte("encrypted")}
+	checker := NewChecker(nil, testCipher{plaintext: credentials}, testCodexUsage{snapshot: codex.UsageSnapshot{UsageAllowed: &allowed, LimitReason: "rate_limit_reached"}}, nil)
+	result := checker.Check(context.Background(), account)
+	if result.HealthStatus != domain.HealthHealthy || result.UsageAllowed == nil || *result.UsageAllowed {
+		t.Fatalf("result = %#v", result)
+	}
+	checker.ApplyNewAccount(&account, result)
+	if account.Status != domain.AccountExhausted {
+		t.Fatalf("status = %q, want exhausted", account.Status)
+	}
+}
+
 func TestCompatibleHealthCheck(t *testing.T) {
 	credentials, _ := json.Marshal(openaicompat.Credentials{BaseURL: "https://api.example.com/v1", APIKey: "sk-test-placeholder"})
 	account := domain.ProviderAccount{Provider: domain.ProviderOpenAICompatible, CredentialCiphertext: []byte("encrypted")}

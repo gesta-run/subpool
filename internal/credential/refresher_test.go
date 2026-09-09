@@ -83,3 +83,27 @@ func TestRefreshManagerCoalescesObservedVersion(t *testing.T) {
 		t.Fatalf("credential version = %d", st.account.CredentialVersion)
 	}
 }
+
+func TestRefreshManagerPreservesExhaustedStatus(t *testing.T) {
+	cipher, err := New(bytes.Repeat([]byte{5}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(codex.Credentials{AccessToken: "old-access", RefreshToken: "old-refresh", AccountID: "account-subject"})
+	encrypted, _ := cipher.Encrypt(raw)
+	st := &refreshStore{account: domain.ProviderAccount{
+		ID:                   "account-1",
+		CredentialCiphertext: encrypted,
+		CredentialVersion:    1,
+		Status:               domain.AccountExhausted,
+	}}
+	manager := NewRefreshManager(st, cipher, &tokenRefresher{})
+
+	account, err := manager.RefreshAccount(context.Background(), "account-1", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if account.Status != domain.AccountExhausted {
+		t.Fatalf("account status = %q", account.Status)
+	}
+}

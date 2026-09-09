@@ -59,7 +59,7 @@ func TestClientUsage(t *testing.T) {
 		if r.Header.Get("Authorization") != "Bearer access" || r.Header.Get("Chatgpt-Account-Id") != "acct" {
 			t.Errorf("headers = %#v", r.Header)
 		}
-		_, _ = w.Write([]byte(`{"plan_type":"plus","rate_limit":{"primary_window":{"used_percent":25,"limit_window_seconds":18000,"reset_at":1800000000},"secondary_window":{"used_percent":40,"limit_window_seconds":604800,"reset_at":1800500000}}}`))
+		_, _ = w.Write([]byte(`{"plan_type":"plus","rate_limit":{"allowed":true,"limit_reached":false,"primary_window":{"used_percent":25,"limit_window_seconds":18000,"reset_at":1800000000},"secondary_window":{"used_percent":40,"limit_window_seconds":604800,"reset_at":1800500000}}}`))
 	}))
 	defer server.Close()
 
@@ -67,7 +67,40 @@ func TestClientUsage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if snapshot.PlanType != "plus" || snapshot.FiveHour == nil || snapshot.FiveHour.RemainingPercent != 75 || snapshot.Weekly == nil || snapshot.Weekly.RemainingPercent != 60 {
+	if snapshot.PlanType != "plus" || snapshot.UsageAllowed == nil || !*snapshot.UsageAllowed || snapshot.FiveHour == nil || snapshot.FiveHour.RemainingPercent != 75 || snapshot.Weekly == nil || snapshot.Weekly.RemainingPercent != 60 {
+		t.Fatalf("snapshot = %#v", snapshot)
+	}
+}
+
+func TestClientUsageHonorsEffectiveLimitState(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"plan_type":"plus","rate_limit":{"allowed":false,"limit_reached":true,"primary_window":{"used_percent":45,"limit_window_seconds":604800,"reset_at":1800500000}},"rate_limit_reached_type":{"type":"rate_limit_reached"}}`))
+	}))
+	defer server.Close()
+
+	snapshot, err := NewClient(server.URL, http.DefaultClient).Usage(context.Background(), Credentials{AccessToken: "access"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.UsageAllowed == nil || *snapshot.UsageAllowed || snapshot.LimitReason != "rate_limit_reached" {
+		t.Fatalf("availability = %#v, reason = %q", snapshot.UsageAllowed, snapshot.LimitReason)
+	}
+	if snapshot.Weekly == nil || snapshot.Weekly.RemainingPercent != 55 {
+		t.Fatalf("raw weekly snapshot = %#v", snapshot.Weekly)
+	}
+}
+
+func TestClientUsageHonorsSpendControl(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"plan_type":"business","rate_limit":null,"spend_control":{"reached":true}}`))
+	}))
+	defer server.Close()
+
+	snapshot, err := NewClient(server.URL, http.DefaultClient).Usage(context.Background(), Credentials{AccessToken: "access"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.UsageAllowed == nil || *snapshot.UsageAllowed || snapshot.LimitReason != "spend_control_reached" {
 		t.Fatalf("snapshot = %#v", snapshot)
 	}
 }

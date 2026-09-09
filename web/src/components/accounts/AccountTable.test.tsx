@@ -73,4 +73,30 @@ describe('AccountTable health states', () => {
     expect(screen.getByText('Routing suspended')).toBeInTheDocument()
     expect(screen.getByText('last known weekly capacity')).toBeInTheDocument()
   })
+
+  it('shows zero effective capacity when the provider blocks usage', () => {
+    renderTable({
+      ...baseAccount,
+      status: 'exhausted',
+    })
+
+    expect(screen.getByText('0%')).toBeInTheDocument()
+    expect(screen.getByText('effective weekly capacity')).toBeInTheDocument()
+    expect(screen.getByText('Routing suspended')).toBeInTheDocument()
+    expect(screen.getByRole('progressbar', { name: /weekly usage remaining/i })).toHaveAttribute('aria-valuenow', '0')
+  })
+
+  it('suspends routing when the usage snapshot is blocked before status catches up', () => {
+    renderTable({
+      ...baseAccount,
+      quota_snapshot: {
+        ...baseAccount.quota_snapshot,
+        usage_allowed: false,
+      },
+    })
+
+    expect(screen.getByText('exhausted')).toBeInTheDocument()
+    expect(screen.getByText('Routing suspended')).toBeInTheDocument()
+    expect(screen.getByText('0%')).toBeInTheDocument()
+  })
 })
