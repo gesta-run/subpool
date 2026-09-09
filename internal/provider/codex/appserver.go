@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"os/exec"
 	"strconv"
@@ -32,8 +33,9 @@ type ResetCreditsSummary struct {
 }
 
 type ConsumeResetCreditResult struct {
-	Outcome      string               `json:"outcome"`
-	ResetCredits *ResetCreditsSummary `json:"reset_credits"`
+	Outcome       string               `json:"outcome"`
+	ResetCredits  *ResetCreditsSummary `json:"reset_credits"`
+	QuotaSnapshot *UsageSnapshot       `json:"quota_snapshot,omitempty"`
 }
 
 type Model struct {
@@ -66,7 +68,8 @@ func (a *AppServer) ReadResetCredits(ctx context.Context, credentials Credential
 		return nil, err
 	}
 	defer session.close()
-	return session.readResetCredits(3)
+	snapshot, err := session.readRateLimits(3)
+	return snapshot.ResetCredits, err
 }
 
 func (a *AppServer) ConsumeResetCredit(ctx context.Context, credentials Credentials, creditID, idempotencyKey string) (ConsumeResetCreditResult, error) {
@@ -85,11 +88,12 @@ func (a *AppServer) ConsumeResetCredit(ctx context.Context, credentials Credenti
 	if err = session.call(3, "account/rateLimitResetCredit/consume", params, &consumed); err != nil {
 		return ConsumeResetCreditResult{}, err
 	}
-	credits, err := session.readResetCredits(4)
+	snapshot, err := session.readRateLimits(4)
 	if err != nil {
-		return ConsumeResetCreditResult{}, err
+		slog.Warn("Codex reset completed but rate limit refresh failed", "outcome", consumed.Outcome, "error", err)
+		return ConsumeResetCreditResult{Outcome: consumed.Outcome}, nil
 	}
-	return ConsumeResetCreditResult{Outcome: consumed.Outcome, ResetCredits: credits}, nil
+	return ConsumeResetCreditResult{Outcome: consumed.Outcome, ResetCredits: snapshot.ResetCredits, QuotaSnapshot: snapshot.Usage}, nil
 }
 
 func (a *AppServer) ListModels(ctx context.Context, credentials Credentials) ([]Model, error) {
@@ -219,8 +223,28 @@ func initializeAppServer(ctx context.Context, session *appServerSession) error {
 	return nil
 }
 
-func (s *appServerSession) readResetCredits(id int) (*ResetCreditsSummary, error) {
+type appServerRateLimitWindow struct {
+	UsedPercent        float64 `json:"usedPercent"`
+	WindowDurationMins *int64  `json:"windowDurationMins"`
+	ResetsAt           *int64  `json:"resetsAt"`
+}
+
+type appServerRateLimits struct {
+	PlanType             *string                   `json:"planType"`
+	Primary              *appServerRateLimitWindow `json:"primary"`
+	Secondary            *appServerRateLimitWindow `json:"secondary"`
+	RateLimitReachedType *string                   `json:"rateLimitReachedType"`
+	SpendControlReached  *bool                     `json:"spendControlReached"`
+}
+
+type appServerRateLimitSnapshot struct {
+	ResetCredits *ResetCreditsSummary
+	Usage        *UsageSnapshot
+}
+
+func (s *appServerSession) readRateLimits(id int) (appServerRateLimitSnapshot, error) {
 	var response struct {
+		RateLimits            appServerRateLimits `json:"rateLimits"`
 		RateLimitResetCredits *struct {
 			AvailableCount int `json:"availableCount"`
 			Credits        []struct {
@@ -235,22 +259,65 @@ func (s *appServerSession) readResetCredits(id int) (*ResetCreditsSummary, error
 		} `json:"rateLimitResetCredits"`
 	}
 	if err := s.call(id, "account/rateLimits/read", nil, &response); err != nil {
-		return nil, err
+		return appServerRateLimitSnapshot{}, err
 	}
+	result := appServerRateLimitSnapshot{Usage: normalizeAppServerRateLimits(response.RateLimits)}
 	if response.RateLimitResetCredits == nil {
-		return nil, nil
+		return result, nil
 	}
-	result := &ResetCreditsSummary{AvailableCount: response.RateLimitResetCredits.AvailableCount}
+	result.ResetCredits = &ResetCreditsSummary{AvailableCount: response.RateLimitResetCredits.AvailableCount}
 	if response.RateLimitResetCredits.Credits != nil {
-		result.Credits = make([]ResetCredit, 0, len(response.RateLimitResetCredits.Credits))
+		result.ResetCredits.Credits = make([]ResetCredit, 0, len(response.RateLimitResetCredits.Credits))
 		for _, credit := range response.RateLimitResetCredits.Credits {
-			result.Credits = append(result.Credits, ResetCredit{
+			result.ResetCredits.Credits = append(result.ResetCredits.Credits, ResetCredit{
 				ID: credit.ID, ResetType: credit.ResetType, Status: credit.Status, GrantedAt: credit.GrantedAt,
 				ExpiresAt: credit.ExpiresAt, Title: credit.Title, Description: credit.Description,
 			})
 		}
 	}
 	return result, nil
+}
+
+func normalizeAppServerRateLimits(limits appServerRateLimits) *UsageSnapshot {
+	if limits.PlanType == nil && limits.Primary == nil && limits.Secondary == nil && limits.RateLimitReachedType == nil && limits.SpendControlReached == nil {
+		return nil
+	}
+	allowed := true
+	snapshot := &UsageSnapshot{UsageAllowed: &allowed}
+	if limits.PlanType != nil {
+		snapshot.PlanType = *limits.PlanType
+	}
+	primary := normalizeAppServerWindow(limits.Primary)
+	secondary := normalizeAppServerWindow(limits.Secondary)
+	snapshot.FiveHour = primary
+	snapshot.Weekly = secondary
+	const weeklyWindowSeconds = 6 * 24 * 60 * 60
+	if primary != nil && primary.WindowSeconds >= weeklyWindowSeconds {
+		snapshot.Weekly = primary
+		snapshot.FiveHour = secondary
+	} else if secondary != nil && secondary.WindowSeconds < weeklyWindowSeconds {
+		snapshot.Weekly = nil
+	}
+	if limits.RateLimitReachedType != nil && *limits.RateLimitReachedType != "" && *limits.RateLimitReachedType != "unknown" {
+		snapshot.markUsageBlocked(*limits.RateLimitReachedType)
+	} else if limits.SpendControlReached != nil && *limits.SpendControlReached {
+		snapshot.markUsageBlocked("spend_control_reached")
+	}
+	return snapshot
+}
+
+func normalizeAppServerWindow(window *appServerRateLimitWindow) *UsageWindow {
+	if window == nil {
+		return nil
+	}
+	var durationSeconds, resetAt int64
+	if window.WindowDurationMins != nil {
+		durationSeconds = *window.WindowDurationMins * 60
+	}
+	if window.ResetsAt != nil {
+		resetAt = *window.ResetsAt
+	}
+	return normalizeUsageWindow(&usageWindowResponse{UsedPercent: window.UsedPercent, WindowSeconds: durationSeconds, ResetAt: resetAt})
 }
 
 func (s *appServerSession) call(id int, method string, params any, target any) error {

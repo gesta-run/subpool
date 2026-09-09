@@ -116,9 +116,27 @@ func (f *controlStore) UpdateProviderAccount(_ context.Context, id string, updat
 	}
 	return nil
 }
+func (f *controlStore) UpdateProviderDetails(_ context.Context, id, email string, quota []byte) error {
+	f.account.ID = id
+	if email != "" {
+		f.account.Email = email
+	}
+	f.account.QuotaSnapshot = append([]byte(nil), quota...)
+	return nil
+}
 func (f *controlStore) UpdateProviderStatus(_ context.Context, _ string, status string, cooldown *time.Time) error {
 	f.status = status
 	f.cooldown = cooldown
+	f.account.Status = status
+	return nil
+}
+func (f *controlStore) SetProviderUsageAllowed(_ context.Context, _ string, allowed bool) error {
+	if allowed && f.account.Status == domain.AccountExhausted {
+		f.account.Status = domain.AccountActive
+	} else if !allowed && (f.account.Status == domain.AccountActive || f.account.Status == domain.AccountCoolingDown || f.account.Status == domain.AccountExhausted) {
+		f.account.Status = domain.AccountExhausted
+	}
+	f.status = f.account.Status
 	return nil
 }
 func (f *controlStore) GetSettings(context.Context) (domain.Settings, error) {
@@ -195,6 +213,7 @@ type controlResetCredits struct {
 	creditID      string
 	idempotency   string
 	readCalls     int
+	afterConsume  func()
 }
 
 func (f *controlResetCredits) ReadResetCredits(_ context.Context, credentials codex.Credentials) (*codex.ResetCreditsSummary, error) {
@@ -207,6 +226,9 @@ func (f *controlResetCredits) ConsumeResetCredit(_ context.Context, credentials 
 	f.credentials = credentials
 	f.creditID = creditID
 	f.idempotency = idempotency
+	if f.afterConsume != nil {
+		f.afterConsume()
+	}
 	return f.consumeResult, f.err
 }
 
@@ -481,7 +503,11 @@ func TestCodexResetCreditsCanBeReadAndConsumed(t *testing.T) {
 	resets := server.resets.(*controlResetCredits)
 	expiresAt := int64(1800500000)
 	resets.credits = &codex.ResetCreditsSummary{AvailableCount: 2, Credits: []codex.ResetCredit{{ID: "credit-1", Status: "available", ExpiresAt: &expiresAt}}}
-	resets.consumeResult = codex.ConsumeResetCreditResult{Outcome: "reset", ResetCredits: &codex.ResetCreditsSummary{AvailableCount: 1}}
+	allowed := true
+	resets.consumeResult = codex.ConsumeResetCreditResult{
+		Outcome: "reset", ResetCredits: &codex.ResetCreditsSummary{AvailableCount: 1},
+		QuotaSnapshot: &codex.UsageSnapshot{UsageAllowed: &allowed, Weekly: &codex.UsageWindow{RemainingPercent: 100}},
+	}
 	mux := http.NewServeMux()
 	server.Register(mux)
 	cookie := loginCookie(t, mux)
@@ -508,7 +534,9 @@ func TestCodexResetCreditsCanBeReadAndConsumed(t *testing.T) {
 		t.Fatalf("refresh status=%d read calls=%d body=%s", refreshResponse.Code, resets.readCalls, refreshResponse.Body.String())
 	}
 
-	consumeRequest := httptest.NewRequest(http.MethodPost, "/api/v1/provider-accounts/account-1/reset-credits/consume", strings.NewReader(`{"credit_id":"credit-1","idempotency_key":"00000000-0000-4000-8000-000000000001"}`))
+	requestCtx, cancelRequest := context.WithCancel(context.Background())
+	resets.afterConsume = cancelRequest
+	consumeRequest := httptest.NewRequest(http.MethodPost, "/api/v1/provider-accounts/account-1/reset-credits/consume", strings.NewReader(`{"credit_id":"credit-1","idempotency_key":"00000000-0000-4000-8000-000000000001"}`)).WithContext(requestCtx)
 	consumeRequest.AddCookie(cookie)
 	consumeResponse := httptest.NewRecorder()
 	mux.ServeHTTP(consumeResponse, consumeRequest)
@@ -520,6 +548,10 @@ func TestCodexResetCreditsCanBeReadAndConsumed(t *testing.T) {
 	}
 	if st.status != domain.AccountActive || st.cooldown != nil {
 		t.Fatalf("status=%s cooldown=%v", st.status, st.cooldown)
+	}
+	var quota codex.UsageSnapshot
+	if err = json.Unmarshal(st.account.QuotaSnapshot, &quota); err != nil || quota.Weekly == nil || quota.Weekly.RemainingPercent != 100 || quota.UsageAllowed == nil || !*quota.UsageAllowed {
+		t.Fatalf("quota = %#v, error = %v", quota, err)
 	}
 	if len(st.audits) != 1 || st.audits[0].Action != "provider_account.reset_credit.consume" || st.audits[0].Result != "success" {
 		t.Fatalf("audits = %#v", st.audits)

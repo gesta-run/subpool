@@ -193,18 +193,57 @@ func (s *Server) consumeResetCredit(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadGateway, "failed to consume Codex reset credit")
 		return
 	}
-	if snapshot, marshalErr := json.Marshal(result.ResetCredits); marshalErr == nil {
-		_ = s.store.SetProviderResetCredits(ctx, account.ID, snapshot, time.Now().UTC())
-	}
 	auditResult := "failure"
 	if result.Outcome == "reset" || result.Outcome == "alreadyRedeemed" {
 		auditResult = "success"
-		if account.Status == domain.AccountCoolingDown || account.Status == domain.AccountExhausted {
-			_ = s.store.UpdateProviderStatus(r.Context(), account.ID, domain.AccountActive, nil)
+		quotaCtx, quotaCancel := context.WithTimeout(context.Background(), 7*time.Second)
+		s.persistResetQuota(quotaCtx, account, result.QuotaSnapshot)
+		quotaCancel()
+	}
+	if result.ResetCredits != nil {
+		cacheCtx, cacheCancel := context.WithTimeout(context.Background(), 2*time.Second)
+		if snapshot, marshalErr := json.Marshal(result.ResetCredits); marshalErr == nil {
+			_ = s.store.SetProviderResetCredits(cacheCtx, account.ID, snapshot, time.Now().UTC())
+		}
+		cacheCancel()
+	}
+	auditCtx, auditCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer auditCancel()
+	s.audit(auditCtx, "provider_account.reset_credit.consume", "provider_account", account.ID, auditResult)
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) persistResetQuota(ctx context.Context, account domain.ProviderAccount, quota *codex.UsageSnapshot) {
+	if quota == nil && s.health != nil {
+		checked, err := s.health.CheckAccount(ctx, account.ID)
+		if err == nil && checked.LastHealthErrorCode == "" {
+			return
+		}
+		if err != nil {
+			slog.Warn("Codex reset quota reconciliation failed", "provider_account_id", account.ID, "error", err)
+		} else {
+			slog.Warn("Codex reset quota reconciliation was inconclusive", "provider_account_id", account.ID, "error_code", checked.LastHealthErrorCode)
 		}
 	}
-	s.audit(r.Context(), "provider_account.reset_credit.consume", "provider_account", account.ID, auditResult)
-	writeJSON(w, http.StatusOK, result)
+	if quota != nil {
+		snapshot, err := json.Marshal(quota)
+		if err != nil {
+			slog.Warn("Codex reset quota encoding failed", "provider_account_id", account.ID, "error", err)
+		} else if err = s.store.UpdateProviderDetails(ctx, account.ID, "", snapshot); err != nil {
+			slog.Warn("Codex reset quota update failed", "provider_account_id", account.ID, "error", err)
+		} else if quota.UsageAllowed != nil {
+			if err = s.store.SetProviderUsageAllowed(ctx, account.ID, *quota.UsageAllowed); err != nil {
+				slog.Warn("Codex reset availability update failed", "provider_account_id", account.ID, "error", err)
+			} else {
+				return
+			}
+		}
+	}
+	if account.Status == domain.AccountCoolingDown || account.Status == domain.AccountExhausted {
+		if err := s.store.UpdateProviderStatus(ctx, account.ID, domain.AccountActive, nil); err != nil {
+			slog.Warn("Codex reset status update failed", "provider_account_id", account.ID, "error", err)
+		}
+	}
 }
 
 func (s *Server) codexSubscriptionCredentials(ctx context.Context, accountID string) (domain.ProviderAccount, codex.Credentials, error) {
