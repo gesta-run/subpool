@@ -30,7 +30,7 @@ func TestAppServerReadsAndConsumesResetCredits(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Outcome != "reset" || result.ResetCredits == nil || result.ResetCredits.AvailableCount != 1 {
+	if result.Outcome != "reset" || result.ResetCredits == nil || result.ResetCredits.AvailableCount != 1 || result.QuotaSnapshot == nil || result.QuotaSnapshot.Weekly == nil || result.QuotaSnapshot.Weekly.RemainingPercent != 100 || result.QuotaSnapshot.UsageAllowed == nil || !*result.QuotaSnapshot.UsageAllowed {
 		t.Fatalf("result = %#v", result)
 	}
 	models, err := client.ListModels(ctx, credentials)
@@ -39,6 +39,21 @@ func TestAppServerReadsAndConsumesResetCredits(t *testing.T) {
 	}
 	if len(models) != 1 || models[0].Model != "model-alpha" || models[0].DisplayName != "Model Alpha" || len(models[0].SupportedReasoningEfforts) != 1 {
 		t.Fatalf("models = %#v", models)
+	}
+}
+
+func TestAppServerPreservesSuccessfulResetWhenSnapshotRefreshFails(t *testing.T) {
+	executable := filepath.Join(t.TempDir(), "codex-test")
+	wrapper := fmt.Sprintf("#!/bin/sh\nSUBPOOL_CODEX_HELPER=1 SUBPOOL_CODEX_FAIL_POST_RESET_READ=1 exec %q -test.run=TestCodexAppServerHelperProcess -- \"$@\"\n", os.Args[0])
+	if err := os.WriteFile(executable, []byte(wrapper), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	client := &AppServer{executable: executable}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	result, err := client.ConsumeResetCredit(ctx, Credentials{AccessToken: "test-access-token", AccountID: "test-account"}, "credit-1", "00000000-0000-4000-8000-000000000001")
+	if err != nil || result.Outcome != "reset" || result.ResetCredits != nil || result.QuotaSnapshot != nil {
+		t.Fatalf("result = %#v, error = %v", result, err)
 	}
 }
 
@@ -134,12 +149,23 @@ func TestCodexAppServerHelperProcess(t *testing.T) {
 			consumed = true
 			result = map[string]any{"outcome": "reset"}
 		case "account/rateLimits/read":
+			if consumed && os.Getenv("SUBPOOL_CODEX_FAIL_POST_RESET_READ") == "1" {
+				response, _ := json.Marshal(map[string]any{"id": request.ID, "error": map[string]any{"code": -32000, "message": "rate limit refresh failed"}})
+				_, _ = fmt.Fprintln(os.Stdout, string(response))
+				continue
+			}
 			available := 2
+			usedPercent := 25
 			if consumed {
 				available = 1
+				usedPercent = 0
 			}
 			result = map[string]any{
-				"rateLimits": map[string]any{"limitId": "codex", "primary": map[string]any{"usedPercent": 25}},
+				"rateLimits": map[string]any{
+					"limitId": "codex", "planType": "plus",
+					"primary":   map[string]any{"usedPercent": usedPercent, "windowDurationMins": 300, "resetsAt": 1800000000},
+					"secondary": map[string]any{"usedPercent": usedPercent, "windowDurationMins": 10080, "resetsAt": 1800500000},
+				},
 				"rateLimitResetCredits": map[string]any{
 					"availableCount": available,
 					"credits": []map[string]any{{

@@ -69,6 +69,7 @@ export interface CodexResetCreditsResponse {
 export interface CodexResetConsumeResponse {
 	outcome: 'reset' | 'alreadyRedeemed' | 'nothingToReset' | 'noCredit'
 	reset_credits: CodexResetCredits | null
+	quota_snapshot?: ProviderAccount['quota_snapshot']
 }
 
 export interface GlobalSettings {

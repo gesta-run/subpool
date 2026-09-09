@@ -267,7 +267,8 @@ describe('Subpool console', () => {
     vi.mocked(fetch).mockImplementation(async (input, init) => {
       const path = String(input)
       if (path === '/api/v1/provider-accounts') return json({ data: [{
-        id: 'account-1', display_name: 'Primary Codex', provider: 'codex', credential_type: 'subscription_oauth', status: 'exhausted', assigned_api_keys: 1,
+        id: 'account-1', display_name: 'Primary Codex', provider: 'codex', credential_type: 'subscription_oauth', status: availableCount === 2 ? 'exhausted' : 'active', assigned_api_keys: 1,
+        quota_snapshot: { usage_allowed: availableCount !== 2, weekly: { used_percent: availableCount === 2 ? 100 : 0, remaining_percent: availableCount === 2 ? 0 : 100, window_seconds: 604800, reset_at: 1800500000 } },
       }] })
       if ((path === '/api/v1/provider-accounts/account-1/reset-credits' || path === '/api/v1/provider-accounts/account-1/reset-credits?refresh=true') && !init?.method) return json({
         reset_credits: { available_count: availableCount, credits: [{ id: 'credit-1', reset_type: 'codexRateLimits', status: 'available', granted_at: 1800000000, expires_at: 1800500000 }] },
@@ -286,6 +287,8 @@ describe('Subpool console', () => {
     await user.click((await screen.findAllByRole('button', { name: 'Use full reset' })).at(-1)!)
 
     expect(await screen.findByText(/Full reset applied/)).toBeInTheDocument()
+    expect(await screen.findByText('100%')).toBeInTheDocument()
+    expect(screen.getByText('Routing enabled')).toBeInTheDocument()
     const consume = vi.mocked(fetch).mock.calls.find(([path, options]) => String(path).endsWith('/reset-credits/consume') && options?.method === 'POST')
     const body = JSON.parse(String(consume?.[1]?.body))
     expect(body.credit_id).toBe('credit-1')
