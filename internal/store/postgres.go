@@ -236,7 +236,10 @@ func (p *Postgres) DeleteProviderAccount(ctx context.Context, id string) error {
 }
 
 func (p *Postgres) UpdateProviderCredentialCAS(ctx context.Context, id string, expectedVersion int, ciphertext []byte, version int) (bool, error) {
-	tag, err := p.pool.Exec(ctx, `UPDATE provider_accounts SET credential_ciphertext=$3,credential_version=$4,status='active',cooldown_until=NULL,updated_at=now() WHERE id=$1 AND credential_version=$2`, id, expectedVersion, ciphertext, version)
+	tag, err := p.pool.Exec(ctx, `UPDATE provider_accounts SET credential_ciphertext=$3,credential_version=$4,
+		status=CASE WHEN status IN ('disabled','exhausted') THEN status ELSE 'active' END,
+		cooldown_until=CASE WHEN status IN ('disabled','exhausted') THEN cooldown_until ELSE NULL END,
+		updated_at=now() WHERE id=$1 AND credential_version=$2`, id, expectedVersion, ciphertext, version)
 	if err != nil {
 		return false, wrapDB("update provider credential", err)
 	}
@@ -253,6 +256,21 @@ func (p *Postgres) UpdateProviderStatus(ctx context.Context, id, status string, 
 		next_health_check_at=CASE WHEN $2 IN ('auth_failed','cooling_down') THEN now()+interval '5 minutes' ELSE next_health_check_at END,
 		updated_at=now() WHERE id=$1`, id, status, cooldown)
 	return wrapMutation("update provider status", tag.RowsAffected(), err)
+}
+
+func (p *Postgres) SetProviderUsageAllowed(ctx context.Context, id string, allowed bool) error {
+	tag, err := p.pool.Exec(ctx, `UPDATE provider_accounts SET
+		status=CASE
+			WHEN $2 AND status='exhausted' THEN 'active'
+			WHEN NOT $2 AND status IN ('active','cooling_down','exhausted') THEN 'exhausted'
+			ELSE status
+		END,
+		cooldown_until=CASE
+			WHEN ($2 AND status='exhausted') OR (NOT $2 AND status IN ('active','cooling_down','exhausted')) THEN NULL
+			ELSE cooldown_until
+		END,
+		updated_at=now() WHERE id=$1`, id, allowed)
+	return wrapMutation("set provider usage availability", tag.RowsAffected(), err)
 }
 
 func (p *Postgres) SetProviderHealth(ctx context.Context, id, healthStatus, errorCode string, checkedAt, nextCheckAt time.Time) error {
@@ -272,7 +290,7 @@ func (p *Postgres) RecordProviderHealthFailure(ctx context.Context, id, errorCod
 
 func (p *Postgres) ClaimProviderHealthChecks(ctx context.Context, limit int, now, claimedUntil time.Time) ([]domain.ProviderAccount, error) {
 	rows, err := p.pool.Query(ctx, `WITH due AS (
-		SELECT id FROM provider_accounts WHERE status='active' AND (next_health_check_at IS NULL OR next_health_check_at<=$1)
+		SELECT id FROM provider_accounts WHERE status IN ('active','exhausted') AND (next_health_check_at IS NULL OR next_health_check_at<=$1)
 		ORDER BY next_health_check_at NULLS FIRST,id FOR UPDATE SKIP LOCKED LIMIT $2
 	) UPDATE provider_accounts a SET next_health_check_at=$3,updated_at=now() FROM due WHERE a.id=due.id
 	RETURNING a.id,a.provider,a.credential_type,a.display_name,a.credential_ciphertext,a.credential_version,a.status,

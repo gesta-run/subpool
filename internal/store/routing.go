@@ -280,7 +280,10 @@ func (p *Postgres) ReassignAPIKey(ctx context.Context, keyID, poolID string, exc
 
 func (p *Postgres) RecordRequestSuccess(ctx context.Context, accountID, keyID string, occurredAt time.Time) error {
 	_, err := p.pool.Exec(ctx, `WITH account AS (
-		UPDATE provider_accounts SET status='active',cooldown_until=NULL,last_success_at=$3,
+		UPDATE provider_accounts SET
+			status=CASE WHEN status IN ('disabled','exhausted') THEN status ELSE 'active' END,
+			cooldown_until=CASE WHEN status IN ('disabled','exhausted') THEN cooldown_until ELSE NULL END,
+			last_success_at=$3,
 			health_status='healthy',last_checked_at=$3,last_health_error_code=NULL,consecutive_health_failures=0,
 		next_health_check_at=$3::timestamptz+interval '5 minutes',updated_at=now() WHERE id=$1 RETURNING id
 	) UPDATE api_keys SET last_used_at=$3 WHERE id=$2 AND EXISTS(SELECT 1 FROM account)`, accountID, keyID, occurredAt)

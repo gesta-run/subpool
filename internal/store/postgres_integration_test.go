@@ -109,6 +109,60 @@ func TestPostgresHealthFailureThresholdAndRecovery(t *testing.T) {
 	}
 }
 
+func TestPostgresRequestSuccessPreservesBlockedAccountStatus(t *testing.T) {
+	databaseURL := os.Getenv("SUBPOOL_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("SUBPOOL_TEST_DATABASE_URL is not set")
+	}
+	ctx := context.Background()
+	database, err := Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	account := domain.ProviderAccount{
+		ID:                   "00000000-0000-4000-8000-000000000703",
+		Provider:             domain.ProviderCodex,
+		CredentialType:       domain.CredentialSubscription,
+		DisplayName:          "Blocked status account",
+		SubjectHMAC:          bytes.Repeat([]byte{72}, 32),
+		CredentialCiphertext: []byte("encrypted"),
+		CredentialVersion:    1,
+		Status:               domain.AccountActive,
+		HealthStatus:         domain.HealthHealthy,
+	}
+	if err = database.CreateProviderAccount(ctx, account); err != nil {
+		t.Fatal(err)
+	}
+	if err = database.SetProviderUsageAllowed(ctx, account.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	if err = database.RecordRequestSuccess(ctx, account.ID, "00000000-0000-4000-8000-000000000704", time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := database.GetProviderAccount(ctx, account.ID)
+	if err != nil || stored.Status != domain.AccountExhausted {
+		t.Fatalf("account after request success = %#v, %v", stored, err)
+	}
+	if err = database.SetProviderUsageAllowed(ctx, account.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	stored, err = database.GetProviderAccount(ctx, account.ID)
+	if err != nil || stored.Status != domain.AccountActive {
+		t.Fatalf("account after usage recovery = %#v, %v", stored, err)
+	}
+	if err = database.UpdateProviderStatus(ctx, account.ID, domain.AccountDisabled, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err = database.RecordRequestSuccess(ctx, account.ID, "00000000-0000-4000-8000-000000000704", time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	stored, err = database.GetProviderAccount(ctx, account.ID)
+	if err != nil || stored.Status != domain.AccountDisabled {
+		t.Fatalf("disabled account after request success = %#v, %v", stored, err)
+	}
+}
+
 func TestPostgresAssignmentAndUsage(t *testing.T) {
 	databaseURL := os.Getenv("SUBPOOL_TEST_DATABASE_URL")
 	if databaseURL == "" {

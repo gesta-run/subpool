@@ -20,6 +20,8 @@ export interface ProviderAccount {
   assigned_api_keys?: number
   quota_snapshot?: {
     plan_type?: string
+    usage_allowed?: boolean
+    limit_reason?: string
     remaining_percent?: number
     resets_at?: string
     five_hour?: QuotaWindow

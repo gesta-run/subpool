@@ -40,6 +40,7 @@ type Result struct {
 	ErrorCode     string
 	Email         string
 	QuotaSnapshot json.RawMessage
+	UsageAllowed  *bool
 	AuthFailed    bool
 	Failure       bool
 }
@@ -74,7 +75,7 @@ func (c *Checker) Check(ctx context.Context, account domain.ProviderAccount) Res
 			if marshalErr != nil {
 				return Result{HealthStatus: domain.HealthUnknown, ErrorCode: "invalid_usage_response", Failure: true}
 			}
-			return Result{HealthStatus: domain.HealthHealthy, Email: credentials.Email, QuotaSnapshot: raw}
+			return Result{HealthStatus: domain.HealthHealthy, Email: credentials.Email, QuotaSnapshot: raw, UsageAllowed: snapshot.UsageAllowed}
 		}
 		return classifyError(err)
 	case domain.ProviderOpenAICompatible:
@@ -116,6 +117,9 @@ func (c *Checker) ApplyNewAccount(account *domain.ProviderAccount, result Result
 	account.LastHealthErrorCode = result.ErrorCode
 	account.LastCheckedAt = &now
 	account.NextHealthCheckAt = &next
+	if result.UsageAllowed != nil && !*result.UsageAllowed && account.Status != domain.AccountDisabled && account.Status != domain.AccountAuthFailed {
+		account.Status = domain.AccountExhausted
+	}
 	if result.Failure {
 		account.ConsecutiveFailures = 1
 	}
@@ -194,6 +198,11 @@ func (c *Checker) persist(ctx context.Context, accountID string, result Result) 
 	} else if result.Failure {
 		err = c.store.RecordProviderHealthFailure(ctx, accountID, result.ErrorCode, now, next)
 	} else {
+		if result.UsageAllowed != nil {
+			if err = c.store.SetProviderUsageAllowed(ctx, accountID, *result.UsageAllowed); err != nil {
+				return err
+			}
+		}
 		err = c.store.SetProviderHealth(ctx, accountID, result.HealthStatus, result.ErrorCode, now, next)
 	}
 	if err != nil {

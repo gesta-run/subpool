@@ -394,7 +394,7 @@ func (s *Server) refreshProviderAccount(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest, "static API key accounts do not support credential refresh")
 		return
 	}
-	_, err = s.refresher.RefreshAccount(r.Context(), account.ID, account.CredentialVersion)
+	refreshed, err := s.refresher.RefreshAccount(r.Context(), account.ID, account.CredentialVersion)
 	if err != nil {
 		status := domain.AccountCoolingDown
 		cooldown := time.Now().Add(time.Minute)
@@ -409,7 +409,7 @@ func (s *Server) refreshProviderAccount(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	s.audit(r.Context(), "provider_account.refresh", "provider_account", account.ID, "success")
-	writeJSON(w, http.StatusOK, map[string]any{"status": "active"})
+	writeJSON(w, http.StatusOK, map[string]any{"status": refreshed.Status})
 }
 
 func (s *Server) checkProviderAccount(w http.ResponseWriter, r *http.Request) {

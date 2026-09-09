@@ -31,9 +31,11 @@ type UsageWindow struct {
 }
 
 type UsageSnapshot struct {
-	PlanType string       `json:"plan_type,omitempty"`
-	FiveHour *UsageWindow `json:"five_hour,omitempty"`
-	Weekly   *UsageWindow `json:"weekly,omitempty"`
+	PlanType     string       `json:"plan_type,omitempty"`
+	UsageAllowed *bool        `json:"usage_allowed,omitempty"`
+	LimitReason  string       `json:"limit_reason,omitempty"`
+	FiveHour     *UsageWindow `json:"five_hour,omitempty"`
+	Weekly       *UsageWindow `json:"weekly,omitempty"`
 }
 
 type HTTPStatusError struct {
@@ -137,19 +139,33 @@ func (c *Client) Usage(ctx context.Context, credentials Credentials) (UsageSnaps
 	var payload struct {
 		PlanType  string `json:"plan_type"`
 		RateLimit *struct {
-			Primary   *usageWindowResponse `json:"primary_window"`
-			Secondary *usageWindowResponse `json:"secondary_window"`
+			Allowed      *bool                `json:"allowed"`
+			LimitReached bool                 `json:"limit_reached"`
+			Primary      *usageWindowResponse `json:"primary_window"`
+			Secondary    *usageWindowResponse `json:"secondary_window"`
 		} `json:"rate_limit"`
+		SpendControl *struct {
+			Reached bool `json:"reached"`
+		} `json:"spend_control"`
+		RateLimitReachedType *struct {
+			Type string `json:"type"`
+		} `json:"rate_limit_reached_type"`
 	}
 	if err = json.Unmarshal(body, &payload); err != nil {
 		return UsageSnapshot{}, fmt.Errorf("decode Codex usage response: %w", err)
 	}
-	if payload.RateLimit == nil {
+	if payload.RateLimit == nil && payload.SpendControl == nil && payload.RateLimitReachedType == nil {
 		return UsageSnapshot{}, fmt.Errorf("Codex usage response is missing rate_limit")
 	}
-	primary := normalizeUsageWindow(payload.RateLimit.Primary)
-	secondary := normalizeUsageWindow(payload.RateLimit.Secondary)
-	snapshot := UsageSnapshot{PlanType: payload.PlanType, FiveHour: primary, Weekly: secondary}
+	var primary, secondary *UsageWindow
+	snapshot := UsageSnapshot{PlanType: payload.PlanType}
+	if payload.RateLimit != nil {
+		primary = normalizeUsageWindow(payload.RateLimit.Primary)
+		secondary = normalizeUsageWindow(payload.RateLimit.Secondary)
+		snapshot.UsageAllowed = payload.RateLimit.Allowed
+	}
+	snapshot.FiveHour = primary
+	snapshot.Weekly = secondary
 	const weeklyWindowSeconds = 6 * 24 * 60 * 60
 	if primary != nil && primary.WindowSeconds >= weeklyWindowSeconds {
 		snapshot.Weekly = primary
@@ -157,7 +173,20 @@ func (c *Client) Usage(ctx context.Context, credentials Credentials) (UsageSnaps
 	} else if secondary != nil && secondary.WindowSeconds < weeklyWindowSeconds {
 		snapshot.Weekly = nil
 	}
+	if payload.RateLimitReachedType != nil && payload.RateLimitReachedType.Type != "" && payload.RateLimitReachedType.Type != "unknown" {
+		snapshot.markUsageBlocked(payload.RateLimitReachedType.Type)
+	} else if payload.SpendControl != nil && payload.SpendControl.Reached {
+		snapshot.markUsageBlocked("spend_control_reached")
+	} else if payload.RateLimit != nil && (payload.RateLimit.LimitReached || (payload.RateLimit.Allowed != nil && !*payload.RateLimit.Allowed)) {
+		snapshot.markUsageBlocked("rate_limit_reached")
+	}
 	return snapshot, nil
+}
+
+func (s *UsageSnapshot) markUsageBlocked(reason string) {
+	allowed := false
+	s.UsageAllowed = &allowed
+	s.LimitReason = reason
 }
 
 type usageWindowResponse struct {

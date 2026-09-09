@@ -82,7 +82,9 @@ func (m *RefreshManager) RefreshAccount(ctx context.Context, accountID string, o
 	}
 	account.CredentialCiphertext = ciphertext
 	account.CredentialVersion++
-	account.Status = domain.AccountActive
-	account.CooldownUntil = nil
+	if account.Status != domain.AccountDisabled && account.Status != domain.AccountExhausted {
+		account.Status = domain.AccountActive
+		account.CooldownUntil = nil
+	}
 	return account, nil
 }
