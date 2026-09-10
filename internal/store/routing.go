@@ -285,7 +285,7 @@ func (p *Postgres) RecordRequestSuccess(ctx context.Context, accountID, keyID st
 			cooldown_until=CASE WHEN status IN ('disabled','exhausted') THEN cooldown_until ELSE NULL END,
 			last_success_at=$3,
 			health_status='healthy',last_checked_at=$3,last_health_error_code=NULL,consecutive_health_failures=0,
-		next_health_check_at=$3::timestamptz+interval '5 minutes',updated_at=now() WHERE id=$1 RETURNING id
+			updated_at=now() WHERE id=$1 RETURNING id
 	) UPDATE api_keys SET last_used_at=$3 WHERE id=$2 AND EXISTS(SELECT 1 FROM account)`, accountID, keyID, occurredAt)
 	return wrapDB("record request success", err)
 }

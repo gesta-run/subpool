@@ -87,10 +87,10 @@ func (p *Postgres) migrate(ctx context.Context) error {
 func (p *Postgres) CreateProviderAccount(ctx context.Context, a domain.ProviderAccount) error {
 	_, err := p.pool.Exec(ctx, `INSERT INTO provider_accounts
 		(id, provider, credential_type, display_name, email, subject_hmac, credential_ciphertext, credential_version, status, quota_snapshot,
-		 health_status,last_checked_at,last_health_error_code,consecutive_health_failures,next_health_check_at)
-		VALUES ($1,$2,$3,$4,NULLIF($5,''),$6,$7,$8,$9,COALESCE($10,'{}'::jsonb),COALESCE(NULLIF($11,''),'unknown'),$12,NULLIF($13,''),$14,$15)`,
+		 quota_checked_at,last_quota_error_code,health_status,last_checked_at,last_health_error_code,consecutive_health_failures,next_health_check_at)
+		VALUES ($1,$2,$3,$4,NULLIF($5,''),$6,$7,$8,$9,COALESCE($10,'{}'::jsonb),$11,NULLIF($12,''),COALESCE(NULLIF($13,''),'unknown'),$14,NULLIF($15,''),$16,$17)`,
 		a.ID, a.Provider, a.CredentialType, a.DisplayName, a.Email, a.SubjectHMAC, a.CredentialCiphertext, a.CredentialVersion, a.Status, nullableJSON(a.QuotaSnapshot),
-		a.HealthStatus, a.LastCheckedAt, a.LastHealthErrorCode, a.ConsecutiveFailures, a.NextHealthCheckAt)
+		a.QuotaCheckedAt, a.LastQuotaErrorCode, a.HealthStatus, a.LastCheckedAt, a.LastHealthErrorCode, a.ConsecutiveFailures, a.NextHealthCheckAt)
 	return wrapDB("create provider account", err)
 }
 
@@ -98,7 +98,7 @@ func (p *Postgres) ListProviderAccounts(ctx context.Context) ([]domain.ProviderA
 	rows, err := p.pool.Query(ctx, `SELECT a.id,a.provider,a.credential_type,a.display_name,COALESCE(a.email,''),a.credential_version,a.status,
 		a.fast_mode_enabled,
 		(SELECT count(*) FROM api_key_account_bindings b JOIN api_keys k ON k.id=b.api_key_id WHERE b.provider_account_id=a.id AND k.revoked_at IS NULL AND (k.expires_at IS NULL OR k.expires_at>now())),
-		a.quota_snapshot,a.cooldown_until,a.last_success_at,a.last_failure_at,a.health_status,a.last_checked_at,COALESCE(a.last_health_error_code,''),a.consecutive_health_failures,a.next_health_check_at,a.created_at,a.updated_at
+		a.quota_snapshot,a.quota_checked_at,COALESCE(a.last_quota_error_code,''),a.cooldown_until,a.last_success_at,a.last_failure_at,a.health_status,a.last_checked_at,COALESCE(a.last_health_error_code,''),a.consecutive_health_failures,a.next_health_check_at,a.created_at,a.updated_at
 		FROM provider_accounts a ORDER BY a.created_at`)
 	if err != nil {
 		return nil, wrapDB("list provider accounts", err)
@@ -108,7 +108,7 @@ func (p *Postgres) ListProviderAccounts(ctx context.Context) ([]domain.ProviderA
 	for rows.Next() {
 		var a domain.ProviderAccount
 		if err = rows.Scan(&a.ID, &a.Provider, &a.CredentialType, &a.DisplayName, &a.Email, &a.CredentialVersion, &a.Status,
-			&a.FastModeEnabled, &a.AssignedAPIKeys, &a.QuotaSnapshot, &a.CooldownUntil, &a.LastSuccessAt, &a.LastFailureAt, &a.HealthStatus, &a.LastCheckedAt, &a.LastHealthErrorCode, &a.ConsecutiveFailures, &a.NextHealthCheckAt, &a.CreatedAt, &a.UpdatedAt); err != nil {
+			&a.FastModeEnabled, &a.AssignedAPIKeys, &a.QuotaSnapshot, &a.QuotaCheckedAt, &a.LastQuotaErrorCode, &a.CooldownUntil, &a.LastSuccessAt, &a.LastFailureAt, &a.HealthStatus, &a.LastCheckedAt, &a.LastHealthErrorCode, &a.ConsecutiveFailures, &a.NextHealthCheckAt, &a.CreatedAt, &a.UpdatedAt); err != nil {
 			return nil, wrapDB("scan provider account", err)
 		}
 		out = append(out, a)
@@ -143,15 +143,25 @@ func (p *Postgres) ListPoolProviderAccounts(ctx context.Context, poolID string) 
 func (p *Postgres) GetProviderAccount(ctx context.Context, id string) (domain.ProviderAccount, error) {
 	var a domain.ProviderAccount
 	err := p.pool.QueryRow(ctx, `SELECT id,provider,credential_type,display_name,COALESCE(email,''),credential_ciphertext,credential_version,status,
-		fast_mode_enabled,quota_snapshot,cooldown_until,last_success_at,last_failure_at,health_status,last_checked_at,COALESCE(last_health_error_code,''),consecutive_health_failures,next_health_check_at,created_at,updated_at FROM provider_accounts WHERE id=$1`, id).
+		fast_mode_enabled,quota_snapshot,quota_checked_at,COALESCE(last_quota_error_code,''),cooldown_until,last_success_at,last_failure_at,health_status,last_checked_at,COALESCE(last_health_error_code,''),consecutive_health_failures,next_health_check_at,created_at,updated_at FROM provider_accounts WHERE id=$1`, id).
 		Scan(&a.ID, &a.Provider, &a.CredentialType, &a.DisplayName, &a.Email, &a.CredentialCiphertext, &a.CredentialVersion, &a.Status,
-			&a.FastModeEnabled, &a.QuotaSnapshot, &a.CooldownUntil, &a.LastSuccessAt, &a.LastFailureAt, &a.HealthStatus, &a.LastCheckedAt, &a.LastHealthErrorCode, &a.ConsecutiveFailures, &a.NextHealthCheckAt, &a.CreatedAt, &a.UpdatedAt)
+			&a.FastModeEnabled, &a.QuotaSnapshot, &a.QuotaCheckedAt, &a.LastQuotaErrorCode, &a.CooldownUntil, &a.LastSuccessAt, &a.LastFailureAt, &a.HealthStatus, &a.LastCheckedAt, &a.LastHealthErrorCode, &a.ConsecutiveFailures, &a.NextHealthCheckAt, &a.CreatedAt, &a.UpdatedAt)
 	return a, wrapDB("get provider account", err)
 }
 
-func (p *Postgres) UpdateProviderDetails(ctx context.Context, id, email string, quota []byte) error {
-	tag, err := p.pool.Exec(ctx, `UPDATE provider_accounts SET email=COALESCE(NULLIF($2,''),email),quota_snapshot=COALESCE($3,'{}'::jsonb),updated_at=now() WHERE id=$1`, id, email, nullableJSON(quota))
+func (p *Postgres) UpdateProviderDetails(ctx context.Context, id, email string, quota []byte, quotaCheckedAt time.Time) error {
+	tag, err := p.pool.Exec(ctx, `UPDATE provider_accounts SET
+		email=COALESCE(NULLIF($2,''),email),
+		quota_snapshot=COALESCE($3::jsonb,quota_snapshot),
+		quota_checked_at=CASE WHEN $3::jsonb IS NULL THEN quota_checked_at ELSE $4 END,
+		last_quota_error_code=CASE WHEN $3::jsonb IS NULL THEN last_quota_error_code ELSE NULL END,
+		updated_at=now() WHERE id=$1`, id, email, nullableJSON(quota), quotaCheckedAt)
 	return wrapMutation("update provider details", tag.RowsAffected(), err)
+}
+
+func (p *Postgres) SetProviderQuotaError(ctx context.Context, id, errorCode string) error {
+	tag, err := p.pool.Exec(ctx, `UPDATE provider_accounts SET last_quota_error_code=NULLIF($2,''),updated_at=now() WHERE id=$1`, id, errorCode)
+	return wrapMutation("set provider quota error", tag.RowsAffected(), err)
 }
 
 func (p *Postgres) GetProviderResetCredits(ctx context.Context, id string) ([]byte, *time.Time, error) {

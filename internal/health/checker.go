@@ -36,13 +36,14 @@ type CompatibleModels interface {
 }
 
 type Result struct {
-	HealthStatus  string
-	ErrorCode     string
-	Email         string
-	QuotaSnapshot json.RawMessage
-	UsageAllowed  *bool
-	AuthFailed    bool
-	Failure       bool
+	HealthStatus   string
+	ErrorCode      string
+	QuotaErrorCode string
+	Email          string
+	QuotaSnapshot  json.RawMessage
+	UsageAllowed   *bool
+	AuthFailed     bool
+	Failure        bool
 }
 
 type Checker struct {
@@ -60,24 +61,30 @@ func NewChecker(st store.Store, cipher Cipher, codexUsage CodexUsage, compatible
 func (c *Checker) Check(ctx context.Context, account domain.ProviderAccount) Result {
 	plaintext, err := c.cipher.Decrypt(account.CredentialCiphertext)
 	if err != nil {
-		return Result{HealthStatus: domain.HealthUnhealthy, ErrorCode: "credential_unavailable", Failure: true}
+		result := Result{HealthStatus: domain.HealthUnhealthy, ErrorCode: "credential_unavailable", Failure: true}
+		if account.Provider == domain.ProviderCodex {
+			result.QuotaErrorCode = result.ErrorCode
+		}
+		return result
 	}
 	switch account.Provider {
 	case domain.ProviderCodex:
 		var credentials codex.Credentials
 		if json.Unmarshal(plaintext, &credentials) != nil {
-			return Result{HealthStatus: domain.HealthUnhealthy, ErrorCode: "credential_unavailable", Failure: true}
+			return Result{HealthStatus: domain.HealthUnhealthy, ErrorCode: "credential_unavailable", QuotaErrorCode: "credential_unavailable", Failure: true}
 		}
 		snapshot, usageErr := c.codex.Usage(ctx, credentials)
 		err = usageErr
 		if err == nil {
 			raw, marshalErr := json.Marshal(snapshot)
 			if marshalErr != nil {
-				return Result{HealthStatus: domain.HealthUnknown, ErrorCode: "invalid_usage_response", Failure: true}
+				return Result{HealthStatus: domain.HealthUnknown, ErrorCode: "invalid_usage_response", QuotaErrorCode: "invalid_usage_response", Failure: true}
 			}
 			return Result{HealthStatus: domain.HealthHealthy, Email: credentials.Email, QuotaSnapshot: raw, UsageAllowed: snapshot.UsageAllowed}
 		}
-		return classifyError(err)
+		result := classifyError(err)
+		result.QuotaErrorCode = result.ErrorCode
+		return result
 	case domain.ProviderOpenAICompatible:
 		var credentials openaicompat.Credentials
 		if json.Unmarshal(plaintext, &credentials) != nil {
@@ -114,6 +121,12 @@ func (c *Checker) ApplyNewAccount(account *domain.ProviderAccount, result Result
 	account.HealthStatus = result.HealthStatus
 	account.Email = result.Email
 	account.QuotaSnapshot = result.QuotaSnapshot
+	if len(result.QuotaSnapshot) > 0 {
+		account.QuotaCheckedAt = &now
+		account.LastQuotaErrorCode = ""
+	} else if result.QuotaErrorCode != "" {
+		account.LastQuotaErrorCode = result.QuotaErrorCode
+	}
 	account.LastHealthErrorCode = result.ErrorCode
 	account.LastCheckedAt = &now
 	account.NextHealthCheckAt = &next
@@ -209,7 +222,10 @@ func (c *Checker) persist(ctx context.Context, accountID string, result Result) 
 		return err
 	}
 	if result.Email != "" || len(result.QuotaSnapshot) > 0 {
-		return c.store.UpdateProviderDetails(ctx, accountID, result.Email, result.QuotaSnapshot)
+		return c.store.UpdateProviderDetails(ctx, accountID, result.Email, result.QuotaSnapshot, now)
+	}
+	if result.QuotaErrorCode != "" {
+		return c.store.SetProviderQuotaError(ctx, accountID, result.QuotaErrorCode)
 	}
 	return nil
 }
@@ -226,7 +242,7 @@ func classifyError(err error) Result {
 		case statusErr.StatusCode == http.StatusUnauthorized || statusErr.StatusCode == http.StatusForbidden:
 			return Result{HealthStatus: domain.HealthUnhealthy, ErrorCode: "authentication_failed", AuthFailed: true}
 		case statusErr.StatusCode == http.StatusTooManyRequests:
-			return Result{HealthStatus: domain.HealthHealthy}
+			return Result{HealthStatus: domain.HealthUnknown, ErrorCode: "quota_probe_rate_limited"}
 		case statusErr.StatusCode == http.StatusNotFound || statusErr.StatusCode == http.StatusMethodNotAllowed:
 			return Result{HealthStatus: domain.HealthUnknown, ErrorCode: "provider_unavailable", Failure: true}
 		case statusErr.StatusCode >= 500:

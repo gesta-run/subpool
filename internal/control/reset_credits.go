@@ -216,20 +216,20 @@ func (s *Server) consumeResetCredit(w http.ResponseWriter, r *http.Request) {
 func (s *Server) persistResetQuota(ctx context.Context, account domain.ProviderAccount, quota *codex.UsageSnapshot) {
 	if quota == nil && s.health != nil {
 		checked, err := s.health.CheckAccount(ctx, account.ID)
-		if err == nil && checked.LastHealthErrorCode == "" {
+		if err == nil && checked.LastQuotaErrorCode == "" {
 			return
 		}
 		if err != nil {
 			slog.Warn("Codex reset quota reconciliation failed", "provider_account_id", account.ID, "error", err)
 		} else {
-			slog.Warn("Codex reset quota reconciliation was inconclusive", "provider_account_id", account.ID, "error_code", checked.LastHealthErrorCode)
+			slog.Warn("Codex reset quota reconciliation was inconclusive", "provider_account_id", account.ID, "error_code", checked.LastQuotaErrorCode)
 		}
 	}
 	if quota != nil {
 		snapshot, err := json.Marshal(quota)
 		if err != nil {
 			slog.Warn("Codex reset quota encoding failed", "provider_account_id", account.ID, "error", err)
-		} else if err = s.store.UpdateProviderDetails(ctx, account.ID, "", snapshot); err != nil {
+		} else if err = s.store.UpdateProviderDetails(ctx, account.ID, "", snapshot, time.Now().UTC()); err != nil {
 			slog.Warn("Codex reset quota update failed", "provider_account_id", account.ID, "error", err)
 		} else if quota.UsageAllowed != nil {
 			if err = s.store.SetProviderUsageAllowed(ctx, account.ID, *quota.UsageAllowed); err != nil {

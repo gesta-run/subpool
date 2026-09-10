@@ -3,6 +3,7 @@ package store
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -134,15 +135,64 @@ func TestPostgresRequestSuccessPreservesBlockedAccountStatus(t *testing.T) {
 	if err = database.CreateProviderAccount(ctx, account); err != nil {
 		t.Fatal(err)
 	}
-	if err = database.SetProviderUsageAllowed(ctx, account.ID, false); err != nil {
+	checkedAt := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	nextCheckAt := checkedAt.Add(5 * time.Minute)
+	if err = database.SetProviderHealth(ctx, account.ID, domain.HealthHealthy, "", checkedAt, nextCheckAt); err != nil {
 		t.Fatal(err)
 	}
-	if err = database.RecordRequestSuccess(ctx, account.ID, "00000000-0000-4000-8000-000000000704", time.Now().UTC()); err != nil {
+	quotaSnapshot := []byte(`{"weekly":{"remaining_percent":75}}`)
+	if err = database.UpdateProviderDetails(ctx, account.ID, "", quotaSnapshot, checkedAt); err != nil {
+		t.Fatal(err)
+	}
+	probeFailedAt := checkedAt.Add(time.Minute)
+	nextCheckAt = probeFailedAt.Add(5 * time.Minute)
+	if err = database.SetProviderHealth(ctx, account.ID, domain.HealthUnknown, "quota_probe_rate_limited", probeFailedAt, nextCheckAt); err != nil {
+		t.Fatal(err)
+	}
+	if err = database.SetProviderQuotaError(ctx, account.ID, "quota_probe_rate_limited"); err != nil {
+		t.Fatal(err)
+	}
+	if err = database.RecordRequestSuccess(ctx, account.ID, "00000000-0000-4000-8000-000000000704", probeFailedAt.Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
 	stored, err := database.GetProviderAccount(ctx, account.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.HealthStatus != domain.HealthHealthy || stored.LastHealthErrorCode != "" || stored.LastQuotaErrorCode != "quota_probe_rate_limited" {
+		t.Fatalf("account freshness after request success = %#v", stored)
+	}
+	var storedQuota struct {
+		Weekly struct {
+			RemainingPercent float64 `json:"remaining_percent"`
+		} `json:"weekly"`
+	}
+	if decodeErr := json.Unmarshal(stored.QuotaSnapshot, &storedQuota); decodeErr != nil {
+		t.Fatal(decodeErr)
+	}
+	if stored.QuotaCheckedAt == nil || !stored.QuotaCheckedAt.Equal(checkedAt) || storedQuota.Weekly.RemainingPercent != 75 {
+		t.Fatalf("cached quota changed after request success = %#v", stored)
+	}
+	refreshedAt := probeFailedAt.Add(2 * time.Minute)
+	if err = database.UpdateProviderDetails(ctx, account.ID, "", []byte(`{"weekly":{"remaining_percent":70}}`), refreshedAt); err != nil {
+		t.Fatal(err)
+	}
+	stored, err = database.GetProviderAccount(ctx, account.ID)
+	if err != nil || stored.LastQuotaErrorCode != "" || stored.QuotaCheckedAt == nil || !stored.QuotaCheckedAt.Equal(refreshedAt) {
+		t.Fatalf("quota freshness after successful refresh = %#v, %v", stored, err)
+	}
+	if err = database.SetProviderUsageAllowed(ctx, account.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	if err = database.RecordRequestSuccess(ctx, account.ID, "00000000-0000-4000-8000-000000000704", probeFailedAt.Add(3*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	stored, err = database.GetProviderAccount(ctx, account.ID)
 	if err != nil || stored.Status != domain.AccountExhausted {
 		t.Fatalf("account after request success = %#v, %v", stored, err)
+	}
+	if stored.NextHealthCheckAt == nil || !stored.NextHealthCheckAt.Equal(nextCheckAt) {
+		t.Fatalf("quota check was postponed after request success: %#v", stored)
 	}
 	if err = database.SetProviderUsageAllowed(ctx, account.ID, true); err != nil {
 		t.Fatal(err)

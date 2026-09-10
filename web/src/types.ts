@@ -27,6 +27,8 @@ export interface ProviderAccount {
     five_hour?: QuotaWindow
     weekly?: QuotaWindow
   } | null
+  quota_checked_at?: string | null
+  last_quota_error_code?: string | null
   last_success_at?: string | null
   last_failure_at?: string | null
 }

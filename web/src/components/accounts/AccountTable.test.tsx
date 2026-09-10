@@ -10,6 +10,7 @@ const baseAccount: ProviderAccount = {
   display_name: 'Team account',
   status: 'active',
   health_status: 'healthy',
+  quota_checked_at: '2026-09-10T08:00:00Z',
   quota_snapshot: {
     weekly: {
       used_percent: 25,
@@ -53,6 +54,7 @@ describe('AccountTable health states', () => {
       ...baseAccount,
       consecutive_health_failures: 1,
       last_health_error_code: 'provider_unavailable',
+      last_quota_error_code: 'provider_unavailable',
     })
 
     expect(screen.getByText('degraded')).toBeInTheDocument()
@@ -67,10 +69,37 @@ describe('AccountTable health states', () => {
       health_status: 'unhealthy',
       consecutive_health_failures: 3,
       last_health_error_code: 'provider_unavailable',
+      last_quota_error_code: 'provider_unavailable',
     })
 
     expect(screen.getByText('unhealthy')).toBeInTheDocument()
     expect(screen.getByText('Routing suspended')).toBeInTheDocument()
+    expect(screen.getByText('last known weekly capacity')).toBeInTheDocument()
+  })
+
+  it('labels cached capacity as last known when quota probing is rate limited', () => {
+    renderTable({
+      ...baseAccount,
+      health_status: 'unknown',
+      last_health_error_code: 'quota_probe_rate_limited',
+      last_quota_error_code: 'quota_probe_rate_limited',
+    })
+
+    expect(screen.getByText('unchecked')).toBeInTheDocument()
+    expect(screen.getByText('last known weekly capacity')).toBeInTheDocument()
+    expect(screen.getByText('quota probe rate limited')).toBeInTheDocument()
+  })
+
+  it('keeps cached capacity marked as last known after a successful model request', () => {
+    renderTable({
+      ...baseAccount,
+      health_status: 'healthy',
+      last_success_at: '2026-09-10T08:01:00Z',
+      last_quota_error_code: 'quota_probe_rate_limited',
+    })
+
+    expect(screen.getByText('healthy')).toBeInTheDocument()
+    expect(screen.getByText('Routing enabled')).toBeInTheDocument()
     expect(screen.getByText('last known weekly capacity')).toBeInTheDocument()
   })
 
