@@ -57,9 +57,10 @@ export function AccountTable({ accounts, busyID, resetBusyID, resetStates, onMod
       const unavailable = effectiveStatus !== 'active'
       const degraded = !unavailable && health !== 'unhealthy' && (account.consecutive_health_failures ?? 0) > 0
       const healthStatus = degraded ? 'unknown' : health
+      const quotaIsLastKnown = !account.quota_checked_at || Boolean(account.last_quota_error_code)
       const availabilityLabel = unavailable ? statusLabel(effectiveStatus) : degraded ? 'degraded' : healthLabel(health)
       const routingLabel = usageBlocked ? 'Routing suspended' : unavailable ? `${healthLabel(health)} health` : health === 'unhealthy' ? 'Routing suspended' : degraded ? 'Routing enabled while retrying' : 'Routing enabled'
-      const capacityLabel = usageBlocked ? 'effective weekly capacity' : degraded || health === 'unhealthy' ? 'last known weekly capacity' : 'weekly capacity'
+      const capacityLabel = usageBlocked ? 'effective weekly capacity' : quotaIsLastKnown ? 'last known weekly capacity' : 'weekly capacity'
       return <tr key={account.id}>
         <td data-label="Account"><button className="account-detail-button" type="button" aria-label={`View supported models for ${account.display_name}`} onClick={() => onModels(account)}><span className="account-detail-button__title"><strong>{account.display_name}</strong><ChevronIcon /></span><small>{account.credential_type === 'api_key' ? 'OpenAI-compatible · API key' : `${account.email || 'Email unavailable'} · Codex subscription`}</small></button></td>
         <td data-label="Availability"><div className="account-availability"><span className={`status ${unavailable ? `status--${effectiveStatus}` : `status--health-${healthStatus}`}`}><i />{availabilityLabel}</span><small>{routingLabel}</small>{account.last_health_error_code ? <small className="health-error">{account.last_health_error_code.replaceAll('_', ' ')}</small> : null}</div></td>

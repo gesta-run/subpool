@@ -116,12 +116,14 @@ func (f *controlStore) UpdateProviderAccount(_ context.Context, id string, updat
 	}
 	return nil
 }
-func (f *controlStore) UpdateProviderDetails(_ context.Context, id, email string, quota []byte) error {
+func (f *controlStore) UpdateProviderDetails(_ context.Context, id, email string, quota []byte, checkedAt time.Time) error {
 	f.account.ID = id
 	if email != "" {
 		f.account.Email = email
 	}
 	f.account.QuotaSnapshot = append([]byte(nil), quota...)
+	f.account.QuotaCheckedAt = &checkedAt
+	f.account.LastQuotaErrorCode = ""
 	return nil
 }
 func (f *controlStore) UpdateProviderStatus(_ context.Context, _ string, status string, cooldown *time.Time) error {
@@ -498,7 +500,7 @@ func TestCodexResetCreditsCanBeReadAndConsumed(t *testing.T) {
 	}
 	st.account = domain.ProviderAccount{
 		ID: "account-1", Provider: domain.ProviderCodex, CredentialType: domain.CredentialSubscription,
-		CredentialCiphertext: encrypted, CredentialVersion: 1, Status: domain.AccountExhausted,
+		CredentialCiphertext: encrypted, CredentialVersion: 1, Status: domain.AccountExhausted, LastQuotaErrorCode: "quota_probe_rate_limited",
 	}
 	resets := server.resets.(*controlResetCredits)
 	expiresAt := int64(1800500000)
@@ -552,6 +554,9 @@ func TestCodexResetCreditsCanBeReadAndConsumed(t *testing.T) {
 	var quota codex.UsageSnapshot
 	if err = json.Unmarshal(st.account.QuotaSnapshot, &quota); err != nil || quota.Weekly == nil || quota.Weekly.RemainingPercent != 100 || quota.UsageAllowed == nil || !*quota.UsageAllowed {
 		t.Fatalf("quota = %#v, error = %v", quota, err)
+	}
+	if st.account.QuotaCheckedAt == nil || st.account.LastQuotaErrorCode != "" {
+		t.Fatalf("quota freshness = %#v", st.account)
 	}
 	if len(st.audits) != 1 || st.audits[0].Action != "provider_account.reset_credit.consume" || st.audits[0].Result != "success" {
 		t.Fatalf("audits = %#v", st.audits)

@@ -25,10 +25,13 @@ func (c testCompatible) Models(context.Context, openaicompat.Credentials) (*http
 	return &http.Response{StatusCode: c.status, Body: io.NopCloser(strings.NewReader(`{}`))}, nil
 }
 
-type testCodexUsage struct{ snapshot codex.UsageSnapshot }
+type testCodexUsage struct {
+	snapshot codex.UsageSnapshot
+	err      error
+}
 
 func (c testCodexUsage) Usage(context.Context, codex.Credentials) (codex.UsageSnapshot, error) {
-	return c.snapshot, nil
+	return c.snapshot, c.err
 }
 
 func TestCodexHealthCheckReportsExhaustedUsage(t *testing.T) {
@@ -43,6 +46,23 @@ func TestCodexHealthCheckReportsExhaustedUsage(t *testing.T) {
 	checker.ApplyNewAccount(&account, result)
 	if account.Status != domain.AccountExhausted {
 		t.Fatalf("status = %q, want exhausted", account.Status)
+	}
+	if account.QuotaCheckedAt == nil || account.LastQuotaErrorCode != "" {
+		t.Fatalf("quota freshness = %#v", account)
+	}
+}
+
+func TestCodexHealthCheckTracksQuotaProbeFailure(t *testing.T) {
+	credentials, _ := json.Marshal(codex.Credentials{AccessToken: "access", AccountID: "account"})
+	account := domain.ProviderAccount{Provider: domain.ProviderCodex, CredentialCiphertext: []byte("encrypted")}
+	checker := NewChecker(nil, testCipher{plaintext: credentials}, testCodexUsage{err: &codex.HTTPStatusError{StatusCode: http.StatusTooManyRequests}}, nil)
+	result := checker.Check(context.Background(), account)
+	if result.HealthStatus != domain.HealthUnknown || result.ErrorCode != "quota_probe_rate_limited" || result.QuotaErrorCode != "quota_probe_rate_limited" {
+		t.Fatalf("result = %#v", result)
+	}
+	checker.ApplyNewAccount(&account, result)
+	if account.LastQuotaErrorCode != "quota_probe_rate_limited" || account.QuotaCheckedAt != nil {
+		t.Fatalf("quota freshness = %#v", account)
 	}
 }
 
@@ -71,7 +91,7 @@ func TestClassifyCodexStatusError(t *testing.T) {
 	}{
 		{name: "unauthorized", statusCode: http.StatusUnauthorized, want: Result{HealthStatus: domain.HealthUnhealthy, ErrorCode: "authentication_failed", AuthFailed: true}},
 		{name: "forbidden", statusCode: http.StatusForbidden, want: Result{HealthStatus: domain.HealthUnhealthy, ErrorCode: "authentication_failed", AuthFailed: true}},
-		{name: "rate limited", statusCode: http.StatusTooManyRequests, want: Result{HealthStatus: domain.HealthHealthy}},
+		{name: "rate limited", statusCode: http.StatusTooManyRequests, want: Result{HealthStatus: domain.HealthUnknown, ErrorCode: "quota_probe_rate_limited"}},
 		{name: "not found", statusCode: http.StatusNotFound, want: Result{HealthStatus: domain.HealthUnknown, ErrorCode: "provider_unavailable", Failure: true}},
 		{name: "method not allowed", statusCode: http.StatusMethodNotAllowed, want: Result{HealthStatus: domain.HealthUnknown, ErrorCode: "provider_unavailable", Failure: true}},
 		{name: "provider failure", statusCode: http.StatusBadGateway, want: Result{HealthStatus: domain.HealthUnknown, ErrorCode: "provider_5xx", Failure: true}},

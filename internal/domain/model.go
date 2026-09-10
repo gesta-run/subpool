@@ -39,6 +39,8 @@ type ProviderAccount struct {
 	NextHealthCheckAt    *time.Time      `json:"next_health_check_at,omitempty"`
 	AssignedAPIKeys      int             `json:"assigned_api_keys"`
 	QuotaSnapshot        json.RawMessage `json:"quota_snapshot"`
+	QuotaCheckedAt       *time.Time      `json:"quota_checked_at,omitempty"`
+	LastQuotaErrorCode   string          `json:"last_quota_error_code,omitempty"`
 	CooldownUntil        *time.Time      `json:"cooldown_until,omitempty"`
 	LastSuccessAt        *time.Time      `json:"last_success_at,omitempty"`
 	LastFailureAt        *time.Time      `json:"last_failure_at,omitempty"`
