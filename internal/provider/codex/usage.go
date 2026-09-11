@@ -1,6 +1,9 @@
 package codex
 
-import "math"
+import (
+	"math"
+	"time"
+)
 
 type UsageWindow struct {
 	UsedPercent      float64 `json:"used_percent"`
@@ -21,6 +24,20 @@ func (s *UsageSnapshot) markUsageBlocked(reason string) {
 	allowed := false
 	s.UsageAllowed = &allowed
 	s.LimitReason = reason
+}
+
+func (s UsageSnapshot) AllowsUsageAt(now time.Time) bool {
+	if s.UsageAllowed != nil && !*s.UsageAllowed {
+		return false
+	}
+	return !usageWindowBlocked(s.FiveHour, now) && !usageWindowBlocked(s.Weekly, now)
+}
+
+func usageWindowBlocked(window *UsageWindow, now time.Time) bool {
+	if window == nil || window.UsedPercent < 100 {
+		return false
+	}
+	return window.ResetAt <= 0 || now.Unix() < window.ResetAt
 }
 
 func normalizeUsageWindow(usedPercent float64, windowSeconds, resetAt int64) *UsageWindow {

@@ -317,6 +317,8 @@ func normalizeAppServerRateLimits(limits appServerRateLimits) *UsageSnapshot {
 		snapshot.markUsageBlocked(*limits.RateLimitReachedType)
 	} else if limits.SpendControlReached != nil && *limits.SpendControlReached {
 		snapshot.markUsageBlocked("spend_control_reached")
+	} else if (snapshot.FiveHour != nil && snapshot.FiveHour.UsedPercent >= 100) || (snapshot.Weekly != nil && snapshot.Weekly.UsedPercent >= 100) {
+		snapshot.markUsageBlocked("rate_limit_reached")
 	}
 	return snapshot
 }

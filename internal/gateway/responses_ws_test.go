@@ -260,6 +260,63 @@ func TestResponsesWebSocketNativeCodex(t *testing.T) {
 	}
 }
 
+func TestResponsesWebSocketNativeCodexFailsOverUsageLimit(t *testing.T) {
+	upstreamPayloads := make(chan []byte, 2)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.CloseNow()
+		messageType, payload, err := conn.Read(r.Context())
+		if err != nil || messageType != websocket.MessageText {
+			return
+		}
+		upstreamPayloads <- payload
+		if r.Header.Get("Authorization") == "Bearer old-token" {
+			_ = conn.Write(r.Context(), websocket.MessageText, []byte(`{"type":"error","error":{"type":"usage_limit_reached","code":"usage_limit_reached","message":"Usage limit reached"}}`))
+			return
+		}
+		_ = conn.Write(r.Context(), websocket.MessageText, []byte(`{"type":"response.completed","response":{"id":"resp-failed-over","model":"gpt-test","usage":{}}}`))
+	}))
+	defer upstream.Close()
+
+	server, st, _, plain := newTestServer(t)
+	st.reassigned = accountWithCipher(t, server.cipher.(*credential.Cipher), "account-2", "new-token")
+	server.WithResponsesWebSocket(true, false, upstream.URL)
+	client, cleanup := dialResponsesWSTestServer(t, server, plain)
+	defer cleanup()
+
+	writeResponsesWSMessage(t, client, `{"type":"response.create","model":"gpt-test","input":"hello"}`)
+	if event := readResponsesWSMessage(t, client); event["type"] != "response.completed" {
+		t.Fatalf("event = %#v", event)
+	}
+	if len(st.availabilityUpdates) != 1 || st.availabilityUpdates[0].accountID != st.route.Account.ID || st.availabilityUpdates[0].allowed {
+		t.Fatalf("availability updates = %#v", st.availabilityUpdates)
+	}
+	if len(st.reassignExcludes) != 1 || len(st.reassignExcludes[0]) != 1 || st.reassignExcludes[0][0] != st.route.Account.ID {
+		t.Fatalf("reassign excludes = %#v", st.reassignExcludes)
+	}
+	for index := 0; index < 2; index++ {
+		select {
+		case payload := <-upstreamPayloads:
+			if index == 1 {
+				var body map[string]any
+				if err := json.Unmarshal(payload, &body); err != nil {
+					t.Fatal(err)
+				}
+				metadata, _ := body["client_metadata"].(map[string]any)
+				installationID, _ := codex.InstallationID(st.reassigned.ID)
+				if metadata["x-codex-installation-id"] != installationID {
+					t.Fatalf("replayed payload = %s", payload)
+				}
+			}
+		case <-time.After(time.Second):
+			t.Fatal("native request was not replayed")
+		}
+	}
+}
+
 func TestResponsesWebSocketNativeCodexClosesWhenModelChanges(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, err := websocket.Accept(w, r, nil)
@@ -317,6 +374,38 @@ func TestParseResponsesWSRequestValidatesStreamID(t *testing.T) {
 	payload, _ := json.Marshal(map[string]any{"type": "response.create", "stream_id": valid})
 	if _, requestErr := parseResponsesWSRequest(payload); requestErr != nil {
 		t.Fatalf("valid stream_id was rejected: %#v", requestErr)
+	}
+}
+
+func TestClassifyResponsesWSLimitEvent(t *testing.T) {
+	for _, payload := range []string{
+		`{"type":"error","error":{"code":"usage_limit_reached"}}`,
+		`{"type":"error","error":{"message":"You have hit your usage limit. Please try again later."}}`,
+	} {
+		if classifyResponsesWSLimitEvent([]byte(payload)) != responsesWSLimitQuota {
+			t.Fatalf("usage limit event was not recognized: %s", payload)
+		}
+	}
+	if classifyResponsesWSLimitEvent([]byte(`{"type":"response.failed","response":{"error":{"type":"rate_limit_exceeded"}}}`)) != responsesWSLimitTemporary {
+		t.Fatal("temporary rate limit was not recognized")
+	}
+	if classifyResponsesWSLimitEvent([]byte(`{"type":"error","error":{"code":"invalid_request_error","message":"Invalid input"}}`)) != responsesWSLimitNone {
+		t.Fatal("invalid request was classified as a usage limit")
+	}
+}
+
+func TestResponsesWebSocketRejectsTurnDuringNativeFailover(t *testing.T) {
+	server, st, _, _ := newTestServer(t)
+	session := &responsesWSSession{
+		hub: server.responsesWS, ctx: context.Background(), account: st.route.Account,
+		native: true, nativeSwitching: true, streams: make(map[string]*responsesWSStream), named: make(map[string]struct{}),
+	}
+	request, requestErr := parseResponsesWSRequest([]byte(`{"type":"response.create","model":"gpt-test","input":"hello"}`))
+	if requestErr != nil {
+		t.Fatal(requestErr)
+	}
+	if _, reserveErr := session.reserveTurn(request, request.raw); reserveErr == nil || reserveErr.code != "provider_error" {
+		t.Fatalf("reserve error = %#v", reserveErr)
 	}
 }
 

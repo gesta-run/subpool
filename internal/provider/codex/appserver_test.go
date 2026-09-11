@@ -49,6 +49,16 @@ func TestAppServerReadsAndConsumesResetCredits(t *testing.T) {
 	}
 }
 
+func TestNormalizeAppServerRateLimitsBlocksFullWindow(t *testing.T) {
+	weeklyMinutes := int64(7 * 24 * 60)
+	snapshot := normalizeAppServerRateLimits(appServerRateLimits{
+		Secondary: &appServerRateLimitWindow{UsedPercent: 100, WindowDurationMins: &weeklyMinutes},
+	})
+	if snapshot == nil || snapshot.UsageAllowed == nil || *snapshot.UsageAllowed || snapshot.LimitReason != "rate_limit_reached" {
+		t.Fatalf("snapshot = %#v", snapshot)
+	}
+}
+
 func TestAppServerPreservesSuccessfulResetWhenSnapshotRefreshFails(t *testing.T) {
 	executable := filepath.Join(t.TempDir(), "codex-test")
 	wrapper := fmt.Sprintf("#!/bin/sh\nSUBPOOL_CODEX_HELPER=1 SUBPOOL_CODEX_FAIL_POST_RESET_READ=1 exec %q -test.run=TestCodexAppServerHelperProcess -- \"$@\"\n", os.Args[0])
