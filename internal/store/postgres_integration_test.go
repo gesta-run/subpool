@@ -146,10 +146,7 @@ func TestPostgresRequestSuccessPreservesBlockedAccountStatus(t *testing.T) {
 	}
 	probeFailedAt := checkedAt.Add(time.Minute)
 	nextCheckAt = probeFailedAt.Add(5 * time.Minute)
-	if err = database.SetProviderHealth(ctx, account.ID, domain.HealthUnknown, "quota_probe_rate_limited", probeFailedAt, nextCheckAt); err != nil {
-		t.Fatal(err)
-	}
-	if err = database.SetProviderQuotaError(ctx, account.ID, "quota_probe_rate_limited"); err != nil {
+	if err = database.SetProviderQuotaError(ctx, account.ID, "quota_probe_rate_limited", nextCheckAt); err != nil {
 		t.Fatal(err)
 	}
 	if err = database.RecordRequestSuccess(ctx, account.ID, "00000000-0000-4000-8000-000000000704", probeFailedAt.Add(time.Minute)); err != nil {

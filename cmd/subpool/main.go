@@ -54,7 +54,7 @@ func main() {
 	resetCredits := codex.NewAppServer()
 	compatibleProvider := openaicompat.NewClient(providerHTTPClient)
 	refreshManager := credential.NewRefreshManager(database, cipher, tokenRefresher)
-	healthChecker := providerhealth.NewChecker(database, cipher, provider, compatibleProvider)
+	healthChecker := providerhealth.NewChecker(database, cipher, resetCredits, compatibleProvider)
 	sources, err := auth.NewSourceResolver(cfg.TrustedProxyCIDRs)
 	if err != nil {
 		slog.Error("trusted proxy configuration failed", "error", err)

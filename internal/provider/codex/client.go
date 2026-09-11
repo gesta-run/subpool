@@ -3,10 +3,7 @@ package codex
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
-	"math"
 	"net/http"
 	"strings"
 
@@ -19,31 +16,7 @@ const RoutingHintHeader = "X-Codex-Routing-Hint"
 
 type Client struct {
 	baseURL    string
-	usageURL   string
 	httpClient *http.Client
-}
-
-type UsageWindow struct {
-	UsedPercent      float64 `json:"used_percent"`
-	RemainingPercent float64 `json:"remaining_percent"`
-	WindowSeconds    int64   `json:"window_seconds"`
-	ResetAt          int64   `json:"reset_at"`
-}
-
-type UsageSnapshot struct {
-	PlanType     string       `json:"plan_type,omitempty"`
-	UsageAllowed *bool        `json:"usage_allowed,omitempty"`
-	LimitReason  string       `json:"limit_reason,omitempty"`
-	FiveHour     *UsageWindow `json:"five_hour,omitempty"`
-	Weekly       *UsageWindow `json:"weekly,omitempty"`
-}
-
-type HTTPStatusError struct {
-	StatusCode int
-}
-
-func (e *HTTPStatusError) Error() string {
-	return fmt.Sprintf("Codex usage endpoint returned status %d", e.StatusCode)
 }
 
 func NewClient(baseURL string, httpClient *http.Client) *Client {
@@ -51,11 +24,7 @@ func NewClient(baseURL string, httpClient *http.Client) *Client {
 		httpClient = providerhttp.New()
 	}
 	baseURL = strings.TrimRight(baseURL, "/")
-	usageURL := baseURL + "/usage"
-	if strings.HasSuffix(baseURL, "/codex") {
-		usageURL = strings.TrimSuffix(baseURL, "/codex") + "/wham/usage"
-	}
-	return &Client{baseURL: baseURL, usageURL: usageURL, httpClient: httpClient}
+	return &Client{baseURL: baseURL, httpClient: httpClient}
 }
 
 func SetRoutingHint(headers http.Header, model string, fastMode bool) {
@@ -111,94 +80,4 @@ func (c *Client) Responses(ctx context.Context, body []byte, downstream http.Hea
 		return nil, fmt.Errorf("send Codex request: %w", err)
 	}
 	return resp, nil
-}
-
-func (c *Client) Usage(ctx context.Context, credentials Credentials) (UsageSnapshot, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.usageURL, nil)
-	if err != nil {
-		return UsageSnapshot{}, fmt.Errorf("create Codex usage request: %w", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+credentials.AccessToken)
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("User-Agent", defaultUserAgent)
-	if credentials.AccountID != "" {
-		req.Header.Set("Chatgpt-Account-Id", credentials.AccountID)
-	}
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return UsageSnapshot{}, fmt.Errorf("send Codex usage request: %w", err)
-	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if err != nil {
-		return UsageSnapshot{}, fmt.Errorf("read Codex usage response: %w", err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		return UsageSnapshot{}, &HTTPStatusError{StatusCode: resp.StatusCode}
-	}
-	var payload struct {
-		PlanType  string `json:"plan_type"`
-		RateLimit *struct {
-			Allowed      *bool                `json:"allowed"`
-			LimitReached bool                 `json:"limit_reached"`
-			Primary      *usageWindowResponse `json:"primary_window"`
-			Secondary    *usageWindowResponse `json:"secondary_window"`
-		} `json:"rate_limit"`
-		SpendControl *struct {
-			Reached bool `json:"reached"`
-		} `json:"spend_control"`
-		RateLimitReachedType *struct {
-			Type string `json:"type"`
-		} `json:"rate_limit_reached_type"`
-	}
-	if err = json.Unmarshal(body, &payload); err != nil {
-		return UsageSnapshot{}, fmt.Errorf("decode Codex usage response: %w", err)
-	}
-	if payload.RateLimit == nil && payload.SpendControl == nil && payload.RateLimitReachedType == nil {
-		return UsageSnapshot{}, fmt.Errorf("Codex usage response is missing rate_limit")
-	}
-	var primary, secondary *UsageWindow
-	snapshot := UsageSnapshot{PlanType: payload.PlanType}
-	if payload.RateLimit != nil {
-		primary = normalizeUsageWindow(payload.RateLimit.Primary)
-		secondary = normalizeUsageWindow(payload.RateLimit.Secondary)
-		snapshot.UsageAllowed = payload.RateLimit.Allowed
-	}
-	snapshot.FiveHour = primary
-	snapshot.Weekly = secondary
-	const weeklyWindowSeconds = 6 * 24 * 60 * 60
-	if primary != nil && primary.WindowSeconds >= weeklyWindowSeconds {
-		snapshot.Weekly = primary
-		snapshot.FiveHour = secondary
-	} else if secondary != nil && secondary.WindowSeconds < weeklyWindowSeconds {
-		snapshot.Weekly = nil
-	}
-	if payload.RateLimitReachedType != nil && payload.RateLimitReachedType.Type != "" && payload.RateLimitReachedType.Type != "unknown" {
-		snapshot.markUsageBlocked(payload.RateLimitReachedType.Type)
-	} else if payload.SpendControl != nil && payload.SpendControl.Reached {
-		snapshot.markUsageBlocked("spend_control_reached")
-	} else if payload.RateLimit != nil && (payload.RateLimit.LimitReached || (payload.RateLimit.Allowed != nil && !*payload.RateLimit.Allowed)) {
-		snapshot.markUsageBlocked("rate_limit_reached")
-	}
-	return snapshot, nil
-}
-
-func (s *UsageSnapshot) markUsageBlocked(reason string) {
-	allowed := false
-	s.UsageAllowed = &allowed
-	s.LimitReason = reason
-}
-
-type usageWindowResponse struct {
-	UsedPercent   float64 `json:"used_percent"`
-	WindowSeconds int64   `json:"limit_window_seconds"`
-	ResetAt       int64   `json:"reset_at"`
-}
-
-func normalizeUsageWindow(window *usageWindowResponse) *UsageWindow {
-	if window == nil {
-		return nil
-	}
-	used := math.Max(0, math.Min(100, window.UsedPercent))
-	return &UsageWindow{UsedPercent: used, RemainingPercent: 100 - used, WindowSeconds: window.WindowSeconds, ResetAt: window.ResetAt}
 }

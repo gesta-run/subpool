@@ -62,13 +62,28 @@ func NewAppServer() *AppServer {
 	return &AppServer{executable: defaultCodexExecutable}
 }
 
-func (a *AppServer) ReadResetCredits(ctx context.Context, credentials Credentials) (*ResetCreditsSummary, error) {
+func (a *AppServer) readRateLimits(ctx context.Context, credentials Credentials) (appServerRateLimitSnapshot, error) {
 	session, err := startAppServerSession(ctx, a.executable, credentials)
 	if err != nil {
-		return nil, err
+		return appServerRateLimitSnapshot{}, err
 	}
 	defer session.close()
-	snapshot, err := session.readRateLimits(3)
+	return session.readRateLimits(3)
+}
+
+func (a *AppServer) Usage(ctx context.Context, credentials Credentials) (UsageSnapshot, error) {
+	snapshot, err := a.readRateLimits(ctx, credentials)
+	if err != nil {
+		return UsageSnapshot{}, err
+	}
+	if snapshot.Usage == nil {
+		return UsageSnapshot{}, fmt.Errorf("Codex rate limits response is missing usage")
+	}
+	return *snapshot.Usage, nil
+}
+
+func (a *AppServer) ReadResetCredits(ctx context.Context, credentials Credentials) (*ResetCreditsSummary, error) {
+	snapshot, err := a.readRateLimits(ctx, credentials)
 	return snapshot.ResetCredits, err
 }
 
@@ -317,7 +332,7 @@ func normalizeAppServerWindow(window *appServerRateLimitWindow) *UsageWindow {
 	if window.ResetsAt != nil {
 		resetAt = *window.ResetsAt
 	}
-	return normalizeUsageWindow(&usageWindowResponse{UsedPercent: window.UsedPercent, WindowSeconds: durationSeconds, ResetAt: resetAt})
+	return normalizeUsageWindow(window.UsedPercent, durationSeconds, resetAt)
 }
 
 func (s *appServerSession) call(id int, method string, params any, target any) error {

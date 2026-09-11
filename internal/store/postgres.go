@@ -159,8 +159,9 @@ func (p *Postgres) UpdateProviderDetails(ctx context.Context, id, email string, 
 	return wrapMutation("update provider details", tag.RowsAffected(), err)
 }
 
-func (p *Postgres) SetProviderQuotaError(ctx context.Context, id, errorCode string) error {
-	tag, err := p.pool.Exec(ctx, `UPDATE provider_accounts SET last_quota_error_code=NULLIF($2,''),updated_at=now() WHERE id=$1`, id, errorCode)
+func (p *Postgres) SetProviderQuotaError(ctx context.Context, id, errorCode string, nextCheckAt time.Time) error {
+	tag, err := p.pool.Exec(ctx, `UPDATE provider_accounts SET last_quota_error_code=NULLIF($2,''),
+		next_health_check_at=$3,updated_at=now() WHERE id=$1`, id, errorCode, nextCheckAt)
 	return wrapMutation("set provider quota error", tag.RowsAffected(), err)
 }
 

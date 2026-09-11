@@ -11,6 +11,7 @@ export function useAccountMutations(reload: () => Promise<void>) {
     setError('')
     try {
       await request(`/api/v1/provider-accounts/${accountID}/refresh`, { method: 'POST' })
+      await request(`/api/v1/provider-accounts/${accountID}/check`, { method: 'POST' })
       await reload()
       await afterRefresh?.()
     } catch (caught) {
