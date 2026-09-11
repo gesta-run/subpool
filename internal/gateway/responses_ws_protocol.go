@@ -13,6 +13,14 @@ import (
 
 const responsesWSMaxStreamIDBytes = 256
 
+type responsesWSLimitKind uint8
+
+const (
+	responsesWSLimitNone responsesWSLimitKind = iota
+	responsesWSLimitTemporary
+	responsesWSLimitQuota
+)
+
 func parseResponsesWSRequest(payload []byte) (responsesWSRequest, *gatewayError) {
 	trimmed := bytes.TrimSpace(payload)
 	if len(trimmed) == 0 || len(trimmed) > maxRequestBody {
@@ -94,6 +102,46 @@ func parseResponsesWSEvent(payload []byte) responsesWSEvent {
 	var event responsesWSEvent
 	_ = json.Unmarshal(payload, &event)
 	return event
+}
+
+func classifyResponsesWSLimitEvent(payload []byte) responsesWSLimitKind {
+	var event struct {
+		Type  string `json:"type"`
+		Error struct {
+			Type    string `json:"type"`
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+		Response struct {
+			Error struct {
+				Type    string `json:"type"`
+				Code    string `json:"code"`
+				Message string `json:"message"`
+			} `json:"error"`
+		} `json:"response"`
+	}
+	if json.Unmarshal(payload, &event) != nil || (event.Type != "error" && event.Type != "response.failed") {
+		return responsesWSLimitNone
+	}
+	message := strings.ToLower(event.Error.Message + " " + event.Response.Error.Message)
+	for _, phrase := range []string{"hit your usage limit", "reached your usage limit", "usage limit reached", "usage limit has been reached", "quota exceeded", "insufficient quota"} {
+		if strings.Contains(message, phrase) {
+			return responsesWSLimitQuota
+		}
+	}
+	for _, signal := range []string{event.Error.Type, event.Error.Code, event.Response.Error.Type, event.Response.Error.Code} {
+		normalized := strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(signal, "-", "_"), " ", "_"))
+		if strings.Contains(normalized, "usage_limit") || strings.Contains(normalized, "quota") {
+			return responsesWSLimitQuota
+		}
+		if strings.Contains(normalized, "rate_limit") {
+			return responsesWSLimitTemporary
+		}
+	}
+	if strings.Contains(message, "rate limit exceeded") {
+		return responsesWSLimitTemporary
+	}
+	return responsesWSLimitNone
 }
 
 func terminalResponsesWSEvent(eventType string) bool {
@@ -205,6 +253,7 @@ func (s *responsesWSSession) observeTurn(turn *responsesWSTurn, payload []byte, 
 	if turn == nil || turn.finished {
 		return
 	}
+	turn.forwarded = true
 	if responseID := responseIDFromEvent(payload); responseID != "" {
 		turn.response = responseID
 	}

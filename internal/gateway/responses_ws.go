@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"sync"
 	"sync/atomic"
@@ -31,20 +32,21 @@ const (
 )
 
 type responsesWSSession struct {
-	hub           *responsesWSHub
-	conn          *websocket.Conn
-	ctx           context.Context
-	cancel        context.CancelFunc
-	keyDigest     []byte
-	keyID         string
-	poolID        string
-	headers       http.Header
-	account       domain.ProviderAccount
-	upstream      *websocket.Conn
-	upstreamModel string
-	native        bool
-	pinned        bool
-	lastActive    atomic.Int64
+	hub             *responsesWSHub
+	conn            *websocket.Conn
+	ctx             context.Context
+	cancel          context.CancelFunc
+	keyDigest       []byte
+	keyID           string
+	poolID          string
+	headers         http.Header
+	account         domain.ProviderAccount
+	upstream        *websocket.Conn
+	upstreamModel   string
+	native          bool
+	pinned          bool
+	nativeSwitching bool
+	lastActive      atomic.Int64
 
 	mu        sync.Mutex
 	writeMu   sync.Mutex
@@ -64,15 +66,18 @@ type responsesWSStream struct {
 }
 
 type responsesWSTurn struct {
-	streamID  string
-	accountID string
-	model     string
-	payload   []byte
-	response  string
-	input     int64
-	output    int64
-	terminal  string
-	finished  bool
+	streamID     string
+	accountID    string
+	model        string
+	payload      []byte
+	raw          []byte
+	response     string
+	input        int64
+	output       int64
+	terminal     string
+	continuation bool
+	forwarded    bool
+	finished     bool
 }
 
 type responsesWSRequest struct {
@@ -223,8 +228,12 @@ func (s *responsesWSSession) ensurePinned(request responsesWSRequest, route doma
 	s.mu.Lock()
 	if s.pinned {
 		native := s.native
+		switching := s.nativeSwitching
 		upstreamModel := s.upstreamModel
 		s.mu.Unlock()
+		if switching {
+			return false, false, &gatewayError{http.StatusServiceUnavailable, "provider account failover is in progress", "provider_error"}
+		}
 		if native && request.Model != upstreamModel {
 			return false, false, &gatewayError{http.StatusConflict, "model changed; reconnect to create a new upstream WebSocket", "subpool_websocket_model_changed"}
 		}
@@ -461,6 +470,10 @@ func (s *responsesWSSession) reserveTurn(request responsesWSRequest, payload []b
 		s.mu.Unlock()
 		return nil, &gatewayError{http.StatusServiceUnavailable, "WebSocket session is closing", "server_error"}
 	}
+	if s.nativeSwitching {
+		s.mu.Unlock()
+		return nil, &gatewayError{http.StatusServiceUnavailable, "provider account failover is in progress", "provider_error"}
+	}
 	if s.pending >= responsesWSMaxTurnsPerConnection {
 		s.mu.Unlock()
 		return nil, &gatewayError{http.StatusTooManyRequests, "connection turn capacity exceeded", "subpool_capacity_exceeded"}
@@ -476,12 +489,20 @@ func (s *responsesWSSession) reserveTurn(request responsesWSRequest, payload []b
 	if !s.hub.reserveAccountTurn(accountID) {
 		return nil, &gatewayError{http.StatusServiceUnavailable, "account turn capacity exceeded", "subpool_capacity_exceeded"}
 	}
-	turn := &responsesWSTurn{streamID: streamID, accountID: accountID, model: request.Model, payload: payload}
+	turn := &responsesWSTurn{
+		streamID: streamID, accountID: accountID, model: request.Model, payload: payload,
+		raw: append([]byte(nil), request.raw...), continuation: request.PreviousResponseID != "",
+	}
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
 		s.hub.releaseAccountTurn(accountID)
 		return nil, &gatewayError{http.StatusServiceUnavailable, "WebSocket session is closing", "server_error"}
+	}
+	if s.nativeSwitching {
+		s.mu.Unlock()
+		s.hub.releaseAccountTurn(accountID)
+		return nil, &gatewayError{http.StatusServiceUnavailable, "provider account failover is in progress", "provider_error"}
 	}
 	if request.StreamID != nil {
 		s.named[streamID] = struct{}{}
@@ -529,6 +550,10 @@ func (s *responsesWSSession) readUpstream() {
 		}
 		event := parseResponsesWSEvent(payload)
 		turn := s.currentTurn(event.StreamID)
+		limitKind := classifyResponsesWSLimitEvent(payload)
+		if limitKind != responsesWSLimitNone && s.retryNativeLimitedTurn(turn, upstream, limitKind) {
+			continue
+		}
 		if turn != nil {
 			s.observeTurn(turn, payload, event.Type)
 		}
@@ -539,7 +564,105 @@ func (s *responsesWSSession) readUpstream() {
 		if turn != nil && terminalResponsesWSEvent(event.Type) {
 			s.finishTurn(turn)
 		}
+		if limitKind != responsesWSLimitNone {
+			s.close(websocket.StatusServiceRestart, "provider account limited")
+			return
+		}
 	}
+}
+
+func (s *responsesWSSession) retryNativeLimitedTurn(turn *responsesWSTurn, failedUpstream *websocket.Conn, limitKind responsesWSLimitKind) bool {
+	s.hub.upstreamFailures.Add(1)
+	s.mu.Lock()
+	failedAccount := s.account
+	ownsSwitch := s.native && s.upstream == failedUpstream && !s.nativeSwitching
+	retrySafe := ownsSwitch && turn != nil && !turn.finished && !turn.continuation && !turn.forwarded && s.pending == 1
+	if ownsSwitch {
+		s.nativeSwitching = true
+	}
+	s.mu.Unlock()
+
+	slog.Warn("provider WebSocket limit received", "account_id", failedAccount.ID, "api_key_id", s.keyID, "limit_kind", limitKind)
+	if limitKind == responsesWSLimitQuota {
+		_ = s.hub.server.store.SetProviderUsageAllowed(s.ctx, failedAccount.ID, false)
+	} else {
+		retryAt := s.hub.server.now().Add(time.Minute)
+		_ = s.hub.server.store.UpdateProviderStatus(s.ctx, failedAccount.ID, domain.AccountCoolingDown, &retryAt)
+	}
+	attempted := []string{failedAccount.ID}
+	next, err := s.hub.server.store.ReassignAPIKey(s.ctx, s.keyID, s.poolID, attempted)
+	if err != nil || !retrySafe {
+		return false
+	}
+
+	for len(attempted) < maxProviderAttempts {
+		attempted = append(attempted, next.ID)
+		if next.Provider == domain.ProviderOpenAICompatible {
+			break
+		}
+		conn, account, retry, requestErr := s.dialCodex(next, turn.model)
+		if requestErr == nil {
+			installationID, identityErr := codex.InstallationID(account.ID)
+			payload, payloadErr := normalizeCodexWebSocketRequest(turn.raw, installationID, account.FastModeEnabled)
+			if identityErr != nil || payloadErr != nil {
+				_ = conn.CloseNow()
+				s.hub.server.recordHealthFailure(s.ctx, account.ID, "websocket_request_normalization_failed")
+			} else if !s.hub.reserveAccountTurn(account.ID) {
+				_ = conn.CloseNow()
+			} else {
+				if !s.transferNativeAccount(turn, failedUpstream, conn, account) {
+					s.hub.releaseAccountTurn(account.ID)
+					_ = conn.CloseNow()
+					return false
+				}
+				writeCtx, cancel := context.WithTimeout(s.ctx, responsesWSWriteTimeout)
+				writeErr := conn.Write(writeCtx, websocket.MessageText, payload)
+				cancel()
+				if writeErr == nil {
+					s.finishNativeSwitch()
+					_ = failedUpstream.CloseNow()
+					slog.Info("provider WebSocket turn failed over", "from_account_id", failedAccount.ID, "to_account_id", account.ID, "api_key_id", s.keyID)
+					return true
+				}
+				_ = failedUpstream.CloseNow()
+				_ = conn.CloseNow()
+				s.hub.upstreamFailures.Add(1)
+				s.hub.server.recordHealthFailure(s.ctx, account.ID, "websocket_write_failed")
+				s.sendError(turn.streamID, "provider_error", "provider WebSocket failover failed")
+				s.close(websocket.StatusInternalError, "upstream write failed")
+				return true
+			}
+		}
+		if requestErr != nil && !retry || len(attempted) >= maxProviderAttempts {
+			break
+		}
+		next, err = s.hub.server.store.ReassignAPIKey(s.ctx, s.keyID, s.poolID, attempted)
+		if err != nil {
+			break
+		}
+	}
+	return false
+}
+
+func (s *responsesWSSession) transferNativeAccount(turn *responsesWSTurn, failed, replacement *websocket.Conn, account domain.ProviderAccount) bool {
+	s.mu.Lock()
+	if s.closed || !s.native || !s.nativeSwitching || s.upstream != failed || turn.finished || turn.forwarded || s.pending != 1 {
+		s.mu.Unlock()
+		return false
+	}
+	previousID := turn.accountID
+	s.account = account
+	s.upstream = replacement
+	turn.accountID = account.ID
+	s.mu.Unlock()
+	s.hub.releaseAccountTurn(previousID)
+	return true
+}
+
+func (s *responsesWSSession) finishNativeSwitch() {
+	s.mu.Lock()
+	s.nativeSwitching = false
+	s.mu.Unlock()
 }
 
 func (s *responsesWSSession) startInitialBridge(turn *responsesWSTurn, route domain.KeyRoute, canFailover bool) {

@@ -534,6 +534,12 @@ func accountHealthy(account domain.ProviderAccount, now time.Time) bool {
 	if account.HealthStatus == domain.HealthUnhealthy {
 		return false
 	}
+	if len(account.QuotaSnapshot) > 0 {
+		var quota codex.UsageSnapshot
+		if json.Unmarshal(account.QuotaSnapshot, &quota) == nil && !quota.AllowsUsageAt(now) {
+			return false
+		}
+	}
 	switch account.Status {
 	case domain.AccountActive:
 		return true

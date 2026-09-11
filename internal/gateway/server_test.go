@@ -42,6 +42,12 @@ type fakeStore struct {
 	usageCommitUncertain    bool
 	usageEvents             map[string]struct{}
 	healthFailureCodes      []string
+	availabilityUpdates     []providerAvailabilityUpdate
+}
+
+type providerAvailabilityUpdate struct {
+	accountID string
+	allowed   bool
 }
 
 func (f *fakeStore) ResolveAPIKey(context.Context, []byte) (domain.KeyRoute, error) {
@@ -112,6 +118,10 @@ func (f *fakeStore) AddUsage(_ context.Context, _ string, eventHash []byte, _ st
 }
 func (f *fakeStore) UpdateProviderStatus(_ context.Context, _ string, status string, _ *time.Time) error {
 	f.status = append(f.status, status)
+	return nil
+}
+func (f *fakeStore) SetProviderUsageAllowed(_ context.Context, accountID string, allowed bool) error {
+	f.availabilityUpdates = append(f.availabilityUpdates, providerAvailabilityUpdate{accountID: accountID, allowed: allowed})
 	return nil
 }
 func (f *fakeStore) RecordProviderHealthFailure(_ context.Context, _ string, code string, _ time.Time, _ time.Time) error {
@@ -772,6 +782,26 @@ func compatibleAccountWithCipher(t *testing.T, cipher *credential.Cipher, id str
 }
 func sseResponse(status int, body string) *http.Response {
 	return &http.Response{StatusCode: status, Header: http.Header{"Content-Type": []string{"text/event-stream"}, "Retry-After": []string{"1"}}, Body: io.NopCloser(strings.NewReader(body))}
+}
+
+func TestAccountHealthyRejectsFullUnresetQuotaWindow(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	allowed := true
+	quota, _ := json.Marshal(codex.UsageSnapshot{
+		UsageAllowed: &allowed,
+		Weekly:       &codex.UsageWindow{UsedPercent: 100, ResetAt: now.Add(time.Hour).Unix()},
+	})
+	account := domain.ProviderAccount{Status: domain.AccountActive, HealthStatus: domain.HealthHealthy, QuotaSnapshot: quota}
+	if accountHealthy(account, now) {
+		t.Fatal("full quota window was considered healthy")
+	}
+	account.QuotaSnapshot, _ = json.Marshal(codex.UsageSnapshot{
+		UsageAllowed: &allowed,
+		Weekly:       &codex.UsageWindow{UsedPercent: 100, ResetAt: now.Add(-time.Hour).Unix()},
+	})
+	if !accountHealthy(account, now) {
+		t.Fatal("reset quota window was considered unavailable")
+	}
 }
 func serveGateway(t *testing.T, server *Server, key, path, body string) *httptest.ResponseRecorder {
 	t.Helper()
