@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { request } from '../api'
 import { AccountTable } from '../components/accounts/AccountTable'
 import { ConnectAccountDialog } from '../components/accounts/ConnectAccountDialog'
 import { ModelsDialog } from '../components/accounts/ModelsDialog'
@@ -18,6 +19,15 @@ type PendingAction =
   | { type: 'disable' | 'remove' | 'fast'; account: ProviderAccount }
   | { type: 'reset'; account: ProviderAccount; creditID?: string }
 
+const quotaFreshnessMs = 5 * 60 * 1000
+
+function needsQuotaRefresh(account: ProviderAccount) {
+  if (account.provider !== 'codex' || account.credential_type !== 'subscription_oauth') return false
+  if (account.status !== 'active' && account.status !== 'exhausted') return false
+  const checkedAt = Date.parse(account.quota_checked_at ?? '')
+  return !Number.isFinite(checkedAt) || checkedAt <= Date.now() - quotaFreshnessMs
+}
+
 function AccountSummary({ accounts }: { accounts: ProviderAccount[] }) {
   const healthy = accounts.filter((account) => account.health_status === 'healthy' && (account.consecutive_health_failures ?? 0) === 0).length
   const assigned = accounts.reduce((total, account) => total + (account.assigned_api_keys ?? 0), 0)
@@ -35,12 +45,25 @@ export function AccountsPage() {
   const resets = useResetCredits(list.reload)
   const models = useAccountModels()
   const [pending, setPending] = useState<PendingAction | null>(null)
+  const initialQuotaChecks = useRef(new Set<string>())
 
   useEffect(() => {
     list.items
       .filter((account) => account.provider === 'codex' && account.credential_type !== 'api_key')
       .forEach((account) => void resets.load(account.id))
   }, [list.items])
+
+  useEffect(() => {
+    if (list.loading) return
+    const staleAccountIDs = list.items
+      .filter(needsQuotaRefresh)
+      .map((account) => account.id)
+      .filter((accountID) => !initialQuotaChecks.current.has(accountID))
+    if (staleAccountIDs.length === 0) return
+    staleAccountIDs.forEach((accountID) => initialQuotaChecks.current.add(accountID))
+    void Promise.allSettled(staleAccountIDs.map((accountID) => request(`/api/v1/provider-accounts/${accountID}/check`, { method: 'POST' })))
+      .then(() => list.reload())
+  }, [list.items, list.loading, list.reload])
 
   function toggle(account: ProviderAccount) {
     if (account.status === 'disabled') void mutations.updateStatus(account, 'active')

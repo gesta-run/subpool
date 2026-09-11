@@ -36,14 +36,15 @@ type CompatibleModels interface {
 }
 
 type Result struct {
-	HealthStatus   string
-	ErrorCode      string
-	QuotaErrorCode string
-	Email          string
-	QuotaSnapshot  json.RawMessage
-	UsageAllowed   *bool
-	AuthFailed     bool
-	Failure        bool
+	HealthStatus     string
+	ErrorCode        string
+	QuotaErrorCode   string
+	Email            string
+	QuotaSnapshot    json.RawMessage
+	UsageAllowed     *bool
+	AuthFailed       bool
+	Failure          bool
+	QuotaProbeFailed bool
 }
 
 type Checker struct {
@@ -82,9 +83,7 @@ func (c *Checker) Check(ctx context.Context, account domain.ProviderAccount) Res
 			}
 			return Result{HealthStatus: domain.HealthHealthy, Email: credentials.Email, QuotaSnapshot: raw, UsageAllowed: snapshot.UsageAllowed}
 		}
-		result := classifyError(err)
-		result.QuotaErrorCode = result.ErrorCode
-		return result
+		return classifyCodexQuotaError(err)
 	case domain.ProviderOpenAICompatible:
 		var credentials openaicompat.Credentials
 		if json.Unmarshal(plaintext, &credentials) != nil {
@@ -118,6 +117,12 @@ func (c *Checker) Check(ctx context.Context, account domain.ProviderAccount) Res
 func (c *Checker) ApplyNewAccount(account *domain.ProviderAccount, result Result) {
 	now := c.now()
 	next := c.nextCheck(account.ID, now)
+	if result.QuotaProbeFailed {
+		account.HealthStatus = domain.HealthUnknown
+		account.LastQuotaErrorCode = result.QuotaErrorCode
+		account.NextHealthCheckAt = &next
+		return
+	}
 	account.HealthStatus = result.HealthStatus
 	account.Email = result.Email
 	account.QuotaSnapshot = result.QuotaSnapshot
@@ -205,6 +210,9 @@ func (c *Checker) runBatch(ctx context.Context) {
 func (c *Checker) persist(ctx context.Context, accountID string, result Result) error {
 	now := c.now()
 	next := c.nextCheck(accountID, now)
+	if result.QuotaProbeFailed {
+		return c.store.SetProviderQuotaError(ctx, accountID, result.QuotaErrorCode, next)
+	}
 	var err error
 	if result.AuthFailed {
 		err = c.store.UpdateProviderStatus(ctx, accountID, domain.AccountAuthFailed, nil)
@@ -225,7 +233,7 @@ func (c *Checker) persist(ctx context.Context, accountID string, result Result) 
 		return c.store.UpdateProviderDetails(ctx, accountID, result.Email, result.QuotaSnapshot, now)
 	}
 	if result.QuotaErrorCode != "" {
-		return c.store.SetProviderQuotaError(ctx, accountID, result.QuotaErrorCode)
+		return c.store.SetProviderQuotaError(ctx, accountID, result.QuotaErrorCode, next)
 	}
 	return nil
 }
@@ -236,21 +244,6 @@ func (c *Checker) nextCheck(accountID string, now time.Time) time.Time {
 }
 
 func classifyError(err error) Result {
-	var statusErr *codex.HTTPStatusError
-	if errors.As(err, &statusErr) {
-		switch {
-		case statusErr.StatusCode == http.StatusUnauthorized || statusErr.StatusCode == http.StatusForbidden:
-			return Result{HealthStatus: domain.HealthUnhealthy, ErrorCode: "authentication_failed", AuthFailed: true}
-		case statusErr.StatusCode == http.StatusTooManyRequests:
-			return Result{HealthStatus: domain.HealthUnknown, ErrorCode: "quota_probe_rate_limited"}
-		case statusErr.StatusCode == http.StatusNotFound || statusErr.StatusCode == http.StatusMethodNotAllowed:
-			return Result{HealthStatus: domain.HealthUnknown, ErrorCode: "provider_unavailable", Failure: true}
-		case statusErr.StatusCode >= 500:
-			return Result{HealthStatus: domain.HealthUnknown, ErrorCode: "provider_5xx", Failure: true}
-		default:
-			return Result{HealthStatus: domain.HealthUnknown, ErrorCode: "provider_error", Failure: true}
-		}
-	}
 	message := strings.ToLower(err.Error())
 	if errors.Is(err, context.DeadlineExceeded) || strings.Contains(message, "timeout") {
 		return Result{HealthStatus: domain.HealthUnknown, ErrorCode: "timeout", Failure: true}
@@ -258,5 +251,20 @@ func classifyError(err error) Result {
 	if strings.Contains(message, "status 401") || strings.Contains(message, "status 403") {
 		return Result{HealthStatus: domain.HealthUnhealthy, ErrorCode: "authentication_failed", AuthFailed: true}
 	}
+	if strings.Contains(message, "status 429") {
+		return Result{HealthStatus: domain.HealthUnknown, ErrorCode: "quota_probe_rate_limited"}
+	}
 	return Result{HealthStatus: domain.HealthUnknown, ErrorCode: "connection_failed", Failure: true}
+}
+
+func classifyCodexQuotaError(err error) Result {
+	result := classifyError(err)
+	result.QuotaErrorCode = result.ErrorCode
+	if result.AuthFailed {
+		return result
+	}
+	result.ErrorCode = ""
+	result.Failure = false
+	result.QuotaProbeFailed = true
+	return result
 }

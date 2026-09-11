@@ -25,7 +25,7 @@ type Store interface {
 	GetProviderAccount(context.Context, string) (domain.ProviderAccount, error)
 	UpdateProviderAccount(context.Context, string, domain.ProviderAccountUpdate) error
 	UpdateProviderDetails(context.Context, string, string, []byte, time.Time) error
-	SetProviderQuotaError(context.Context, string, string) error
+	SetProviderQuotaError(context.Context, string, string, time.Time) error
 	DeleteProviderAccount(context.Context, string) error
 	UpdateProviderCredentialCAS(context.Context, string, int, []byte, int) (bool, error)
 	UpdateProviderStatus(context.Context, string, string, *time.Time) error

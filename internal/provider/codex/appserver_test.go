@@ -19,6 +19,13 @@ func TestAppServerReadsAndConsumesResetCredits(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	credentials := Credentials{AccessToken: "test-access-token", AccountID: "test-account"}
+	usage, err := client.Usage(ctx, credentials)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if usage.Weekly == nil || usage.Weekly.RemainingPercent != 75 || usage.FiveHour == nil || usage.FiveHour.RemainingPercent != 75 {
+		t.Fatalf("usage = %#v", usage)
+	}
 	credits, err := client.ReadResetCredits(ctx, credentials)
 	if err != nil {
 		t.Fatal(err)

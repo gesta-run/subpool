@@ -121,7 +121,7 @@ describe('Subpool console', () => {
     expect(screen.queryByRole('columnheader', { name: 'Assigned API keys' })).not.toBeInTheDocument()
     expect(screen.getByText('Bound keys')).toBeInTheDocument()
     expect(screen.queryByText(/of 3 keys/i)).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Refresh credentials for Primary Codex' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Refresh credentials and quota for Primary Codex' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Check health for Primary Codex' })).not.toBeInTheDocument()
     await user.click(await screen.findByRole('button', { name: 'Disable Primary Codex' }))
     await user.click(await screen.findByRole('button', { name: 'Disable account' }))
@@ -129,6 +129,58 @@ describe('Subpool console', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: 'Enable Primary Codex' })).toBeInTheDocument())
     const update = vi.mocked(fetch).mock.calls.find(([path, init]) => String(path).endsWith('/account-1') && init?.method === 'PUT')
     expect(JSON.parse(String(update?.[1]?.body))).toEqual({ status: 'disabled' })
+  })
+
+  it('refreshes Codex credentials and quota together', async () => {
+    let remainingPercent = 80
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const path = String(input)
+      if (path === '/api/v1/provider-accounts') return json({ data: [{
+        id: 'account-1', display_name: 'Primary Codex', provider: 'codex', credential_type: 'subscription_oauth', status: 'active',
+        health_status: 'healthy', quota_checked_at: new Date().toISOString(), assigned_api_keys: 1,
+        quota_snapshot: { weekly: { used_percent: 100 - remainingPercent, remaining_percent: remainingPercent, window_seconds: 604800, reset_at: 1900000000 } },
+      }] })
+      if (path === '/api/v1/provider-accounts/account-1/refresh' && init?.method === 'POST') return json({ status: 'active' })
+      if (path === '/api/v1/provider-accounts/account-1/check' && init?.method === 'POST') {
+        remainingPercent = 35
+        return json({ status: 'active' })
+      }
+      if ((path === '/api/v1/provider-accounts/account-1/reset-credits' || path === '/api/v1/provider-accounts/account-1/reset-credits?refresh=true') && !init?.method) {
+        return json({ reset_credits: null })
+      }
+      throw new Error(`Unexpected request: ${path}`)
+    })
+
+    render(<AccountsPage />)
+    const user = userEvent.setup()
+    await user.click(await screen.findByRole('button', { name: 'Refresh credentials and quota for Primary Codex' }))
+
+    await waitFor(() => expect(screen.getByText('35%')).toBeInTheDocument())
+    expect(fetch).toHaveBeenCalledWith('/api/v1/provider-accounts/account-1/check', expect.objectContaining({ method: 'POST' }))
+  })
+
+  it('refreshes stale Codex quota once when the page loads', async () => {
+    let remainingPercent = 70
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const path = String(input)
+      if (path === '/api/v1/provider-accounts') return json({ data: [{
+        id: 'account-1', display_name: 'Primary Codex', provider: 'codex', credential_type: 'subscription_oauth', status: 'active',
+        health_status: 'healthy', quota_checked_at: '2000-01-01T00:00:00Z', assigned_api_keys: 1,
+        quota_snapshot: { weekly: { used_percent: 100 - remainingPercent, remaining_percent: remainingPercent, window_seconds: 604800, reset_at: 1900000000 } },
+      }] })
+      if (path === '/api/v1/provider-accounts/account-1/check' && init?.method === 'POST') {
+        remainingPercent = 30
+        return json({ status: 'active' })
+      }
+      if (path === '/api/v1/provider-accounts/account-1/reset-credits' && !init?.method) return json({ reset_credits: null })
+      throw new Error(`Unexpected request: ${path}`)
+    })
+
+    render(<AccountsPage />)
+
+    await waitFor(() => expect(screen.getByText('30%')).toBeInTheDocument())
+    const checks = vi.mocked(fetch).mock.calls.filter(([path, init]) => String(path).endsWith('/check') && init?.method === 'POST')
+    expect(checks).toHaveLength(1)
   })
 
   it('updates Fast mode without overwriting a cooling-down account status', async () => {
@@ -250,7 +302,7 @@ describe('Subpool console', () => {
 
   it('shows remaining weekly subscription usage', async () => {
     vi.mocked(fetch).mockResolvedValue(json({ data: [{
-      id: 'account-1', display_name: 'Primary Codex', email: 'employee@example.com', provider: 'codex', credential_type: 'subscription_oauth', status: 'active', assigned_api_keys: 0,
+      id: 'account-1', display_name: 'Primary Codex', email: 'employee@example.com', provider: 'codex', credential_type: 'subscription_oauth', status: 'active', quota_checked_at: new Date().toISOString(), assigned_api_keys: 0,
       quota_snapshot: { plan_type: 'plus', weekly: { used_percent: 40, remaining_percent: 60, window_seconds: 604800, reset_at: 1800500000 } },
     }] }))
 
@@ -267,7 +319,7 @@ describe('Subpool console', () => {
     vi.mocked(fetch).mockImplementation(async (input, init) => {
       const path = String(input)
       if (path === '/api/v1/provider-accounts') return json({ data: [{
-        id: 'account-1', display_name: 'Primary Codex', provider: 'codex', credential_type: 'subscription_oauth', status: availableCount === 2 ? 'exhausted' : 'active', assigned_api_keys: 1,
+        id: 'account-1', display_name: 'Primary Codex', provider: 'codex', credential_type: 'subscription_oauth', status: availableCount === 2 ? 'exhausted' : 'active', quota_checked_at: new Date().toISOString(), assigned_api_keys: 1,
         quota_snapshot: { usage_allowed: availableCount !== 2, weekly: { used_percent: availableCount === 2 ? 100 : 0, remaining_percent: availableCount === 2 ? 0 : 100, window_seconds: 604800, reset_at: 1800500000 } },
       }] })
       if ((path === '/api/v1/provider-accounts/account-1/reset-credits' || path === '/api/v1/provider-accounts/account-1/reset-credits?refresh=true') && !init?.method) return json({
@@ -306,7 +358,7 @@ describe('Subpool console', () => {
   it('opens the supported model list for an account', async () => {
     vi.mocked(fetch).mockImplementation(async (input) => {
       const path = String(input)
-      if (path === '/api/v1/provider-accounts') return json({ data: [{ id: 'account-1', display_name: 'Primary Codex', provider: 'codex', credential_type: 'subscription_oauth', status: 'active', assigned_api_keys: 0 }] })
+      if (path === '/api/v1/provider-accounts') return json({ data: [{ id: 'account-1', display_name: 'Primary Codex', provider: 'codex', credential_type: 'subscription_oauth', status: 'active', quota_checked_at: new Date().toISOString(), assigned_api_keys: 0 }] })
       if (path === '/api/v1/provider-accounts/account-1/reset-credits') return json({ reset_credits: null })
       if (path === '/api/v1/provider-accounts/account-1/models') return json({ data: [
         { id: 'model-alpha', display_name: 'Model Alpha', description: 'General-purpose model', is_default: true, reasoning_efforts: ['medium', 'high'], input_modalities: ['text', 'image'] },
