@@ -27,6 +27,9 @@ type Config struct {
 	ResponsesWSEnabled            bool
 	ResponsesWSForceHTTPBridge    bool
 	UpstreamResponseHeaderTimeout time.Duration
+	MaxRequestBodyBytes           int64
+	MaxInflightRequestBodyBytes   int64
+	RequestBodyReadTimeout        time.Duration
 	TrustedProxyCIDRs             []string
 }
 
@@ -42,6 +45,9 @@ func Load() (Config, error) {
 		CodexTokenURL:                 envOr("SUBPOOL_CODEX_TOKEN_URL", "https://auth.openai.com/oauth/token"),
 		CodexUpstreamURL:              strings.TrimRight(envOr("SUBPOOL_CODEX_UPSTREAM_URL", "https://chatgpt.com/backend-api/codex"), "/"),
 		UpstreamResponseHeaderTimeout: 3 * time.Minute,
+		MaxRequestBodyBytes:           256 << 20,
+		MaxInflightRequestBodyBytes:   1 << 30,
+		RequestBodyReadTimeout:        5 * time.Minute,
 	}
 	var err error
 	if cfg.ResponsesWSEnabled, err = envBool("SUBPOOL_RESPONSES_WS_ENABLED", true); err != nil {
@@ -54,6 +60,21 @@ func Load() (Config, error) {
 		cfg.UpstreamResponseHeaderTimeout, err = time.ParseDuration(raw)
 		if err != nil || cfg.UpstreamResponseHeaderTimeout <= 0 {
 			return Config{}, errors.New("SUBPOOL_UPSTREAM_RESPONSE_HEADER_TIMEOUT must be a positive duration")
+		}
+	}
+	if cfg.MaxRequestBodyBytes, err = envPositiveInt64("SUBPOOL_MAX_REQUEST_BODY_BYTES", cfg.MaxRequestBodyBytes); err != nil {
+		return Config{}, err
+	}
+	if cfg.MaxInflightRequestBodyBytes, err = envPositiveInt64("SUBPOOL_MAX_INFLIGHT_REQUEST_BODY_BYTES", cfg.MaxInflightRequestBodyBytes); err != nil {
+		return Config{}, err
+	}
+	if cfg.MaxRequestBodyBytes > (1<<63-1)/4 || cfg.MaxInflightRequestBodyBytes < cfg.MaxRequestBodyBytes*4 {
+		return Config{}, errors.New("SUBPOOL_MAX_INFLIGHT_REQUEST_BODY_BYTES must be at least four times SUBPOOL_MAX_REQUEST_BODY_BYTES")
+	}
+	if raw := strings.TrimSpace(os.Getenv("SUBPOOL_REQUEST_BODY_READ_TIMEOUT")); raw != "" {
+		cfg.RequestBodyReadTimeout, err = time.ParseDuration(raw)
+		if err != nil || cfg.RequestBodyReadTimeout <= 0 {
+			return Config{}, errors.New("SUBPOOL_REQUEST_BODY_READ_TIMEOUT must be a positive duration")
 		}
 	}
 
@@ -133,6 +154,18 @@ func envBool(name string, fallback bool) (bool, error) {
 	value, err := strconv.ParseBool(raw)
 	if err != nil {
 		return false, fmt.Errorf("%s must be a boolean", name)
+	}
+	return value, nil
+}
+
+func envPositiveInt64(name string, fallback int64) (int64, error) {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return fallback, nil
+	}
+	value, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || value <= 0 {
+		return 0, fmt.Errorf("%s must be a positive integer number of bytes", name)
 	}
 	return value, nil
 }

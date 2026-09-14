@@ -16,6 +16,9 @@ func setValidEnv(t *testing.T) {
 	key := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{1}, 32))
 	t.Setenv("SUBPOOL_CREDENTIAL_KEY", key)
 	t.Setenv("SUBPOOL_API_KEY_HMAC_KEY", key)
+	t.Setenv("SUBPOOL_MAX_REQUEST_BODY_BYTES", "")
+	t.Setenv("SUBPOOL_MAX_INFLIGHT_REQUEST_BODY_BYTES", "")
+	t.Setenv("SUBPOOL_REQUEST_BODY_READ_TIMEOUT", "")
 }
 func TestLoad(t *testing.T) {
 	setValidEnv(t)
@@ -31,6 +34,59 @@ func TestLoad(t *testing.T) {
 	}
 	if cfg.UpstreamResponseHeaderTimeout != 3*time.Minute {
 		t.Fatalf("upstream response header timeout = %s", cfg.UpstreamResponseHeaderTimeout)
+	}
+	if cfg.MaxRequestBodyBytes != 256<<20 || cfg.MaxInflightRequestBodyBytes != 1<<30 {
+		t.Fatalf("request body limits = %d/%d", cfg.MaxRequestBodyBytes, cfg.MaxInflightRequestBodyBytes)
+	}
+	if cfg.RequestBodyReadTimeout != 5*time.Minute {
+		t.Fatalf("request body read timeout = %s", cfg.RequestBodyReadTimeout)
+	}
+}
+
+func TestLoadRequestBodyLimitOverrides(t *testing.T) {
+	setValidEnv(t)
+	t.Setenv("SUBPOOL_MAX_REQUEST_BODY_BYTES", "1048576")
+	t.Setenv("SUBPOOL_MAX_INFLIGHT_REQUEST_BODY_BYTES", "4194304")
+	t.Setenv("SUBPOOL_REQUEST_BODY_READ_TIMEOUT", "7m")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.MaxRequestBodyBytes != 1048576 || cfg.MaxInflightRequestBodyBytes != 4194304 {
+		t.Fatalf("request body limits = %d/%d", cfg.MaxRequestBodyBytes, cfg.MaxInflightRequestBodyBytes)
+	}
+	if cfg.RequestBodyReadTimeout != 7*time.Minute {
+		t.Fatalf("request body read timeout = %s", cfg.RequestBodyReadTimeout)
+	}
+}
+
+func TestLoadRejectsInvalidRequestBodyLimits(t *testing.T) {
+	tests := []struct {
+		name     string
+		request  string
+		inflight string
+	}{
+		{name: "non-numeric request limit", request: "large", inflight: "4194304"},
+		{name: "zero request limit", request: "0", inflight: "4194304"},
+		{name: "aggregate below buffer requirement", request: "2097152", inflight: "4194304"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			setValidEnv(t)
+			t.Setenv("SUBPOOL_MAX_REQUEST_BODY_BYTES", test.request)
+			t.Setenv("SUBPOOL_MAX_INFLIGHT_REQUEST_BODY_BYTES", test.inflight)
+			if _, err := Load(); err == nil {
+				t.Fatal("invalid request body limits were accepted")
+			}
+		})
+	}
+}
+
+func TestLoadRejectsInvalidRequestBodyReadTimeout(t *testing.T) {
+	setValidEnv(t)
+	t.Setenv("SUBPOOL_REQUEST_BODY_READ_TIMEOUT", "0s")
+	if _, err := Load(); err == nil {
+		t.Fatal("invalid request body read timeout was accepted")
 	}
 }
 

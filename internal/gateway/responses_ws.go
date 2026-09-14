@@ -13,6 +13,7 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/gesta-run/subpool/internal/domain"
+	"github.com/gesta-run/subpool/internal/jsonobject"
 	"github.com/gesta-run/subpool/internal/provider/codex"
 	"github.com/gesta-run/subpool/internal/store"
 )
@@ -78,6 +79,7 @@ type responsesWSTurn struct {
 	continuation bool
 	forwarded    bool
 	finished     bool
+	reservation  *bodyReservation
 }
 
 type responsesWSRequest struct {
@@ -96,36 +98,66 @@ type responsesWSEvent struct {
 func (s *responsesWSSession) readClient() {
 	first := true
 	for {
-		readCtx := s.ctx
-		var cancel context.CancelFunc
+		readCtx, cancel := context.WithCancel(s.ctx)
+		var firstMessageTimer *time.Timer
 		if first {
-			readCtx, cancel = context.WithTimeout(s.ctx, responsesWSFirstMessageTimeout)
+			firstMessageTimer = time.AfterFunc(responsesWSFirstMessageTimeout, cancel)
 		}
-		messageType, payload, err := s.conn.Read(readCtx)
-		if cancel != nil {
-			cancel()
+		messageType, reader, err := s.conn.Reader(readCtx)
+		if firstMessageTimer != nil {
+			firstMessageTimer.Stop()
 		}
 		if err != nil {
+			cancel()
 			return
 		}
 		if messageType != websocket.MessageText {
+			cancel()
 			s.close(websocket.StatusUnsupportedData, "text messages required")
+			return
+		}
+		bodyTimer := time.AfterFunc(s.hub.server.requestBodyTimeout, cancel)
+		payload, reservation, err := s.hub.server.readBufferedBody(reader, -1, responsesWSRequestBodyCopies)
+		bodyTimer.Stop()
+		cancel()
+		if err != nil {
+			reason := "read_failed"
+			closeStatus := websocket.StatusInternalError
+			closeReason := "request body could not be read"
+			if errors.Is(err, errRequestBodyCapacity) {
+				reason = "capacity"
+				closeStatus = websocket.StatusTryAgainLater
+				closeReason = "request body capacity is temporarily unavailable"
+			} else if errors.Is(err, errRequestBodyTooLarge) || errors.Is(err, websocket.ErrMessageTooBig) {
+				reason = "too_large"
+				closeStatus = websocket.StatusMessageTooBig
+				closeReason = "request body is too large"
+			}
+			slog.Warn("WebSocket request body rejected", "reason", reason, "max_bytes", s.hub.server.maxRequestBodyBytes,
+				"inflight_buffer_bytes", s.hub.server.requestBodyBudget.used.Load(), "max_inflight_buffer_bytes", s.hub.server.requestBodyBudget.limit)
+			s.close(closeStatus, closeReason)
 			return
 		}
 		first = false
 		s.touch()
 		request, requestErr := parseResponsesWSRequest(payload)
 		if requestErr != nil {
+			reservation.release()
 			s.sendError("", requestErr.code, requestErr.message)
 			continue
 		}
-		if !s.handleRequest(request) {
+		if !s.handleRequest(request, reservation) {
 			return
 		}
 	}
 }
 
-func (s *responsesWSSession) handleRequest(request responsesWSRequest) bool {
+func (s *responsesWSSession) handleRequest(request responsesWSRequest, reservation *bodyReservation) bool {
+	defer func() {
+		if reservation != nil {
+			reservation.release()
+		}
+	}()
 	route, requestErr := s.resolveRoute()
 	if requestErr != nil {
 		s.sendError(request.streamID(), requestErr.code, requestErr.message)
@@ -161,12 +193,13 @@ func (s *responsesWSSession) handleRequest(request responsesWSRequest) bool {
 		s.sendError(request.streamID(), requestErr.code, requestErr.message)
 		return true
 	}
-	turn, requestErr := s.reserveTurn(request, payload)
+	turn, requestErr := s.reserveTurn(request, payload, reservation)
 	if requestErr != nil {
 		s.hub.turnsRejected.Add(1)
 		s.sendError(request.streamID(), requestErr.code, requestErr.message)
 		return true
 	}
+	reservation = nil
 	s.hub.turnsTotal.Add(1)
 	s.mu.Lock()
 	native := s.native
@@ -391,7 +424,7 @@ func (s *responsesWSSession) dialCodexOnce(account domain.ProviderAccount, model
 		}
 		return nil, status, responseHeaders, err
 	}
-	conn.SetReadLimit(maxRequestBody)
+	conn.SetReadLimit(maxResponsesWSEventBytes)
 	return conn, 0, nil, nil
 }
 
@@ -449,21 +482,17 @@ func (s *responsesWSSession) preparePayload(request responsesWSRequest) ([]byte,
 		}
 		return payload, nil
 	}
-	var body map[string]any
-	if err := json.Unmarshal(request.raw, &body); err != nil {
-		return nil, &gatewayError{http.StatusBadRequest, "invalid response.create message", "invalid_request_error"}
-	}
-	delete(body, "type")
-	delete(body, "stream_id")
-	body["stream"] = true
-	payload, err := json.Marshal(body)
+	body, err := jsonobject.Parse(request.raw)
 	if err != nil {
 		return nil, &gatewayError{http.StatusBadRequest, "invalid response.create message", "invalid_request_error"}
 	}
-	return payload, nil
+	body.Delete("type")
+	body.Delete("stream_id")
+	_ = body.Set("stream", []byte("true"))
+	return body.Bytes(), nil
 }
 
-func (s *responsesWSSession) reserveTurn(request responsesWSRequest, payload []byte) (*responsesWSTurn, *gatewayError) {
+func (s *responsesWSSession) reserveTurn(request responsesWSRequest, payload []byte, reservation *bodyReservation) (*responsesWSTurn, *gatewayError) {
 	streamID := request.streamID()
 	s.mu.Lock()
 	if s.closed {
@@ -491,7 +520,7 @@ func (s *responsesWSSession) reserveTurn(request responsesWSRequest, payload []b
 	}
 	turn := &responsesWSTurn{
 		streamID: streamID, accountID: accountID, model: request.Model, payload: payload,
-		raw: append([]byte(nil), request.raw...), continuation: request.PreviousResponseID != "",
+		raw: request.raw, continuation: request.PreviousResponseID != "", reservation: reservation,
 	}
 	s.mu.Lock()
 	if s.closed {
@@ -850,7 +879,14 @@ func (s *responsesWSSession) finishTurn(turn *responsesWSTurn) {
 		s.rememberResponseLocked(turn.response)
 	}
 	accountID := turn.accountID
+	reservation := turn.reservation
+	turn.reservation = nil
+	turn.raw = nil
+	turn.payload = nil
 	s.mu.Unlock()
+	if reservation != nil {
+		reservation.release()
+	}
 	s.hub.releaseAccountTurn(accountID)
 	s.touch()
 	if !successfulTerminal {

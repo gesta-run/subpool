@@ -412,6 +412,10 @@ func TestMixedPoolFallsBackFromSubscriptionsToPaidAPI(t *testing.T) {
 	if len(provider.credentials) != 2 || compatible.credentials.APIKey != "sk-paid-placeholder" {
 		t.Fatalf("subscription calls=%d paid credentials=%#v", len(provider.credentials), compatible.credentials)
 	}
+	var compatibleRequest map[string]any
+	if json.Unmarshal(compatible.responsesBody, &compatibleRequest) != nil || compatibleRequest["stream"] != true {
+		t.Fatalf("compatible request did not force streaming: %s", compatible.responsesBody)
+	}
 	if len(st.reassignExcludes) != 2 || strings.Join(st.reassignExcludes[1], ",") != "account-1,account-2" {
 		t.Fatalf("reassignment exclusions = %#v", st.reassignExcludes)
 	}

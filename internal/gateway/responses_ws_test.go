@@ -87,6 +87,30 @@ func TestResponsesWebSocketHTTPBridge(t *testing.T) {
 	}
 }
 
+func TestResponsesWebSocketUsesConfiguredRequestLimit(t *testing.T) {
+	server, _, _, plain := newTestServer(t)
+	server.WithRequestBodyLimits(64, 64*maxHTTPRequestBodyCopies, time.Second)
+	server.WithResponsesWebSocket(true, false, "")
+	client, cleanup := dialResponsesWSTestServer(t, server, plain)
+	defer cleanup()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	err := client.Write(ctx, websocket.MessageText, []byte(`{"type":"response.create","model":"gpt-test","input":"`+strings.Repeat("a", 64)+`"}`))
+	cancel()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel = context.WithTimeout(context.Background(), time.Second)
+	_, _, err = client.Read(ctx)
+	cancel()
+	if err == nil || websocket.CloseStatus(err) != websocket.StatusMessageTooBig {
+		t.Fatalf("read error = %v, status = %d", err, websocket.CloseStatus(err))
+	}
+	if used := server.requestBodyBudget.used.Load(); used != 0 {
+		t.Fatalf("reserved bytes after rejection = %d", used)
+	}
+}
+
 func TestResponsesWebSocketCodexHTTPBridgePreservesFastRouting(t *testing.T) {
 	server, st, provider, plain := newTestServer(t)
 	st.route.Account.FastModeEnabled = true
@@ -404,7 +428,7 @@ func TestResponsesWebSocketRejectsTurnDuringNativeFailover(t *testing.T) {
 	if requestErr != nil {
 		t.Fatal(requestErr)
 	}
-	if _, reserveErr := session.reserveTurn(request, request.raw); reserveErr == nil || reserveErr.code != "provider_error" {
+	if _, reserveErr := session.reserveTurn(request, request.raw, nil); reserveErr == nil || reserveErr.code != "provider_error" {
 		t.Fatalf("reserve error = %#v", reserveErr)
 	}
 }
