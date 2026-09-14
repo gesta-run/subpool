@@ -9,6 +9,8 @@ import (
 	"io"
 	"net/http"
 	"strings"
+
+	"github.com/gesta-run/subpool/internal/jsonobject"
 )
 
 const responsesWSMaxStreamIDBytes = 256
@@ -23,11 +25,17 @@ const (
 
 func parseResponsesWSRequest(payload []byte) (responsesWSRequest, *gatewayError) {
 	trimmed := bytes.TrimSpace(payload)
-	if len(trimmed) == 0 || len(trimmed) > maxRequestBody {
+	if len(trimmed) == 0 {
 		return responsesWSRequest{}, &gatewayError{http.StatusBadRequest, "invalid response.create message", "invalid_request_error"}
 	}
-	if err := validateResponsesWSObject(trimmed); err != nil {
-		return responsesWSRequest{}, &gatewayError{http.StatusBadRequest, err.Error(), "invalid_request_error"}
+	object, err := jsonobject.Parse(trimmed)
+	if err != nil {
+		return responsesWSRequest{}, &gatewayError{http.StatusBadRequest, "response.create message must be a JSON object", "invalid_request_error"}
+	}
+	for _, field := range []string{"type", "stream_id", "previous_response_id", "model"} {
+		if object.Duplicate(field) {
+			return responsesWSRequest{}, &gatewayError{http.StatusBadRequest, fmt.Sprintf("duplicate %s field", field), "invalid_request_error"}
+		}
 	}
 	var request responsesWSRequest
 	if err := json.Unmarshal(trimmed, &request); err != nil || request.Type != "response.create" {
@@ -38,7 +46,7 @@ func parseResponsesWSRequest(payload []byte) (responsesWSRequest, *gatewayError)
 			return responsesWSRequest{}, &gatewayError{http.StatusBadRequest, "stream_id must contain 1-256 letters, numbers, underscores, hyphens, or periods", "invalid_stream_id"}
 		}
 	}
-	request.raw = append([]byte(nil), trimmed...)
+	request.raw = trimmed
 	return request, nil
 }
 
@@ -55,40 +63,6 @@ func validResponsesWSStreamID(streamID string) bool {
 		return false
 	}
 	return true
-}
-
-func validateResponsesWSObject(payload []byte) error {
-	decoder := json.NewDecoder(bytes.NewReader(payload))
-	start, err := decoder.Token()
-	if err != nil || start != json.Delim('{') {
-		return errors.New("response.create message must be a JSON object")
-	}
-	seen := make(map[string]struct{})
-	control := map[string]struct{}{"type": {}, "stream_id": {}, "previous_response_id": {}, "model": {}}
-	for decoder.More() {
-		token, tokenErr := decoder.Token()
-		key, ok := token.(string)
-		if tokenErr != nil || !ok {
-			return errors.New("invalid response.create message")
-		}
-		if _, critical := control[key]; critical {
-			if _, duplicate := seen[key]; duplicate {
-				return fmt.Errorf("duplicate %s field", key)
-			}
-			seen[key] = struct{}{}
-		}
-		var value json.RawMessage
-		if decoder.Decode(&value) != nil {
-			return errors.New("invalid response.create message")
-		}
-	}
-	if _, err = decoder.Token(); err != nil {
-		return errors.New("invalid response.create message")
-	}
-	if decoder.Decode(&struct{}{}) != io.EOF {
-		return errors.New("response.create message has trailing data")
-	}
-	return nil
 }
 
 func (r responsesWSRequest) streamID() string {
@@ -199,8 +173,8 @@ func readResponsesWSHTTPError(response *http.Response) (string, string) {
 
 func (s *responsesWSSession) forwardBridgeResponse(turn *responsesWSTurn, response *http.Response) error {
 	if strings.Contains(response.Header.Get("Content-Type"), "application/json") {
-		body, err := io.ReadAll(io.LimitReader(response.Body, maxRequestBody+1))
-		if err != nil || len(body) > maxRequestBody {
+		body, err := io.ReadAll(io.LimitReader(response.Body, maxResponsesWSEventBytes+1))
+		if err != nil || len(body) > maxResponsesWSEventBytes {
 			return errors.New("invalid provider response")
 		}
 		var value map[string]any
@@ -215,7 +189,7 @@ func (s *responsesWSSession) forwardBridgeResponse(turn *responsesWSTurn, respon
 		return s.forwardBridgeEvent(turn, event)
 	}
 	scanner := bufio.NewScanner(response.Body)
-	scanner.Buffer(make([]byte, 64<<10), maxRequestBody)
+	scanner.Buffer(make([]byte, 64<<10), maxResponsesWSEventBytes)
 	for scanner.Scan() {
 		data := sseData(scanner.Bytes())
 		if len(data) > 0 && string(data) != "[DONE]" {

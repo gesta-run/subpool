@@ -62,6 +62,7 @@ func main() {
 	}
 	mux := http.NewServeMux()
 	gatewayServer := gateway.New(database, keys, cipher, provider, refreshManager, compatibleProvider).
+		WithRequestBodyLimits(cfg.MaxRequestBodyBytes, cfg.MaxInflightRequestBodyBytes, cfg.RequestBodyReadTimeout).
 		WithModelProviders(resetCredits, compatibleProvider).
 		WithResponsesWebSocket(cfg.ResponsesWSEnabled, cfg.ResponsesWSForceHTTPBridge, cfg.CodexUpstreamURL)
 	control.New(database, sessions, keys, cipher, deviceAuth, refreshManager, sources, healthChecker).
@@ -89,7 +90,7 @@ func main() {
 		_, _ = w.Write([]byte("# HELP subpool_up Whether the service is running.\n# TYPE subpool_up gauge\nsubpool_up 1\n" + gatewayServer.ResponsesWebSocketMetrics()))
 	})
 	registerWeb(mux)
-	server := &http.Server{Addr: cfg.ListenAddress, Handler: securityHeaders(mux), ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 60 * time.Second, IdleTimeout: 120 * time.Second, MaxHeaderBytes: 1 << 20}
+	server := &http.Server{Addr: cfg.ListenAddress, Handler: securityHeaders(mux), ReadHeaderTimeout: 10 * time.Second, ReadTimeout: cfg.RequestBodyReadTimeout, IdleTimeout: 120 * time.Second, MaxHeaderBytes: 1 << 20}
 	stopCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	go healthChecker.Run(stopCtx)

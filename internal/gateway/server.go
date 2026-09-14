@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -18,13 +19,13 @@ import (
 	"github.com/gesta-run/subpool/internal/catalog"
 	"github.com/gesta-run/subpool/internal/credential"
 	"github.com/gesta-run/subpool/internal/domain"
+	"github.com/gesta-run/subpool/internal/jsonobject"
 	"github.com/gesta-run/subpool/internal/provider/codex"
 	"github.com/gesta-run/subpool/internal/provider/openaicompat"
 	"github.com/gesta-run/subpool/internal/store"
 )
 
 const (
-	maxRequestBody      = 32 << 20
 	maxProviderAttempts = 8
 	accountHeader       = "X-Subpool-Internal-Account-Id"
 	formatHeader        = "X-Subpool-Internal-Response-Format"
@@ -59,18 +60,21 @@ type OpenAICompatibleClient interface {
 }
 
 type Server struct {
-	store       store.Store
-	keys        *auth.APIKeys
-	cipher      Cipher
-	codex       CodexClient
-	compatible  OpenAICompatibleClient
-	refresher   credential.AccountRefresher
-	activity    *requestActivityThrottle
-	catalog     *catalog.Service
-	models      *modelCache
-	responsesWS *responsesWSHub
-	now         func() time.Time
-	eventSeq    atomic.Uint64
+	store               store.Store
+	keys                *auth.APIKeys
+	cipher              Cipher
+	codex               CodexClient
+	compatible          OpenAICompatibleClient
+	refresher           credential.AccountRefresher
+	activity            *requestActivityThrottle
+	catalog             *catalog.Service
+	models              *modelCache
+	responsesWS         *responsesWSHub
+	maxRequestBodyBytes int64
+	requestBodyBudget   *byteBudget
+	requestBodyTimeout  time.Duration
+	now                 func() time.Time
+	eventSeq            atomic.Uint64
 }
 
 func New(st store.Store, keys *auth.APIKeys, cipher Cipher, client CodexClient, refresher credential.AccountRefresher, compatible ...OpenAICompatibleClient) *Server {
@@ -79,9 +83,21 @@ func New(st store.Store, keys *auth.APIKeys, cipher Cipher, client CodexClient, 
 		compatibleClient = compatible[0]
 	}
 	server := &Server{store: st, keys: keys, cipher: cipher, codex: client, compatible: compatibleClient, refresher: refresher,
-		activity: newRequestActivityThrottle(), models: newModelCache(), now: time.Now}
+		activity: newRequestActivityThrottle(), models: newModelCache(), maxRequestBodyBytes: defaultMaxRequestBodyBytes,
+		requestBodyBudget: newByteBudget(defaultMaxInflightRequestBodyBytes), requestBodyTimeout: defaultRequestBodyReadTimeout, now: time.Now}
 	server.responsesWS = newResponsesWSHub(server)
 	return server
+}
+
+func (s *Server) WithRequestBodyLimits(maxRequestBodyBytes, maxInflightRequestBodyBytes int64, readTimeout time.Duration) *Server {
+	minimumBudget, valid := requestBodyCost(maxRequestBodyBytes, maxHTTPRequestBodyCopies)
+	if maxRequestBodyBytes <= 0 || !valid || maxInflightRequestBodyBytes < minimumBudget || readTimeout <= 0 {
+		panic("invalid request body limits")
+	}
+	s.maxRequestBodyBytes = maxRequestBodyBytes
+	s.requestBodyBudget = newByteBudget(maxInflightRequestBodyBytes)
+	s.requestBodyTimeout = readTimeout
+	return s
 }
 
 func (s *Server) WithModelProviders(codexModels catalog.CodexModels, compatibleModels catalog.CompatibleModels) *Server {
@@ -121,12 +137,13 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	body, meta, ok := readRequest(w, r)
+	body, meta, releaseBody, ok := s.readRequest(w, r)
 	if !ok {
 		return
 	}
-	compatibleBody := forceProviderStream(body)
-	resp, ok := s.call(w, r, route, upstreamRequest{kind: "responses", model: meta.Model, body: compatibleBody, codexBody: body}, meta.PreviousResponseID)
+	defer releaseBody()
+	resp, ok := s.call(w, r, route, upstreamRequest{kind: "responses", model: meta.Model, body: body, codexBody: body}, meta.PreviousResponseID)
+	releaseBody()
 	if !ok {
 		return
 	}
@@ -150,16 +167,18 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	body, meta, ok := readRequest(w, r)
+	body, meta, releaseBody, ok := s.readRequest(w, r)
 	if !ok {
 		return
 	}
+	defer releaseBody()
 	responseBody, err := chatToResponses(body)
 	if err != nil {
 		writeOpenAIError(w, http.StatusBadRequest, err.Error(), "invalid_request_error")
 		return
 	}
 	resp, ok := s.call(w, r, route, upstreamRequest{kind: "chat_completions", model: meta.Model, body: body, codexBody: responseBody}, "")
+	releaseBody()
 	if !ok {
 		return
 	}
@@ -245,20 +264,6 @@ func scopeAllowed(scopes []string, required string) bool {
 	return false
 }
 
-func readRequest(w http.ResponseWriter, r *http.Request) ([]byte, requestMeta, bool) {
-	body, err := io.ReadAll(io.LimitReader(r.Body, maxRequestBody+1))
-	if err != nil || len(body) > maxRequestBody {
-		writeOpenAIError(w, http.StatusRequestEntityTooLarge, "request body is too large", "invalid_request_error")
-		return nil, requestMeta{}, false
-	}
-	var meta requestMeta
-	if json.Unmarshal(body, &meta) != nil || strings.TrimSpace(meta.Model) == "" {
-		writeOpenAIError(w, http.StatusBadRequest, "model is required", "invalid_request_error")
-		return nil, requestMeta{}, false
-	}
-	return body, meta, true
-}
-
 func normalizeCodexRequest(body []byte, installationID string, fastMode bool) ([]byte, error) {
 	return normalizeCodexPayload(body, installationID, fastMode, false)
 }
@@ -268,57 +273,64 @@ func normalizeCodexWebSocketRequest(body []byte, installationID string, fastMode
 }
 
 func normalizeCodexPayload(body []byte, installationID string, fastMode, webSocket bool) ([]byte, error) {
-	var value map[string]any
-	if err := json.Unmarshal(body, &value); err != nil {
+	value, err := jsonobject.Parse(body)
+	if err != nil {
 		return nil, fmt.Errorf("decode Codex request: %w", err)
 	}
 	if webSocket {
-		delete(value, "stream")
+		value.Delete("stream")
 	} else {
-		value["stream"] = true
+		_ = value.Set("stream", []byte("true"))
 	}
-	value["store"] = false
+	_ = value.Set("store", []byte("false"))
 	if fastMode {
-		value["service_tier"] = "priority"
+		_ = value.Set("service_tier", []byte(`"priority"`))
 	} else {
-		delete(value, "service_tier")
+		value.Delete("service_tier")
 	}
 	for _, unsupported := range []string{"temperature", "top_p", "logprobs", "top_logprobs"} {
-		delete(value, unsupported)
+		value.Delete(unsupported)
 	}
-	if instructions, ok := value["instructions"]; !ok || instructions == nil {
-		value["instructions"] = ""
+	if instructions, ok := value.Value("instructions"); !ok || bytes.Equal(bytes.TrimSpace(instructions), []byte("null")) {
+		_ = value.Set("instructions", []byte(`""`))
 	}
-	if input, ok := value["input"].(string); ok {
-		value["input"] = []any{map[string]any{
-			"role": "user",
-			"content": []any{map[string]any{
-				"type": "input_text",
-				"text": input,
-			}},
-		}}
+	if input, ok := value.Value("input"); ok && len(input) > 0 && input[0] == '"' {
+		wrapped := make([]byte, 0, len(input)+80)
+		wrapped = append(wrapped, `[{"role":"user","content":[{"type":"input_text","text":`...)
+		wrapped = append(wrapped, input...)
+		wrapped = append(wrapped, `}]}]`...)
+		_ = value.Set("input", wrapped)
 	}
-	if err := codex.ApplyDeviceIdentity(value, installationID); err != nil {
+	metadata, exists := value.Value("client_metadata")
+	rewrittenMetadata, err := rewriteClientMetadata(metadata, exists, installationID)
+	if err != nil {
 		return nil, err
 	}
-	out, err := json.Marshal(value)
-	if err != nil {
-		return nil, fmt.Errorf("encode Codex request: %w", err)
-	}
-	return out, nil
+	_ = value.Set("client_metadata", rewrittenMetadata)
+	return value.Bytes(), nil
 }
 
 func forceProviderStream(body []byte) []byte {
-	var value map[string]any
-	if json.Unmarshal(body, &value) != nil {
-		return body
-	}
-	value["stream"] = true
-	out, err := json.Marshal(value)
+	value, err := jsonobject.Parse(body)
 	if err != nil {
 		return body
 	}
-	return out
+	_ = value.Set("stream", []byte("true"))
+	return value.Bytes()
+}
+
+func rewriteClientMetadata(raw []byte, exists bool, installationID string) ([]byte, error) {
+	metadata := make(map[string]any)
+	if exists && !bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		if err := json.Unmarshal(raw, &metadata); err != nil || metadata == nil {
+			return nil, codex.ErrInvalidClientMetadata
+		}
+	}
+	request := map[string]any{"client_metadata": metadata}
+	if err := codex.ApplyDeviceIdentity(request, installationID); err != nil {
+		return nil, err
+	}
+	return json.Marshal(request["client_metadata"])
 }
 
 func (s *Server) call(w http.ResponseWriter, r *http.Request, route domain.KeyRoute, request upstreamRequest, previousResponseID string) (*http.Response, bool) {
@@ -604,7 +616,7 @@ func (s *Server) providerAccountResponse(ctx context.Context, request upstreamRe
 		if request.kind == "chat_completions" {
 			resp, err = s.compatible.ChatCompletions(ctx, request.body, header, credentials)
 		} else {
-			resp, err = s.compatible.Responses(ctx, request.body, header, credentials)
+			resp, err = s.compatible.Responses(ctx, forceProviderStream(request.body), header, credentials)
 		}
 	default:
 		err = fmt.Errorf("unsupported provider %q", account.Provider)

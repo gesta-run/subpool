@@ -101,6 +101,7 @@ Available endpoints include `GET/POST /v1/responses`, `POST /v1/chat/completions
 - Terminate TLS at a reverse proxy and set `SUBPOOL_PUBLIC_URL` to the public origin.
 - Back up PostgreSQL together with `SUBPOOL_CREDENTIAL_KEY` and `SUBPOOL_API_KEY_HMAC_KEY`.
 - Use PostgreSQL for shared authentication, rate-limit, assignment, and health state across replicas.
+- HTTP and Responses WebSocket request bodies default to 256 MiB per request, a 1 GiB estimated buffer budget across the process, and a five-minute read timeout. Tune `SUBPOOL_MAX_REQUEST_BODY_BYTES`, `SUBPOOL_MAX_INFLIGHT_REQUEST_BODY_BYTES`, and `SUBPOOL_REQUEST_BODY_READ_TIMEOUT` together for the available memory and network.
 
 See [.env.example](.env.example) for configuration options.
 

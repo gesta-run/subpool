@@ -64,7 +64,7 @@ func (h *responsesWSHub) handle(w http.ResponseWriter, r *http.Request) {
 		h.releaseConnection(route.Key.ID)
 		return
 	}
-	conn.SetReadLimit(maxRequestBody)
+	conn.SetReadLimit(h.server.maxRequestBodyBytes)
 	ctx, cancel := context.WithTimeout(r.Context(), responsesWSLifetime)
 	session := &responsesWSSession{
 		hub: h, conn: conn, ctx: ctx, cancel: cancel, keyDigest: h.server.keys.Digest(plain),
