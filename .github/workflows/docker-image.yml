@@ -23,6 +23,22 @@ jobs:
     name: Test Go service
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: subpool
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: subpool_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U subpool -d subpool_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      SUBPOOL_TEST_DATABASE_URL: postgres://subpool:test@localhost:5432/subpool_test?sslmode=disable
     steps:
       - name: Check out repository
         uses: actions/checkout@v4

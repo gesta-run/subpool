@@ -144,6 +144,9 @@ func (c *Checker) ApplyNewAccount(account *domain.ProviderAccount, result Result
 }
 
 func (c *Checker) CheckAccount(ctx context.Context, accountID string) (domain.ProviderAccount, error) {
+	if _, err := c.store.ReactivateProviderIfCooldownExpired(ctx, accountID, c.now()); err != nil {
+		return domain.ProviderAccount{}, err
+	}
 	account, err := c.store.GetProviderAccount(ctx, accountID)
 	if err != nil {
 		return domain.ProviderAccount{}, err
@@ -194,6 +197,18 @@ func (c *Checker) runBatch(ctx context.Context) {
 				return
 			}
 			defer func() { <-semaphore }()
+			if account.Status == domain.AccountCoolingDown {
+				reactivated, reactivateErr := c.store.ReactivateProviderIfCooldownExpired(ctx, account.ID, now)
+				if reactivateErr != nil {
+					slog.Error("provider cooldown recovery failed", "account_id", account.ID, "error", reactivateErr)
+					return
+				}
+				if !reactivated {
+					return
+				}
+				account.Status = domain.AccountActive
+				account.CooldownUntil = nil
+			}
 			checkCtx, cancel := context.WithTimeout(ctx, checkTimeout)
 			result := c.Check(checkCtx, account)
 			cancel()

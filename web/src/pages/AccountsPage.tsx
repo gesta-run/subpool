@@ -93,7 +93,7 @@ export function AccountsPage() {
       {mutations.error ? <div className="inline-alert" role="alert">{mutations.error}</div> : null}
       {list.error ? <StatePanel kind="error" title="Accounts unavailable" description={list.error} actionLabel="Try again" onAction={() => void list.reload()} /> : list.items.length === 0 ? <StatePanel kind="empty" title="No accounts connected" description="Connect a provider account before creating a pool." actionLabel="Connect account" onAction={() => connect.setOpen(true)} /> : <AccountTable
         accounts={list.items} busyID={mutations.busyID} resetBusyID={resets.busyID} resetStates={resets.states}
-        onModels={models.open} onRefresh={(account) => void mutations.refresh(account.id, () => resets.load(account.id, true))}
+        onModels={models.open} onRefresh={(account) => void mutations.refresh(account, account.provider === 'codex' && account.credential_type !== 'api_key' ? () => resets.load(account.id, true) : undefined)}
         onResetLoad={(account) => void resets.load(account.id, true)} onReset={(account, creditID) => setPending({ type: 'reset', account, creditID })}
         onFastMode={toggleFastMode} onToggle={toggle} onRemove={(account) => setPending({ type: 'remove', account })}
       />}

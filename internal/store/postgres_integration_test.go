@@ -110,6 +110,98 @@ func TestPostgresHealthFailureThresholdAndRecovery(t *testing.T) {
 	}
 }
 
+func TestPostgresHealthChecksRecoverExpiredCooldowns(t *testing.T) {
+	databaseURL := os.Getenv("SUBPOOL_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("SUBPOOL_TEST_DATABASE_URL is not set")
+	}
+	ctx := context.Background()
+	database, err := Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	expired := now.Add(-time.Minute)
+	future := now.Add(time.Minute)
+	for i, test := range []struct {
+		name     string
+		status   string
+		cooldown *time.Time
+		want     bool
+	}{
+		{name: "expired", status: domain.AccountCoolingDown, cooldown: &expired, want: true},
+		{name: "expires now", status: domain.AccountCoolingDown, cooldown: &now, want: true},
+		{name: "still cooling", status: domain.AccountCoolingDown, cooldown: &future},
+		{name: "disabled", status: domain.AccountDisabled, cooldown: &expired},
+		{name: "authentication failed", status: domain.AccountAuthFailed, cooldown: &expired},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			account := domain.ProviderAccount{
+				ID:                   fmt.Sprintf("00000000-0000-4000-8000-%012d", 800+i),
+				Provider:             domain.ProviderOpenAICompatible,
+				CredentialType:       domain.CredentialAPIKey,
+				DisplayName:          "Cooldown recovery test",
+				SubjectHMAC:          bytes.Repeat([]byte{byte(80 + i)}, 32),
+				CredentialCiphertext: []byte("encrypted"),
+				CredentialVersion:    1,
+				Status:               domain.AccountActive,
+				HealthStatus:         domain.HealthHealthy,
+			}
+			if err := database.CreateProviderAccount(ctx, account); err != nil {
+				t.Fatal(err)
+			}
+			defer func() {
+				if err := database.DeleteProviderAccount(ctx, account.ID); err != nil {
+					t.Error(err)
+				}
+			}()
+			if err := database.UpdateProviderStatus(ctx, account.ID, test.status, test.cooldown); err != nil {
+				t.Fatal(err)
+			}
+			// Cooldown expiry must not wait for the next scheduled health check.
+			if err := database.SetProviderHealth(ctx, account.ID, domain.HealthHealthy, "", now, now.Add(time.Hour)); err != nil {
+				t.Fatal(err)
+			}
+			claimedUntil := now.Add(2 * time.Minute)
+			accounts, err := database.ClaimProviderHealthChecks(ctx, 1000, now, claimedUntil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			found := false
+			for _, claimed := range accounts {
+				if claimed.ID == account.ID {
+					found = true
+					if claimed.Status != domain.AccountCoolingDown {
+						t.Fatalf("claimed status = %s", claimed.Status)
+					}
+				}
+			}
+			if found != test.want {
+				t.Fatalf("claimed = %v, want %v", found, test.want)
+			}
+			reactivated, err := database.ReactivateProviderIfCooldownExpired(ctx, account.ID, now)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if reactivated != test.want {
+				t.Fatalf("reactivated = %v, want %v", reactivated, test.want)
+			}
+			stored, err := database.GetProviderAccount(ctx, account.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if test.want {
+				if stored.Status != domain.AccountActive || stored.CooldownUntil != nil || stored.NextHealthCheckAt == nil || !stored.NextHealthCheckAt.Equal(claimedUntil) {
+					t.Fatalf("cooldown did not recover: status=%s cooldown=%v next_check=%v", stored.Status, stored.CooldownUntil, stored.NextHealthCheckAt)
+				}
+			} else if stored.Status != test.status || stored.CooldownUntil == nil || !stored.CooldownUntil.Equal(*test.cooldown) {
+				t.Fatalf("blocked account changed: status=%s cooldown=%v", stored.Status, stored.CooldownUntil)
+			}
+		})
+	}
+}
+
 func TestPostgresRequestSuccessPreservesBlockedAccountStatus(t *testing.T) {
 	databaseURL := os.Getenv("SUBPOOL_TEST_DATABASE_URL")
 	if databaseURL == "" {

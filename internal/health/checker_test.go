@@ -76,6 +76,15 @@ type quotaFailureStore struct {
 	healthFailures int
 }
 
+func (s *quotaFailureStore) ReactivateProviderIfCooldownExpired(_ context.Context, _ string, now time.Time) (bool, error) {
+	if s.account.Status != domain.AccountCoolingDown || s.account.CooldownUntil == nil || s.account.CooldownUntil.After(now) {
+		return false, nil
+	}
+	s.account.Status = domain.AccountActive
+	s.account.CooldownUntil = nil
+	return true, nil
+}
+
 func (s *quotaFailureStore) GetProviderAccount(context.Context, string) (domain.ProviderAccount, error) {
 	return s.account, nil
 }
@@ -113,6 +122,26 @@ func TestCodexQuotaProbeFailurePreservesRoutingHealth(t *testing.T) {
 	}
 	if checked.HealthStatus != domain.HealthHealthy || checked.ConsecutiveFailures != 2 || checked.LastHealthErrorCode != "provider_5xx" {
 		t.Fatalf("routing health changed: %#v", checked)
+	}
+}
+
+func TestCheckAccountReactivatesExpiredCooldown(t *testing.T) {
+	now := time.Date(2026, 9, 17, 8, 0, 0, 0, time.UTC)
+	expired := now.Add(-time.Minute)
+	credentials, _ := json.Marshal(openaicompat.Credentials{BaseURL: "https://example.com/v1", APIKey: "test"})
+	st := &quotaFailureStore{account: domain.ProviderAccount{
+		ID: "account-1", Provider: domain.ProviderOpenAICompatible, CredentialType: domain.CredentialAPIKey,
+		CredentialCiphertext: []byte("encrypted"), Status: domain.AccountCoolingDown, CooldownUntil: &expired,
+	}}
+	checker := NewChecker(st, testCipher{plaintext: credentials}, nil, testCompatible{status: http.StatusOK})
+	checker.now = func() time.Time { return now }
+
+	checked, err := checker.CheckAccount(context.Background(), st.account.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if checked.Status != domain.AccountActive || checked.CooldownUntil != nil {
+		t.Fatalf("account was not reactivated: %#v", checked)
 	}
 }
 
