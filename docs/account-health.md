@@ -10,7 +10,7 @@ Make provider availability visible and truthful without breaking existing pools 
 
 - A newly connected account is stored with operational status `active` without an upstream check.
 - The console treats `active` as healthy.
-- Real traffic changes status after selected responses: success marks the account active, `401` marks authentication failed, and `429` starts cooldown.
+- Real traffic changes status after selected responses: success marks the account active, `401` marks authentication failed, and `429` starts cooldown. The cooldown follows `Retry-After` but never exceeds 15 minutes, because providers often point it at the next quota window while quota can return earlier (manual reset or top-up), and live traffic is the only recovery signal for static API keys.
 - There is no manual connection check, scheduled probe, or persisted last-check result.
 
 ## State model
