@@ -29,6 +29,9 @@ const (
 	maxProviderAttempts = 8
 	accountHeader       = "X-Subpool-Internal-Account-Id"
 	formatHeader        = "X-Subpool-Internal-Response-Format"
+	// Retry-After can point at the next quota window, days away, while quota may
+	// return sooner (manual reset, top-up); static keys have no quota probe.
+	maxRateLimitCooldown = 15 * time.Minute
 )
 
 type retryReason string
@@ -563,13 +566,17 @@ func accountHealthy(account domain.ProviderAccount, now time.Time) bool {
 }
 func retryAfter(header http.Header, now time.Time) time.Time {
 	value := strings.TrimSpace(header.Get("Retry-After"))
+	retryAt := now.Add(time.Minute)
 	if seconds, err := strconv.Atoi(value); err == nil && seconds >= 0 {
-		return now.Add(time.Duration(seconds) * time.Second)
+		retryAt = now.Add(time.Duration(seconds) * time.Second)
+	} else if parsed, err := http.ParseTime(value); err == nil {
+		retryAt = parsed
 	}
-	if parsed, err := http.ParseTime(value); err == nil {
-		return parsed
+	if limit := now.Add(maxRateLimitCooldown); retryAt.After(limit) {
+		slog.Warn("provider Retry-After capped", "retry_after", value, "requested_until", retryAt, "capped_until", limit)
+		return limit
 	}
-	return now.Add(time.Minute)
+	return retryAt
 }
 func drainAndClose(resp *http.Response) {
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))

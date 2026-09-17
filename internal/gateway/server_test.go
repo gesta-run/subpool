@@ -831,3 +831,25 @@ func (b *failingBody) Read(target []byte) (int, error) {
 	return copy(target, b.data), io.ErrUnexpectedEOF
 }
 func (b *failingBody) Close() error { return nil }
+
+func TestRetryAfterCapsProviderQuotaWindow(t *testing.T) {
+	now := time.Date(2026, 9, 16, 4, 22, 0, 0, time.UTC)
+	cases := map[string]struct {
+		value string
+		want  time.Time
+	}{
+		"missing":              {"", now.Add(time.Minute)},
+		"short seconds":        {"30", now.Add(30 * time.Second)},
+		"weekly reset seconds": {"461494", now.Add(maxRateLimitCooldown)},
+		"weekly reset date":    {now.Add(5 * 24 * time.Hour).Format(http.TimeFormat), now.Add(maxRateLimitCooldown)},
+		"past date":            {now.Add(-time.Hour).Format(http.TimeFormat), now.Add(-time.Hour)},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			got := retryAfter(http.Header{"Retry-After": []string{tc.value}}, now)
+			if !got.Equal(tc.want) {
+				t.Fatalf("retryAfter(%q) = %s, want %s", tc.value, got, tc.want)
+			}
+		})
+	}
+}
