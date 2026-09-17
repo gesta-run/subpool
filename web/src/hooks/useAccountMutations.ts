@@ -6,12 +6,14 @@ export function useAccountMutations(reload: () => Promise<void>) {
   const [busyID, setBusyID] = useState('')
   const [error, setError] = useState('')
 
-  async function refresh(accountID: string, afterRefresh?: () => Promise<void>) {
-    setBusyID(accountID)
+  async function refresh(account: ProviderAccount, afterRefresh?: () => Promise<void>) {
+    setBusyID(account.id)
     setError('')
     try {
-      await request(`/api/v1/provider-accounts/${accountID}/refresh`, { method: 'POST' })
-      await request(`/api/v1/provider-accounts/${accountID}/check`, { method: 'POST' })
+      if (account.provider === 'codex' && account.credential_type !== 'api_key') {
+        await request(`/api/v1/provider-accounts/${account.id}/refresh`, { method: 'POST' })
+      }
+      await request(`/api/v1/provider-accounts/${account.id}/check`, { method: 'POST' })
       await reload()
       await afterRefresh?.()
     } catch (caught) {

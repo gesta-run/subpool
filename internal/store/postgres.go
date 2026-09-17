@@ -299,9 +299,20 @@ func (p *Postgres) RecordProviderHealthFailure(ctx context.Context, id, errorCod
 	return wrapMutation("record provider health failure", tag.RowsAffected(), err)
 }
 
+func (p *Postgres) ReactivateProviderIfCooldownExpired(ctx context.Context, id string, now time.Time) (bool, error) {
+	tag, err := p.pool.Exec(ctx, `UPDATE provider_accounts SET status='active',cooldown_until=NULL,updated_at=now()
+		WHERE id=$1 AND status='cooling_down' AND cooldown_until<=$2`, id, now)
+	if err != nil {
+		return false, wrapDB("reactivate provider after cooldown", err)
+	}
+	return tag.RowsAffected() == 1, nil
+}
+
 func (p *Postgres) ClaimProviderHealthChecks(ctx context.Context, limit int, now, claimedUntil time.Time) ([]domain.ProviderAccount, error) {
 	rows, err := p.pool.Query(ctx, `WITH due AS (
-		SELECT id FROM provider_accounts WHERE status IN ('active','exhausted') AND (next_health_check_at IS NULL OR next_health_check_at<=$1)
+		SELECT id FROM provider_accounts WHERE
+			(status IN ('active','exhausted') AND (next_health_check_at IS NULL OR next_health_check_at<=$1))
+			OR (status='cooling_down' AND cooldown_until<=$1)
 		ORDER BY next_health_check_at NULLS FIRST,id FOR UPDATE SKIP LOCKED LIMIT $2
 	) UPDATE provider_accounts a SET next_health_check_at=$3,updated_at=now() FROM due WHERE a.id=due.id
 	RETURNING a.id,a.provider,a.credential_type,a.display_name,a.credential_ciphertext,a.credential_version,a.status,

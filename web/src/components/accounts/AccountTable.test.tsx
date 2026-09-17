@@ -47,6 +47,7 @@ describe('AccountTable health states', () => {
   it('does not offer Fast mode for OpenAI-compatible accounts', () => {
     renderTable({ ...baseAccount, provider: 'openai_compatible', credential_type: 'api_key' })
     expect(screen.queryByRole('button', { name: /Fast mode/ })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Check health for Team account' })).toBeInTheDocument()
   })
 
   it('shows an active account as degraded while a failed probe is being retried', () => {

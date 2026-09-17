@@ -159,6 +159,29 @@ describe('Subpool console', () => {
     expect(fetch).toHaveBeenCalledWith('/api/v1/provider-accounts/account-1/check', expect.objectContaining({ method: 'POST' }))
   })
 
+  it('checks an OpenAI-compatible account without refreshing static credentials', async () => {
+    let healthStatus = 'unknown'
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const path = String(input)
+      if (path === '/api/v1/provider-accounts') return json({ data: [{
+        id: 'account-1', display_name: 'External API', provider: 'openai_compatible', credential_type: 'api_key', status: 'active',
+        health_status: healthStatus, assigned_api_keys: 1,
+      }] })
+      if (path === '/api/v1/provider-accounts/account-1/check' && init?.method === 'POST') {
+        healthStatus = 'healthy'
+        return json({ status: 'active', health_status: healthStatus })
+      }
+      throw new Error(`Unexpected request: ${path}`)
+    })
+
+    render(<AccountsPage />)
+    const user = userEvent.setup()
+    await user.click(await screen.findByRole('button', { name: 'Check health for External API' }))
+
+    await waitFor(() => expect(screen.getByText('healthy')).toBeInTheDocument())
+    expect(fetch).not.toHaveBeenCalledWith('/api/v1/provider-accounts/account-1/refresh', expect.anything())
+  })
+
   it('refreshes stale Codex quota once when the page loads', async () => {
     let remainingPercent = 70
     vi.mocked(fetch).mockImplementation(async (input, init) => {

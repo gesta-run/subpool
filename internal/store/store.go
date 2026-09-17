@@ -32,6 +32,7 @@ type Store interface {
 	SetProviderUsageAllowed(context.Context, string, bool) error
 	SetProviderHealth(context.Context, string, string, string, time.Time, time.Time) error
 	RecordProviderHealthFailure(context.Context, string, string, time.Time, time.Time) error
+	ReactivateProviderIfCooldownExpired(context.Context, string, time.Time) (bool, error)
 	ClaimProviderHealthChecks(context.Context, int, time.Time, time.Time) ([]domain.ProviderAccount, error)
 	GetProviderResetCredits(context.Context, string) ([]byte, *time.Time, error)
 	SetProviderResetCredits(context.Context, string, []byte, time.Time) error
