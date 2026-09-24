@@ -18,7 +18,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
     -o /out/subpool ./cmd/subpool
 
 FROM alpine:3.22
-ARG CODEX_CLI_VERSION=0.152.1
+ARG CODEX_CLI_VERSION=0.156.1
 USER root
 RUN apk add --no-cache ca-certificates tzdata nodejs npm tini \
     && npm install -g "@openai/codex@${CODEX_CLI_VERSION}" \
