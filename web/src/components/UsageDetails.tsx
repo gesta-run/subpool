@@ -49,8 +49,8 @@ export function UsageDetails({ employee, id, path }: { employee: string; id: str
 
   return <div className="usage-detail-region" id={id} role="region" aria-label={`Usage details for ${employee}`} aria-busy={loading}>
     <div className="usage-detail-list">
-      <div className="usage-detail-list__header"><span>API key</span><span>Model</span><span>Input</span><span>Output</span><span>Total</span></div>
-      {items.map((detail) => <div key={`${detail.api_key_id}:${detail.model}`}><code>••••{detail.key_hint || detail.api_key_id.slice(-4)}</code><span className="usage-model-cell"><strong>{detail.model === 'unknown' ? 'Unattributed' : detail.model}</strong>{detail.model === 'unknown' ? <small>Historical usage</small> : null}</span><span>{formatTokens(detail.input_tokens)}</span><span>{formatTokens(detail.output_tokens)}</span><strong>{formatTokens(detail.input_tokens + detail.output_tokens)}</strong></div>)}
+      <div className="usage-detail-list__header"><span>Model</span><span>Input</span><span>Output</span><span>Total</span></div>
+      {items.map((detail) => <div key={`${detail.api_key_id}:${detail.model}`}><span className="usage-model-cell"><strong>{detail.model === 'unknown' ? 'Unattributed' : detail.model}</strong>{detail.model === 'unknown' ? <small>Historical usage</small> : null}</span><span>{formatTokens(detail.input_tokens)}</span><span>{formatTokens(detail.output_tokens)}</span><strong>{formatTokens(detail.input_tokens + detail.output_tokens)}</strong></div>)}
       {loading && items.length === 0 ? <p className="usage-detail-state">Loading details…</p> : null}
       {error ? <p className="usage-detail-state" role="alert">{error} <button type="button" onClick={() => setReloadKey((value) => value + 1)}>Try again</button></p> : null}
       {!loading && !error && items.length === 0 ? <p className="usage-detail-state">No details in this range.</p> : null}
