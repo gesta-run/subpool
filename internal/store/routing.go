@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/gesta-run/subpool/internal/domain"
+	"github.com/gesta-run/subpool/internal/id"
 	"github.com/gesta-run/subpool/internal/store/storedb"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -107,6 +108,13 @@ func (p *Postgres) AddPoolAccount(ctx context.Context, membership domain.PoolAcc
 }
 
 func (p *Postgres) CreateAPIKeyAndBind(ctx context.Context, key domain.APIKey) (string, error) {
+	if key.EmployeeID == "" {
+		var err error
+		key.EmployeeID, err = id.New()
+		if err != nil {
+			return "", fmt.Errorf("generate employee ID: %w", err)
+		}
+	}
 	tx, err := p.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return "", wrapDB("begin API key assignment", err)
@@ -120,8 +128,14 @@ func (p *Postgres) CreateAPIKeyAndBind(ctx context.Context, key domain.APIKey) (
 	if err != nil {
 		return "", err
 	}
+	if key.EmployeeName != "" {
+		err = queries.CreateEmployee(ctx, storedb.CreateEmployeeParams{ID: key.EmployeeID, Name: key.EmployeeName})
+		if err != nil {
+			return "", wrapDB("create employee", err)
+		}
+	}
 	err = queries.CreateAPIKey(ctx, storedb.CreateAPIKeyParams{
-		ID: key.ID, PoolID: key.PoolID, EmployeeName: key.EmployeeName,
+		ID: key.ID, PoolID: key.PoolID, EmployeeID: key.EmployeeID,
 		KeyHmac: key.KeyHMAC, KeyHint: key.KeyHint, Scopes: nonNilStrings(key.Scopes),
 		RateLimit: int32(key.RateLimit), ExpiresAt: optionalDBTime(key.ExpiresAt),
 	})
@@ -169,7 +183,7 @@ func (p *Postgres) ListAPIKeys(ctx context.Context) ([]domain.APIKey, error) {
 	for _, row := range rows {
 		keys = append(keys, domain.APIKey{
 			ID: row.ID, PoolID: row.PoolID, ProviderAccountID: row.ProviderAccountID,
-			EmployeeName: row.EmployeeName, KeyHint: row.KeyHint, Scopes: row.Scopes,
+			EmployeeID: row.EmployeeID, EmployeeName: row.EmployeeName, KeyHint: row.KeyHint, Scopes: row.Scopes,
 			RateLimit: int(row.RateLimit), ExpiresAt: optionalTime(row.ExpiresAt),
 			RevokedAt: optionalTime(row.RevokedAt), LastUsedAt: optionalTime(row.LastUsedAt), CreatedAt: row.CreatedAt.Time,
 		})
@@ -189,7 +203,7 @@ func (p *Postgres) ResolveAPIKey(ctx context.Context, digest []byte) (domain.Key
 	}
 	return domain.KeyRoute{
 		Key: domain.APIKey{
-			ID: row.KeyID, PoolID: row.KeyPoolID, EmployeeName: row.EmployeeName, KeyHint: row.KeyHint,
+			ID: row.KeyID, PoolID: row.KeyPoolID, EmployeeID: row.EmployeeID, EmployeeName: row.EmployeeName, KeyHint: row.KeyHint,
 			Scopes: row.Scopes, RateLimit: int(row.RateLimit), ExpiresAt: optionalTime(row.KeyExpiresAt),
 			RevokedAt: optionalTime(row.RevokedAt), LastUsedAt: optionalTime(row.LastUsedAt), CreatedAt: row.KeyCreatedAt.Time,
 		},
@@ -208,7 +222,7 @@ func (p *Postgres) ResolvePinnedAPIKey(ctx context.Context, digest []byte, poolI
 	if err == nil {
 		return domain.KeyRoute{
 			Key: domain.APIKey{
-				ID: row.KeyID, PoolID: row.KeyPoolID, EmployeeName: row.EmployeeName, KeyHint: row.KeyHint,
+				ID: row.KeyID, PoolID: row.KeyPoolID, EmployeeID: row.EmployeeID, EmployeeName: row.EmployeeName, KeyHint: row.KeyHint,
 				Scopes: row.Scopes, RateLimit: int(row.RateLimit), ExpiresAt: optionalTime(row.KeyExpiresAt),
 				RevokedAt: optionalTime(row.RevokedAt), LastUsedAt: optionalTime(row.LastUsedAt), CreatedAt: row.KeyCreatedAt.Time,
 			},
@@ -333,16 +347,36 @@ func (p *Postgres) AddUsage(ctx context.Context, keyID string, eventHash []byte,
 	return nil
 }
 
-func (p *Postgres) ListUsageSummary(ctx context.Context, filter domain.UsageSummaryFilter) ([]domain.UsageSummary, error) {
-	rows, err := p.queries.ListUsageSummary(ctx, storedb.ListUsageSummaryParams{
-		AfterTotal: filter.AfterTotal, AfterApiKey: filter.AfterAPIKey, AfterModel: filter.AfterModel,
+func (p *Postgres) ListUsageEmployees(ctx context.Context, filter domain.UsageSummaryFilter) ([]domain.UsageEmployeeSummary, error) {
+	rows, err := p.queries.ListUsageEmployees(ctx, storedb.ListUsageEmployeesParams{
+		AfterTotal: filter.AfterTotal, AfterID: filter.AfterID,
 		PageLimit: int32(filter.Limit), ApiKeyID: filter.APIKeyID,
 		FromTime: optionalDBTime(filter.From), ToTime: optionalDBTime(filter.To),
 	})
 	if err != nil {
-		return nil, wrapDB("list usage summary", err)
+		return nil, wrapDB("list employee usage", err)
 	}
-	var usage []domain.UsageSummary
+	usage := make([]domain.UsageEmployeeSummary, 0, len(rows))
+	for _, row := range rows {
+		usage = append(usage, domain.UsageEmployeeSummary{
+			EmployeeID: row.EmployeeID, EmployeeName: row.EmployeeName,
+			KeyCount: row.KeyCount, ModelCount: row.ModelCount,
+			InputTokens: row.InputTokens, OutputTokens: row.OutputTokens,
+		})
+	}
+	return usage, nil
+}
+
+func (p *Postgres) ListUsageDetails(ctx context.Context, employeeID string, filter domain.UsageSummaryFilter) ([]domain.UsageSummary, error) {
+	rows, err := p.queries.ListUsageDetails(ctx, storedb.ListUsageDetailsParams{
+		EmployeeID: employeeID, AfterTotal: filter.AfterTotal, AfterID: filter.AfterID,
+		AfterModel: filter.AfterModel, PageLimit: int32(filter.Limit),
+		FromTime: optionalDBTime(filter.From), ToTime: optionalDBTime(filter.To),
+	})
+	if err != nil {
+		return nil, wrapDB("list employee usage details", err)
+	}
+	usage := make([]domain.UsageSummary, 0, len(rows))
 	for _, row := range rows {
 		usage = append(usage, domain.UsageSummary{
 			APIKeyID: row.ApiKeyID, EmployeeName: row.EmployeeName, KeyHint: row.KeyHint,

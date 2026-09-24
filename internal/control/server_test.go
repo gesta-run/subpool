@@ -15,6 +15,7 @@ import (
 	"github.com/gesta-run/subpool/internal/auth"
 	"github.com/gesta-run/subpool/internal/credential"
 	"github.com/gesta-run/subpool/internal/domain"
+	"github.com/gesta-run/subpool/internal/id"
 	"github.com/gesta-run/subpool/internal/provider/codex"
 	"github.com/gesta-run/subpool/internal/provider/openaicompat"
 	"github.com/gesta-run/subpool/internal/store"
@@ -40,7 +41,9 @@ type controlStore struct {
 	membership       domain.PoolAccount
 	resetSnapshot    []byte
 	resetCheckedAt   *time.Time
-	usageRows        []domain.UsageSummary
+	usageRows        []domain.UsageEmployeeSummary
+	usageDetails     []domain.UsageSummary
+	usageEmployeeID  string
 	usageTotals      domain.UsageTotals
 	topUsageKeys     []domain.UsageKeySummary
 	usageFilters     []domain.UsageSummaryFilter
@@ -168,9 +171,14 @@ func (f *controlStore) ClaimProviderResetCreditRefresh(context.Context, string, 
 	return true, nil
 }
 func (f *controlStore) ReleaseProviderResetCreditRefresh(context.Context, string) error { return nil }
-func (f *controlStore) ListUsageSummary(_ context.Context, filter domain.UsageSummaryFilter) ([]domain.UsageSummary, error) {
+func (f *controlStore) ListUsageEmployees(_ context.Context, filter domain.UsageSummaryFilter) ([]domain.UsageEmployeeSummary, error) {
 	f.usageFilters = append(f.usageFilters, filter)
 	return f.usageRows, nil
+}
+func (f *controlStore) ListUsageDetails(_ context.Context, employeeID string, filter domain.UsageSummaryFilter) ([]domain.UsageSummary, error) {
+	f.usageEmployeeID = employeeID
+	f.usageFilters = append(f.usageFilters, filter)
+	return f.usageDetails, nil
 }
 func (f *controlStore) GetUsageTotals(_ context.Context, filter domain.UsageSummaryFilter) (domain.UsageTotals, error) {
 	f.usageFilters = append(f.usageFilters, filter)
@@ -279,9 +287,10 @@ func TestAdminAuthenticationProtectsControlPlane(t *testing.T) {
 func TestListUsageReturnsBoundedSummaryPage(t *testing.T) {
 	server, st, _ := newControlServer(t)
 	const firstKeyID = "00000000-0000-4000-8000-000000000001"
-	st.usageRows = []domain.UsageSummary{
-		{APIKeyID: firstKeyID, EmployeeName: "Alex", KeyHint: "1111", Model: "model-a", InputTokens: 20, OutputTokens: 5},
-		{APIKeyID: "00000000-0000-4000-8000-000000000002", EmployeeName: "Blair", KeyHint: "2222", Model: "model-b", InputTokens: 10, OutputTokens: 2},
+	const firstEmployeeID = "00000000-0000-4000-8000-000000000011"
+	st.usageRows = []domain.UsageEmployeeSummary{
+		{EmployeeID: firstEmployeeID, EmployeeName: "Alex", KeyCount: 1, ModelCount: 1, InputTokens: 20, OutputTokens: 5},
+		{EmployeeID: "00000000-0000-4000-8000-000000000012", EmployeeName: "Blair", KeyCount: 1, ModelCount: 1, InputTokens: 10, OutputTokens: 2},
 	}
 	st.usageTotals = domain.UsageTotals{InputTokens: 100, OutputTokens: 25}
 	st.topUsageKeys = []domain.UsageKeySummary{{APIKeyID: firstKeyID, EmployeeName: "Alex", KeyHint: "1111", InputTokens: 60, OutputTokens: 15}}
@@ -297,31 +306,31 @@ func TestListUsageReturnsBoundedSummaryPage(t *testing.T) {
 	}
 	var envelope struct {
 		Data struct {
-			Items      []domain.UsageSummary    `json:"items"`
-			Summary    domain.UsageTotals       `json:"summary"`
-			TopKeys    []domain.UsageKeySummary `json:"top_keys"`
-			NextCursor string                   `json:"next_cursor"`
+			Items      []domain.UsageEmployeeSummary `json:"items"`
+			Summary    domain.UsageTotals            `json:"summary"`
+			TopKeys    []domain.UsageKeySummary      `json:"top_keys"`
+			NextCursor string                        `json:"next_cursor"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
 		t.Fatal(err)
 	}
-	if len(envelope.Data.Items) != 1 || envelope.Data.Items[0].APIKeyID != firstKeyID || envelope.Data.Summary.InputTokens != 100 || len(envelope.Data.TopKeys) != 1 || envelope.Data.NextCursor == "" {
+	if len(envelope.Data.Items) != 1 || envelope.Data.Items[0].EmployeeID != firstEmployeeID || envelope.Data.Items[0].EmployeeName != "Alex" || envelope.Data.Items[0].KeyCount != 1 || envelope.Data.Summary.InputTokens != 100 || len(envelope.Data.TopKeys) != 1 || envelope.Data.NextCursor == "" {
 		t.Fatalf("response = %#v", envelope.Data)
 	}
 	if len(st.usageFilters) != 3 || st.usageFilters[0].Limit != 2 || st.usageFilters[0].APIKeyID != firstKeyID || st.usageFilters[0].From == nil || st.usageFilters[0].To == nil || st.topUsageLimit != 5 {
 		t.Fatalf("filters=%#v top limit=%d", st.usageFilters, st.topUsageLimit)
 	}
 	cursor, err := decodeUsageCursor(envelope.Data.NextCursor)
-	if err != nil || cursor.TotalTokens != 25 || cursor.APIKeyID != firstKeyID || cursor.Model != "model-a" {
+	if err != nil || cursor.TotalTokens != 25 || cursor.EmployeeID != firstEmployeeID {
 		t.Fatalf("cursor=%#v error=%v", cursor, err)
 	}
 }
 
 func TestListUsageAcceptsCursor(t *testing.T) {
 	server, st, _ := newControlServer(t)
-	const firstKeyID = "00000000-0000-4000-8000-000000000001"
-	cursor, err := encodeUsageCursor(usageCursor{TotalTokens: 25, APIKeyID: firstKeyID, Model: "model-a"})
+	const employeeID = "00000000-0000-4000-8000-000000000011"
+	cursor, err := encodeUsageCursor(usageCursor{TotalTokens: 25, EmployeeID: employeeID})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -332,8 +341,40 @@ func TestListUsageAcceptsCursor(t *testing.T) {
 	response := httptest.NewRecorder()
 	mux.ServeHTTP(response, request)
 
-	if response.Code != http.StatusOK || len(st.usageFilters) != 3 || st.usageFilters[0].AfterTotal == nil || *st.usageFilters[0].AfterTotal != 25 || st.usageFilters[0].AfterAPIKey != firstKeyID || st.usageFilters[0].AfterModel != "model-a" {
+	if response.Code != http.StatusOK || len(st.usageFilters) != 3 || st.usageFilters[0].AfterTotal == nil || *st.usageFilters[0].AfterTotal != 25 || st.usageFilters[0].AfterID != employeeID {
 		t.Fatalf("status=%d filters=%#v body=%s", response.Code, st.usageFilters, response.Body.String())
+	}
+}
+
+func TestListUsageDetailsReturnsBoundedPage(t *testing.T) {
+	server, st, _ := newControlServer(t)
+	const employeeID = "00000000-0000-4000-8000-000000000011"
+	const firstKeyID = "00000000-0000-4000-8000-000000000001"
+	st.usageDetails = []domain.UsageSummary{
+		{APIKeyID: firstKeyID, EmployeeName: "Alex", KeyHint: "1111", Model: "model-a", InputTokens: 20, OutputTokens: 5},
+		{APIKeyID: "00000000-0000-4000-8000-000000000002", EmployeeName: "Alex", KeyHint: "2222", Model: "model-b", InputTokens: 10, OutputTokens: 2},
+	}
+	mux := http.NewServeMux()
+	server.Register(mux)
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/usage/employees/"+employeeID+"/details?limit=1", nil)
+	request.AddCookie(loginCookie(t, mux))
+	response := httptest.NewRecorder()
+	mux.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK || st.usageEmployeeID != employeeID {
+		t.Fatalf("status=%d employee=%q body=%s", response.Code, st.usageEmployeeID, response.Body.String())
+	}
+	var envelope struct {
+		Data struct {
+			Items      []domain.UsageSummary `json:"items"`
+			NextCursor string                `json:"next_cursor"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if len(envelope.Data.Items) != 1 || envelope.Data.Items[0].APIKeyID != firstKeyID || envelope.Data.NextCursor == "" {
+		t.Fatalf("response = %#v", envelope.Data)
 	}
 }
 
@@ -688,6 +729,9 @@ func TestCreateAPIKeyReturnsPlaintextOnceAndStoresOnlyHMAC(t *testing.T) {
 	}
 	if len(st.createdKey.KeyHMAC) != 32 || st.createdKey.KeyHint != plain[len(plain)-4:] {
 		t.Fatalf("stored key = %#v", st.createdKey)
+	}
+	if !id.Valid(st.createdKey.EmployeeID) || st.createdKey.EmployeeName != "Example Employee" {
+		t.Fatalf("employee identity = %#v", st.createdKey)
 	}
 	if bytes.Contains(st.createdKey.KeyHMAC, []byte(plain)) {
 		t.Fatal("plaintext key was stored")

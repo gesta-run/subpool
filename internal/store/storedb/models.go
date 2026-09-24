@@ -23,17 +23,17 @@ type AdminSession struct {
 }
 
 type ApiKey struct {
-	ID           string
-	PoolID       string
-	EmployeeName string
-	KeyHmac      []byte
-	KeyHint      string
-	Scopes       []string
-	RateLimit    int32
-	ExpiresAt    pgtype.Timestamptz
-	RevokedAt    pgtype.Timestamptz
-	LastUsedAt   pgtype.Timestamptz
-	CreatedAt    pgtype.Timestamptz
+	ID         string
+	PoolID     string
+	KeyHmac    []byte
+	KeyHint    string
+	Scopes     []string
+	RateLimit  int32
+	ExpiresAt  pgtype.Timestamptz
+	RevokedAt  pgtype.Timestamptz
+	LastUsedAt pgtype.Timestamptz
+	CreatedAt  pgtype.Timestamptz
+	EmployeeID string
 }
 
 type ApiKeyAccountBinding struct {
@@ -65,6 +65,12 @@ type AuditEvent struct {
 	TargetID   string
 	Result     string
 	CreatedAt  pgtype.Timestamptz
+}
+
+type Employee struct {
+	ID        string
+	Name      string
+	CreatedAt pgtype.Timestamptz
 }
 
 type GlobalSetting struct {
