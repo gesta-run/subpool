@@ -62,6 +62,8 @@ type Store interface {
 	RecordRequestSuccess(context.Context, string, string, time.Time) error
 
 	AddUsage(context.Context, string, []byte, string, time.Time, int64, int64) error
-	ListUsage(context.Context, domain.UsageFilter) ([]domain.UsageRow, error)
+	ListUsageSummary(context.Context, domain.UsageSummaryFilter) ([]domain.UsageSummary, error)
+	GetUsageTotals(context.Context, domain.UsageSummaryFilter) (domain.UsageTotals, error)
+	ListTopUsageKeys(context.Context, domain.UsageSummaryFilter, int) ([]domain.UsageKeySummary, error)
 	Audit(context.Context, domain.AuditEvent) error
 }

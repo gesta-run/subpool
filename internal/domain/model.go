@@ -107,20 +107,36 @@ type KeyRoute struct {
 	MembershipEnabled bool
 }
 
-type UsageRow struct {
-	APIKeyID     string    `json:"api_key_id"`
-	EmployeeName string    `json:"employee_name"`
-	KeyHint      string    `json:"key_hint"`
-	Model        string    `json:"model"`
-	UsageDate    time.Time `json:"usage_date"`
-	InputTokens  int64     `json:"input_tokens"`
-	OutputTokens int64     `json:"output_tokens"`
+type UsageSummary struct {
+	APIKeyID     string `json:"api_key_id"`
+	EmployeeName string `json:"employee_name"`
+	KeyHint      string `json:"key_hint"`
+	Model        string `json:"model"`
+	InputTokens  int64  `json:"input_tokens"`
+	OutputTokens int64  `json:"output_tokens"`
 }
 
-type UsageFilter struct {
-	APIKeyID string
-	From     *time.Time
-	To       *time.Time
+type UsageKeySummary struct {
+	APIKeyID     string `json:"api_key_id"`
+	EmployeeName string `json:"employee_name"`
+	KeyHint      string `json:"key_hint"`
+	InputTokens  int64  `json:"input_tokens"`
+	OutputTokens int64  `json:"output_tokens"`
+}
+
+type UsageTotals struct {
+	InputTokens  int64 `json:"input_tokens"`
+	OutputTokens int64 `json:"output_tokens"`
+}
+
+type UsageSummaryFilter struct {
+	APIKeyID    string
+	From        *time.Time
+	To          *time.Time
+	AfterTotal  *int64
+	AfterAPIKey string
+	AfterModel  string
+	Limit       int
 }
 
 type AuditEvent struct {

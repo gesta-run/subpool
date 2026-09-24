@@ -395,9 +395,28 @@ func assertUsageActivity(t *testing.T, ctx context.Context, database *Postgres, 
 	if err := database.AddUsage(ctx, key.ID, bytes.Repeat([]byte{11}, 32), "test-model", day, 2, 1); err != nil {
 		t.Fatal(err)
 	}
-	rows, err := database.ListUsage(ctx, domain.UsageFilter{APIKeyID: key.ID})
-	if err != nil || len(rows) != 1 || rows[0].InputTokens != 12 || rows[0].OutputTokens != 5 {
-		t.Fatalf("usage = %#v, %v", rows, err)
+	if err := database.AddUsage(ctx, key.ID, bytes.Repeat([]byte{12}, 32), "second-model", day, 30, 2); err != nil {
+		t.Fatal(err)
+	}
+	firstPage, err := database.ListUsageSummary(ctx, domain.UsageSummaryFilter{APIKeyID: key.ID, Limit: 1})
+	if err != nil || len(firstPage) != 1 || firstPage[0].Model != "second-model" || firstPage[0].InputTokens != 30 || firstPage[0].OutputTokens != 2 {
+		t.Fatalf("first usage page = %#v, %v", firstPage, err)
+	}
+	afterTotal := firstPage[0].InputTokens + firstPage[0].OutputTokens
+	secondPage, err := database.ListUsageSummary(ctx, domain.UsageSummaryFilter{
+		APIKeyID: key.ID, Limit: 1, AfterTotal: &afterTotal,
+		AfterAPIKey: firstPage[0].APIKeyID, AfterModel: firstPage[0].Model,
+	})
+	if err != nil || len(secondPage) != 1 || secondPage[0].Model != "test-model" || secondPage[0].InputTokens != 12 || secondPage[0].OutputTokens != 5 {
+		t.Fatalf("second usage page = %#v, %v", secondPage, err)
+	}
+	totals, err := database.GetUsageTotals(ctx, domain.UsageSummaryFilter{APIKeyID: key.ID})
+	if err != nil || totals.InputTokens != 42 || totals.OutputTokens != 7 {
+		t.Fatalf("usage totals = %#v, %v", totals, err)
+	}
+	topKeys, err := database.ListTopUsageKeys(ctx, domain.UsageSummaryFilter{}, 1)
+	if err != nil || len(topKeys) != 1 || topKeys[0].APIKeyID != key.ID || topKeys[0].InputTokens != 42 || topKeys[0].OutputTokens != 7 {
+		t.Fatalf("top usage keys = %#v, %v", topKeys, err)
 	}
 	listedKeys, err := database.ListAPIKeys(ctx)
 	if err != nil || len(listedKeys) == 0 || listedKeys[0].ID != key.ID || listedKeys[0].LastUsedAt == nil || !listedKeys[0].LastUsedAt.Equal(day) {

@@ -3,11 +3,13 @@ package control
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -231,7 +233,29 @@ func (s *Server) revokeAPIKey(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) listUsage(w http.ResponseWriter, r *http.Request) {
-	filter := domain.UsageFilter{APIKeyID: r.URL.Query().Get("api_key_id")}
+	const (
+		defaultLimit = 50
+		maximumLimit = 100
+		topKeyLimit  = 5
+		maxCursorLen = 1024
+	)
+
+	filter := domain.UsageSummaryFilter{APIKeyID: strings.TrimSpace(r.URL.Query().Get("api_key_id")), Limit: defaultLimit + 1}
+	if filter.APIKeyID != "" && !id.Valid(filter.APIKeyID) {
+		writeError(w, http.StatusBadRequest, "api_key_id must be a UUID")
+		return
+	}
+	limit := defaultLimit
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		value, err := strconv.Atoi(raw)
+		if err != nil || value < 1 || value > maximumLimit {
+			writeError(w, http.StatusBadRequest, "limit must be between 1 and 100")
+			return
+		}
+		limit = value
+		filter.Limit = limit + 1
+	}
+
 	var err error
 	if raw := r.URL.Query().Get("from"); raw != "" {
 		var value time.Time
@@ -249,12 +273,98 @@ func (s *Server) listUsage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "dates must use YYYY-MM-DD")
 		return
 	}
-	rows, err := s.store.ListUsage(r.Context(), filter)
+	if filter.From != nil && filter.To != nil && filter.From.After(*filter.To) {
+		writeError(w, http.StatusBadRequest, "from must be on or before to")
+		return
+	}
+	if raw := r.URL.Query().Get("cursor"); raw != "" {
+		if len(raw) > maxCursorLen {
+			writeError(w, http.StatusBadRequest, "invalid cursor")
+			return
+		}
+		cursor, decodeErr := decodeUsageCursor(raw)
+		if decodeErr != nil {
+			writeError(w, http.StatusBadRequest, "invalid cursor")
+			return
+		}
+		filter.AfterTotal = &cursor.TotalTokens
+		filter.AfterAPIKey = cursor.APIKeyID
+		filter.AfterModel = cursor.Model
+	}
+
+	rows, err := s.store.ListUsageSummary(r.Context(), filter)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list usage")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"data": rows})
+	totals, err := s.store.GetUsageTotals(r.Context(), filter)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to summarize usage")
+		return
+	}
+	topKeys, err := s.store.ListTopUsageKeys(r.Context(), filter, topKeyLimit)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to summarize usage")
+		return
+	}
+
+	nextCursor := ""
+	if len(rows) > limit {
+		rows = rows[:limit]
+		last := rows[len(rows)-1]
+		nextCursor, err = encodeUsageCursor(usageCursor{
+			TotalTokens: last.InputTokens + last.OutputTokens,
+			APIKeyID:    last.APIKeyID,
+			Model:       last.Model,
+		})
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to paginate usage")
+			return
+		}
+	}
+	if rows == nil {
+		rows = []domain.UsageSummary{}
+	}
+	if topKeys == nil {
+		topKeys = []domain.UsageKeySummary{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"data": map[string]any{
+		"items": rows, "summary": totals, "top_keys": topKeys, "next_cursor": nextCursor,
+	}})
+}
+
+type usageCursor struct {
+	TotalTokens int64  `json:"t"`
+	APIKeyID    string `json:"k"`
+	Model       string `json:"m"`
+}
+
+func encodeUsageCursor(cursor usageCursor) (string, error) {
+	raw, err := json.Marshal(cursor)
+	if err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(raw), nil
+}
+
+func decodeUsageCursor(value string) (usageCursor, error) {
+	raw, err := base64.RawURLEncoding.Strict().DecodeString(value)
+	if err != nil {
+		return usageCursor{}, err
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	var cursor usageCursor
+	if err = decoder.Decode(&cursor); err != nil {
+		return usageCursor{}, err
+	}
+	if err = decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return usageCursor{}, errors.New("cursor contains trailing data")
+	}
+	if cursor.TotalTokens < 0 || !id.Valid(cursor.APIKeyID) || strings.TrimSpace(cursor.Model) == "" {
+		return usageCursor{}, errors.New("cursor fields are invalid")
+	}
+	return cursor, nil
 }
 
 func (s *Server) audit(ctx context.Context, action, targetType, targetID, result string) {

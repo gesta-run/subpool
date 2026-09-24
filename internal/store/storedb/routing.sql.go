@@ -210,6 +210,34 @@ func (q *Queries) GetRoutableProviderAccount(ctx context.Context, id string) (Ge
 	return i, err
 }
 
+const getUsageTotals = `-- name: GetUsageTotals :one
+SELECT
+    COALESCE(SUM(u.input_tokens), 0)::bigint AS input_tokens,
+    COALESCE(SUM(u.output_tokens), 0)::bigint AS output_tokens
+FROM api_key_usage_daily u
+WHERE (NULLIF($1::text, '')::uuid IS NULL OR u.api_key_id = NULLIF($1::text, '')::uuid)
+  AND ($2::timestamptz IS NULL OR u.usage_date >= $2::date)
+  AND ($3::timestamptz IS NULL OR u.usage_date <= $3::date)
+`
+
+type GetUsageTotalsParams struct {
+	ApiKeyID string
+	FromTime pgtype.Timestamptz
+	ToTime   pgtype.Timestamptz
+}
+
+type GetUsageTotalsRow struct {
+	InputTokens  int64
+	OutputTokens int64
+}
+
+func (q *Queries) GetUsageTotals(ctx context.Context, arg GetUsageTotalsParams) (GetUsageTotalsRow, error) {
+	row := q.db.QueryRow(ctx, getUsageTotals, arg.ApiKeyID, arg.FromTime, arg.ToTime)
+	var i GetUsageTotalsRow
+	err := row.Scan(&i.InputTokens, &i.OutputTokens)
+	return i, err
+}
+
 const listAPIKeys = `-- name: ListAPIKeys :many
 SELECT k.id, k.pool_id, COALESCE(b.provider_account_id::text, '')::text AS provider_account_id,
     k.employee_name, k.key_hint, k.scopes, k.rate_limit, k.expires_at, k.revoked_at,
@@ -329,48 +357,130 @@ func (q *Queries) ListPools(ctx context.Context) ([]Pool, error) {
 	return items, nil
 }
 
-const listUsage = `-- name: ListUsage :many
-SELECT u.api_key_id, k.employee_name, k.key_hint, u.model, u.usage_date,
-    u.input_tokens, u.output_tokens
+const listTopUsageKeys = `-- name: ListTopUsageKeys :many
+SELECT u.api_key_id, k.employee_name, k.key_hint,
+    SUM(u.input_tokens)::bigint AS input_tokens,
+    SUM(u.output_tokens)::bigint AS output_tokens
 FROM api_key_usage_daily u
 JOIN api_keys k ON k.id = u.api_key_id
 WHERE (NULLIF($1::text, '')::uuid IS NULL OR u.api_key_id = NULLIF($1::text, '')::uuid)
   AND ($2::timestamptz IS NULL OR u.usage_date >= $2::date)
   AND ($3::timestamptz IS NULL OR u.usage_date <= $3::date)
-ORDER BY u.usage_date DESC, k.employee_name, u.model
+GROUP BY u.api_key_id, k.employee_name, k.key_hint
+ORDER BY (SUM(u.input_tokens) + SUM(u.output_tokens)) DESC, u.api_key_id
+LIMIT $4
 `
 
-type ListUsageParams struct {
+type ListTopUsageKeysParams struct {
 	ApiKeyID string
 	FromTime pgtype.Timestamptz
 	ToTime   pgtype.Timestamptz
+	TopLimit int32
 }
 
-type ListUsageRow struct {
+type ListTopUsageKeysRow struct {
 	ApiKeyID     string
 	EmployeeName string
 	KeyHint      string
-	Model        string
-	UsageDate    pgtype.Date
 	InputTokens  int64
 	OutputTokens int64
 }
 
-func (q *Queries) ListUsage(ctx context.Context, arg ListUsageParams) ([]ListUsageRow, error) {
-	rows, err := q.db.Query(ctx, listUsage, arg.ApiKeyID, arg.FromTime, arg.ToTime)
+func (q *Queries) ListTopUsageKeys(ctx context.Context, arg ListTopUsageKeysParams) ([]ListTopUsageKeysRow, error) {
+	rows, err := q.db.Query(ctx, listTopUsageKeys,
+		arg.ApiKeyID,
+		arg.FromTime,
+		arg.ToTime,
+		arg.TopLimit,
+	)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []ListUsageRow
+	var items []ListTopUsageKeysRow
 	for rows.Next() {
-		var i ListUsageRow
+		var i ListTopUsageKeysRow
+		if err := rows.Scan(
+			&i.ApiKeyID,
+			&i.EmployeeName,
+			&i.KeyHint,
+			&i.InputTokens,
+			&i.OutputTokens,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listUsageSummary = `-- name: ListUsageSummary :many
+WITH summary AS (
+    SELECT u.api_key_id, k.employee_name, k.key_hint, u.model,
+        SUM(u.input_tokens)::bigint AS input_tokens,
+        SUM(u.output_tokens)::bigint AS output_tokens,
+        (SUM(u.input_tokens) + SUM(u.output_tokens))::bigint AS total_tokens
+    FROM api_key_usage_daily u
+    JOIN api_keys k ON k.id = u.api_key_id
+    WHERE (NULLIF($5::text, '')::uuid IS NULL OR u.api_key_id = NULLIF($5::text, '')::uuid)
+      AND ($6::timestamptz IS NULL OR u.usage_date >= $6::date)
+      AND ($7::timestamptz IS NULL OR u.usage_date <= $7::date)
+    GROUP BY u.api_key_id, k.employee_name, k.key_hint, u.model
+)
+SELECT api_key_id, employee_name, key_hint, model, input_tokens, output_tokens
+FROM summary
+WHERE $1::bigint IS NULL
+   OR total_tokens < $1::bigint
+   OR (total_tokens = $1::bigint AND api_key_id::text > $2::text)
+   OR (total_tokens = $1::bigint AND api_key_id::text = $2::text AND model > $3::text)
+ORDER BY total_tokens DESC, api_key_id, model
+LIMIT $4
+`
+
+type ListUsageSummaryParams struct {
+	AfterTotal  *int64
+	AfterApiKey string
+	AfterModel  string
+	PageLimit   int32
+	ApiKeyID    string
+	FromTime    pgtype.Timestamptz
+	ToTime      pgtype.Timestamptz
+}
+
+type ListUsageSummaryRow struct {
+	ApiKeyID     string
+	EmployeeName string
+	KeyHint      string
+	Model        string
+	InputTokens  int64
+	OutputTokens int64
+}
+
+func (q *Queries) ListUsageSummary(ctx context.Context, arg ListUsageSummaryParams) ([]ListUsageSummaryRow, error) {
+	rows, err := q.db.Query(ctx, listUsageSummary,
+		arg.AfterTotal,
+		arg.AfterApiKey,
+		arg.AfterModel,
+		arg.PageLimit,
+		arg.ApiKeyID,
+		arg.FromTime,
+		arg.ToTime,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListUsageSummaryRow
+	for rows.Next() {
+		var i ListUsageSummaryRow
 		if err := rows.Scan(
 			&i.ApiKeyID,
 			&i.EmployeeName,
 			&i.KeyHint,
 			&i.Model,
-			&i.UsageDate,
 			&i.InputTokens,
 			&i.OutputTokens,
 		); err != nil {

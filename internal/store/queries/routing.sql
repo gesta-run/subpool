@@ -223,15 +223,49 @@ UPDATE api_keys
 SET last_used_at = GREATEST(COALESCE(last_used_at, sqlc.arg(occurred_at)), sqlc.arg(occurred_at))
 WHERE id = sqlc.arg(id);
 
--- name: ListUsage :many
-SELECT u.api_key_id, k.employee_name, k.key_hint, u.model, u.usage_date,
-    u.input_tokens, u.output_tokens
+-- name: ListUsageSummary :many
+WITH summary AS (
+    SELECT u.api_key_id, k.employee_name, k.key_hint, u.model,
+        SUM(u.input_tokens)::bigint AS input_tokens,
+        SUM(u.output_tokens)::bigint AS output_tokens,
+        (SUM(u.input_tokens) + SUM(u.output_tokens))::bigint AS total_tokens
+    FROM api_key_usage_daily u
+    JOIN api_keys k ON k.id = u.api_key_id
+    WHERE (NULLIF(sqlc.arg(api_key_id)::text, '')::uuid IS NULL OR u.api_key_id = NULLIF(sqlc.arg(api_key_id)::text, '')::uuid)
+      AND (sqlc.narg(from_time)::timestamptz IS NULL OR u.usage_date >= sqlc.narg(from_time)::date)
+      AND (sqlc.narg(to_time)::timestamptz IS NULL OR u.usage_date <= sqlc.narg(to_time)::date)
+    GROUP BY u.api_key_id, k.employee_name, k.key_hint, u.model
+)
+SELECT api_key_id, employee_name, key_hint, model, input_tokens, output_tokens
+FROM summary
+WHERE sqlc.narg(after_total)::bigint IS NULL
+   OR total_tokens < sqlc.narg(after_total)::bigint
+   OR (total_tokens = sqlc.narg(after_total)::bigint AND api_key_id::text > sqlc.arg(after_api_key)::text)
+   OR (total_tokens = sqlc.narg(after_total)::bigint AND api_key_id::text = sqlc.arg(after_api_key)::text AND model > sqlc.arg(after_model)::text)
+ORDER BY total_tokens DESC, api_key_id, model
+LIMIT sqlc.arg(page_limit);
+
+-- name: GetUsageTotals :one
+SELECT
+    COALESCE(SUM(u.input_tokens), 0)::bigint AS input_tokens,
+    COALESCE(SUM(u.output_tokens), 0)::bigint AS output_tokens
+FROM api_key_usage_daily u
+WHERE (NULLIF(sqlc.arg(api_key_id)::text, '')::uuid IS NULL OR u.api_key_id = NULLIF(sqlc.arg(api_key_id)::text, '')::uuid)
+  AND (sqlc.narg(from_time)::timestamptz IS NULL OR u.usage_date >= sqlc.narg(from_time)::date)
+  AND (sqlc.narg(to_time)::timestamptz IS NULL OR u.usage_date <= sqlc.narg(to_time)::date);
+
+-- name: ListTopUsageKeys :many
+SELECT u.api_key_id, k.employee_name, k.key_hint,
+    SUM(u.input_tokens)::bigint AS input_tokens,
+    SUM(u.output_tokens)::bigint AS output_tokens
 FROM api_key_usage_daily u
 JOIN api_keys k ON k.id = u.api_key_id
 WHERE (NULLIF(sqlc.arg(api_key_id)::text, '')::uuid IS NULL OR u.api_key_id = NULLIF(sqlc.arg(api_key_id)::text, '')::uuid)
   AND (sqlc.narg(from_time)::timestamptz IS NULL OR u.usage_date >= sqlc.narg(from_time)::date)
   AND (sqlc.narg(to_time)::timestamptz IS NULL OR u.usage_date <= sqlc.narg(to_time)::date)
-ORDER BY u.usage_date DESC, k.employee_name, u.model;
+GROUP BY u.api_key_id, k.employee_name, k.key_hint
+ORDER BY (SUM(u.input_tokens) + SUM(u.output_tokens)) DESC, u.api_key_id
+LIMIT sqlc.arg(top_limit);
 
 -- name: WriteAuditEvent :exec
 INSERT INTO audit_events(actor, action, target_type, target_id, result)

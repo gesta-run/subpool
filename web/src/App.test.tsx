@@ -458,18 +458,73 @@ describe('Subpool console', () => {
     })).toBe(true))
   })
 
-  it('aggregates input and output usage without rendering request content', async () => {
-    vi.mocked(fetch).mockResolvedValue(json({ usage: [
-      { api_key_id: 'key-1', employee_name: 'Alex Chen', key_hint: '1a2b', usage_date: '2026-09-01', input_tokens: 1_200_000, output_tokens: 300_000 },
-      { api_key_id: 'key-1', employee_name: 'Alex Chen', key_hint: '1a2b', usage_date: '2026-08-31', input_tokens: 800_000, output_tokens: 200_000 },
-    ] }))
+  it('shows server-aggregated usage totals without rendering request content', async () => {
+    vi.mocked(fetch).mockResolvedValue(json({ data: {
+      items: [{ api_key_id: 'key-1', employee_name: 'Alex Chen', key_hint: '1a2b', model: 'model-alpha', input_tokens: 1_200_000, output_tokens: 300_000 }],
+      summary: { input_tokens: 2_000_000, output_tokens: 500_000 },
+      top_keys: [{ api_key_id: 'key-1', employee_name: 'Alex Chen', key_hint: '1a2b', input_tokens: 2_000_000, output_tokens: 500_000 }],
+      next_cursor: '',
+    } }))
 
     render(<UsagePage />)
 
-    expect((await screen.findAllByText('2.00M')).length).toBeGreaterThan(0)
-    expect(screen.getAllByText('500,000').length).toBeGreaterThan(0)
-    expect(screen.getAllByText('2.50M').length).toBeGreaterThan(0)
-    await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([path]) => String(path).startsWith('/api/v1/usage?from='))).toBe(true))
+    expect(await screen.findByText('2.00M')).toBeInTheDocument()
+    expect(screen.getByText('500,000')).toBeInTheDocument()
+    expect(screen.getByText('2.50M')).toBeInTheDocument()
+    expect(screen.getByText('model-alpha')).toBeInTheDocument()
+    await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([path]) => String(path).startsWith('/api/v1/usage?limit=50&from='))).toBe(true))
+  })
+
+  it('navigates usage pages while keeping full-range totals', async () => {
+    vi.mocked(fetch).mockImplementation(async (input) => {
+      const path = String(input)
+      if (path.includes('cursor=next-page')) return json({ data: {
+        items: [{ api_key_id: 'key-2', employee_name: 'Blair', key_hint: '2222', model: 'model-beta', input_tokens: 40, output_tokens: 10 }],
+        summary: { input_tokens: 2_000_000, output_tokens: 500_000 },
+        top_keys: [],
+        next_cursor: '',
+      } })
+      return json({ data: {
+        items: [{ api_key_id: 'key-1', employee_name: 'Alex', key_hint: '1111', model: 'model-alpha', input_tokens: 100, output_tokens: 25 }],
+        summary: { input_tokens: 2_000_000, output_tokens: 500_000 },
+        top_keys: [],
+        next_cursor: 'next-page',
+      } })
+    })
+
+    render(<UsagePage />)
+    const user = userEvent.setup()
+    expect(await screen.findByText('model-alpha')).toBeInTheDocument()
+    expect(screen.getByText('2.00M')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Next usage page' }))
+    expect(await screen.findByText('model-beta')).toBeInTheDocument()
+    expect(screen.queryByText('model-alpha')).not.toBeInTheDocument()
+    expect(screen.getByText('2.00M')).toBeInTheDocument()
+    expect(screen.getByText('Page 2')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Previous usage page' }))
+    expect(await screen.findByText('model-alpha')).toBeInTheDocument()
+    expect(screen.getByText('Page 1')).toBeInTheDocument()
+  })
+
+  it('keeps the current usage page visible when refresh fails', async () => {
+    let requests = 0
+    vi.mocked(fetch).mockImplementation(async () => {
+      requests += 1
+      if (requests > 1) return json({ error: { message: 'Usage service unavailable' } }, 503)
+      return json({ data: {
+        items: [{ api_key_id: 'key-1', employee_name: 'Alex', key_hint: '1111', model: 'model-alpha', input_tokens: 100, output_tokens: 25 }],
+        summary: { input_tokens: 100, output_tokens: 25 },
+        top_keys: [],
+        next_cursor: '',
+      } })
+    })
+
+    render(<UsagePage />)
+    const user = userEvent.setup()
+    expect(await screen.findByText('model-alpha')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Refresh' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Usage service unavailable')
+    expect(screen.getByText('model-alpha')).toBeInTheDocument()
   })
 
   it('shows usage totals in recent key activity', async () => {
@@ -478,7 +533,15 @@ describe('Subpool console', () => {
       if (path === '/api/v1/provider-accounts') return json({ data: [{ id: 'account-1', display_name: 'Example account', provider: 'codex', status: 'active' }] })
       if (path === '/api/v1/pools') return json({ data: [{ id: 'pool-1', name: 'Example pool', provider: 'codex' }] })
       if (path === '/api/v1/api-keys') return json({ data: [{ id: 'key-1', pool_id: 'pool-1', provider_account_id: 'account-1', employee_name: 'Example employee', key_hint: '1234', created_at: '2026-09-01T00:00:00Z', last_used_at: '2026-09-02T00:00:00Z' }] })
-      if (path === '/api/v1/usage') return json({ data: [{ api_key_id: 'key-1', employee_name: 'Example employee', key_hint: '1234', model: 'example-model', usage_date: '2026-09-02', input_tokens: 1_200, output_tokens: 300 }] })
+      if (path === '/api/v1/usage?limit=1') return json({ data: {
+        items: [{ api_key_id: 'key-1', employee_name: 'Example employee', key_hint: '1234', model: 'example-model', input_tokens: 1_200, output_tokens: 300 }],
+        summary: { input_tokens: 1_200, output_tokens: 300 },
+        top_keys: [{ api_key_id: 'key-1', employee_name: 'Example employee', key_hint: '1234', input_tokens: 1_200, output_tokens: 300 }],
+        next_cursor: '',
+      } })
+      if (path === '/api/v1/usage?api_key_id=key-1&limit=1') return json({ data: {
+        items: [], summary: { input_tokens: 1_200, output_tokens: 300 }, top_keys: [], next_cursor: '',
+      } })
       throw new Error(`Unexpected request: ${path}`)
     })
 

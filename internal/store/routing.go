@@ -333,22 +333,48 @@ func (p *Postgres) AddUsage(ctx context.Context, keyID string, eventHash []byte,
 	return nil
 }
 
-func (p *Postgres) ListUsage(ctx context.Context, filter domain.UsageFilter) ([]domain.UsageRow, error) {
-	rows, err := p.queries.ListUsage(ctx, storedb.ListUsageParams{
-		ApiKeyID: filter.APIKeyID, FromTime: optionalDBTime(filter.From), ToTime: optionalDBTime(filter.To),
+func (p *Postgres) ListUsageSummary(ctx context.Context, filter domain.UsageSummaryFilter) ([]domain.UsageSummary, error) {
+	rows, err := p.queries.ListUsageSummary(ctx, storedb.ListUsageSummaryParams{
+		AfterTotal: filter.AfterTotal, AfterApiKey: filter.AfterAPIKey, AfterModel: filter.AfterModel,
+		PageLimit: int32(filter.Limit), ApiKeyID: filter.APIKeyID,
+		FromTime: optionalDBTime(filter.From), ToTime: optionalDBTime(filter.To),
 	})
 	if err != nil {
-		return nil, wrapDB("list usage", err)
+		return nil, wrapDB("list usage summary", err)
 	}
-	var usage []domain.UsageRow
+	var usage []domain.UsageSummary
 	for _, row := range rows {
-		usage = append(usage, domain.UsageRow{
+		usage = append(usage, domain.UsageSummary{
 			APIKeyID: row.ApiKeyID, EmployeeName: row.EmployeeName, KeyHint: row.KeyHint,
-			Model: row.Model, UsageDate: row.UsageDate.Time,
-			InputTokens: row.InputTokens, OutputTokens: row.OutputTokens,
+			Model: row.Model, InputTokens: row.InputTokens, OutputTokens: row.OutputTokens,
 		})
 	}
 	return usage, nil
+}
+
+func (p *Postgres) GetUsageTotals(ctx context.Context, filter domain.UsageSummaryFilter) (domain.UsageTotals, error) {
+	row, err := p.queries.GetUsageTotals(ctx, storedb.GetUsageTotalsParams{
+		ApiKeyID: filter.APIKeyID, FromTime: optionalDBTime(filter.From), ToTime: optionalDBTime(filter.To),
+	})
+	return domain.UsageTotals{InputTokens: row.InputTokens, OutputTokens: row.OutputTokens}, wrapDB("get usage totals", err)
+}
+
+func (p *Postgres) ListTopUsageKeys(ctx context.Context, filter domain.UsageSummaryFilter, limit int) ([]domain.UsageKeySummary, error) {
+	rows, err := p.queries.ListTopUsageKeys(ctx, storedb.ListTopUsageKeysParams{
+		ApiKeyID: filter.APIKeyID, FromTime: optionalDBTime(filter.From),
+		ToTime: optionalDBTime(filter.To), TopLimit: int32(limit),
+	})
+	if err != nil {
+		return nil, wrapDB("list top usage keys", err)
+	}
+	var keys []domain.UsageKeySummary
+	for _, row := range rows {
+		keys = append(keys, domain.UsageKeySummary{
+			APIKeyID: row.ApiKeyID, EmployeeName: row.EmployeeName, KeyHint: row.KeyHint,
+			InputTokens: row.InputTokens, OutputTokens: row.OutputTokens,
+		})
+	}
+	return keys, nil
 }
 
 func (p *Postgres) Audit(ctx context.Context, event domain.AuditEvent) error {
