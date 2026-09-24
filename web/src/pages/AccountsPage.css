@@ -43,6 +43,7 @@
 .account-availability > small { margin: 0; color: var(--ink-muted); font-size: 10px; line-height: 1.35; }
 .account-availability .health-error { color: oklch(0.76 0.11 25); }
 .subscription-summary { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr); align-items: start; gap: 11px; }
+.subscription-capacities { display: grid; gap: 10px; }
 .subscription-summary .capacity { width: 100%; max-width: 300px; }
 .subscription-summary .capacity > span { margin-bottom: 6px; }
 .subscription-summary .capacity > span strong { font-size: 13px; }
