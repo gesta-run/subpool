@@ -39,6 +39,44 @@ function renderTable(account: ProviderAccount) {
 }
 
 describe('AccountTable health states', () => {
+  it('shows both Codex subscription limit windows', () => {
+    renderTable({
+      ...baseAccount,
+      quota_snapshot: {
+        five_hour: {
+          used_percent: 40,
+          remaining_percent: 60,
+          window_seconds: 18000,
+          reset_at: 1899500000,
+        },
+        weekly: baseAccount.quota_snapshot!.weekly,
+      },
+    })
+
+    expect(screen.getByText('5-hour capacity')).toBeInTheDocument()
+    expect(screen.getByText('weekly capacity')).toBeInTheDocument()
+    expect(screen.getByRole('progressbar', { name: /5-hour usage remaining/i })).toHaveAttribute('aria-valuenow', '60')
+    expect(screen.getByRole('progressbar', { name: /weekly usage remaining/i })).toHaveAttribute('aria-valuenow', '75')
+  })
+
+  it('shows a 5-hour-only Codex Plus limit', () => {
+    renderTable({
+      ...baseAccount,
+      quota_snapshot: {
+        plan_type: 'plus',
+        five_hour: {
+          used_percent: 25,
+          remaining_percent: 75,
+          window_seconds: 18000,
+          reset_at: 1899500000,
+        },
+      },
+    })
+
+    expect(screen.getByText('5-hour capacity')).toBeInTheDocument()
+    expect(screen.queryByText('Usage unavailable')).not.toBeInTheDocument()
+  })
+
   it('shows the account-level Fast mode state', () => {
     renderTable({ ...baseAccount, fast_mode_enabled: true })
     expect(screen.getByRole('button', { name: 'Disable Fast mode for Team account' })).toHaveAttribute('aria-pressed', 'true')
@@ -104,29 +142,43 @@ describe('AccountTable health states', () => {
     expect(screen.getByText('last known weekly capacity')).toBeInTheDocument()
   })
 
-  it('shows zero effective capacity when the provider blocks usage', () => {
+  it('keeps reported capacity visible when the provider blocks usage', () => {
     renderTable({
       ...baseAccount,
       status: 'exhausted',
     })
 
-    expect(screen.getByText('0%')).toBeInTheDocument()
-    expect(screen.getByText('effective weekly capacity')).toBeInTheDocument()
+    expect(screen.getByText('75%')).toBeInTheDocument()
+    expect(screen.getByText('reported weekly capacity')).toBeInTheDocument()
     expect(screen.getByText('Routing suspended')).toBeInTheDocument()
-    expect(screen.getByRole('progressbar', { name: /weekly usage remaining/i })).toHaveAttribute('aria-valuenow', '0')
+    expect(screen.getByRole('progressbar', { name: /weekly usage remaining/i })).toHaveAttribute('aria-valuenow', '75')
   })
 
-  it('suspends routing when the usage snapshot is blocked before status catches up', () => {
+  it('shows each reported window while suspended by the 5-hour limit', () => {
     renderTable({
       ...baseAccount,
       quota_snapshot: {
-        ...baseAccount.quota_snapshot,
         usage_allowed: false,
+        five_hour: {
+          used_percent: 100,
+          remaining_percent: 0,
+          window_seconds: 18000,
+          reset_at: 1899500000,
+        },
+        weekly: {
+          used_percent: 40,
+          remaining_percent: 60,
+          window_seconds: 604800,
+          reset_at: 1900000000,
+        },
       },
     })
 
     expect(screen.getByText('exhausted')).toBeInTheDocument()
     expect(screen.getByText('Routing suspended')).toBeInTheDocument()
     expect(screen.getByText('0%')).toBeInTheDocument()
+    expect(screen.getByText('60%')).toBeInTheDocument()
+    expect(screen.getByRole('progressbar', { name: /5-hour usage remaining/i })).toHaveAttribute('aria-valuenow', '0')
+    expect(screen.getByRole('progressbar', { name: /weekly usage remaining/i })).toHaveAttribute('aria-valuenow', '60')
   })
 })
