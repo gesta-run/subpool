@@ -18,6 +18,9 @@ function json(body: unknown, status = 200) {
   })
 }
 
+const employeeAID = '00000000-0000-4000-8000-000000000011'
+const employeeBID = '00000000-0000-4000-8000-000000000012'
+
 describe('Subpool console', () => {
   beforeEach(() => {
     vi.stubGlobal('fetch', vi.fn())
@@ -459,33 +462,48 @@ describe('Subpool console', () => {
   })
 
   it('shows server-aggregated usage totals without rendering request content', async () => {
-    vi.mocked(fetch).mockResolvedValue(json({ data: {
-      items: [{ api_key_id: 'key-1', employee_name: 'Alex Chen', key_hint: '1a2b', model: 'model-alpha', input_tokens: 1_200_000, output_tokens: 300_000 }],
-      summary: { input_tokens: 2_000_000, output_tokens: 500_000 },
-      top_keys: [{ api_key_id: 'key-1', employee_name: 'Alex Chen', key_hint: '1a2b', input_tokens: 2_000_000, output_tokens: 500_000 }],
-      next_cursor: '',
-    } }))
+    vi.mocked(fetch).mockImplementation(async (input) => {
+      const path = String(input)
+      if (path.startsWith(`/api/v1/usage/employees/${employeeAID}/details?`)) return json({ data: {
+        items: [
+          { api_key_id: 'key-1', employee_name: 'Alex Chen', key_hint: '1a2b', model: 'model-alpha', input_tokens: 1_200_000, output_tokens: 300_000 },
+          { api_key_id: 'key-2', employee_name: 'Alex Chen', key_hint: '3c4d', model: 'model-beta', input_tokens: 300_000, output_tokens: 50_000 },
+        ], next_cursor: '',
+      } })
+      return json({ data: {
+        items: [{ employee_id: employeeAID, employee_name: 'Alex Chen', key_count: 2, model_count: 2, input_tokens: 1_500_000, output_tokens: 350_000 }],
+        summary: { input_tokens: 2_000_000, output_tokens: 500_000 },
+        top_keys: [{ api_key_id: 'key-1', employee_name: 'Alex Chen', key_hint: '1a2b', input_tokens: 2_000_000, output_tokens: 500_000 }],
+        next_cursor: '',
+      } })
+    })
 
     render(<UsagePage />)
 
     expect(await screen.findByText('2.00M')).toBeInTheDocument()
     expect(screen.getByText('500,000')).toBeInTheDocument()
     expect(screen.getByText('2.50M')).toBeInTheDocument()
-    expect(screen.getByText('model-alpha')).toBeInTheDocument()
+    expect(screen.getByText('2 keys · 2 models')).toBeInTheDocument()
+    expect(screen.queryByText('model-alpha')).not.toBeInTheDocument()
+    await userEvent.setup().click(screen.getByRole('button', { name: /Alex Chen/i }))
+    expect(await screen.findByText('model-alpha')).toBeInTheDocument()
+    expect(screen.getByText('model-beta')).toBeInTheDocument()
     await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([path]) => String(path).startsWith('/api/v1/usage?limit=50&from='))).toBe(true))
   })
 
   it('navigates usage pages while keeping full-range totals', async () => {
     vi.mocked(fetch).mockImplementation(async (input) => {
       const path = String(input)
+      if (path.startsWith(`/api/v1/usage/employees/${employeeAID}/details?`)) return json({ data: { items: [{ api_key_id: 'key-1', employee_name: 'Alex', key_hint: '1111', model: 'model-alpha', input_tokens: 100, output_tokens: 25 }], next_cursor: '' } })
+      if (path.startsWith(`/api/v1/usage/employees/${employeeBID}/details?`)) return json({ data: { items: [{ api_key_id: 'key-2', employee_name: 'Blair', key_hint: '2222', model: 'model-beta', input_tokens: 40, output_tokens: 10 }], next_cursor: '' } })
       if (path.includes('cursor=next-page')) return json({ data: {
-        items: [{ api_key_id: 'key-2', employee_name: 'Blair', key_hint: '2222', model: 'model-beta', input_tokens: 40, output_tokens: 10 }],
+        items: [{ employee_id: employeeBID, employee_name: 'Blair', key_count: 1, model_count: 1, input_tokens: 40, output_tokens: 10 }],
         summary: { input_tokens: 2_000_000, output_tokens: 500_000 },
         top_keys: [],
         next_cursor: '',
       } })
       return json({ data: {
-        items: [{ api_key_id: 'key-1', employee_name: 'Alex', key_hint: '1111', model: 'model-alpha', input_tokens: 100, output_tokens: 25 }],
+        items: [{ employee_id: employeeAID, employee_name: 'Alex', key_count: 1, model_count: 1, input_tokens: 100, output_tokens: 25 }],
         summary: { input_tokens: 2_000_000, output_tokens: 500_000 },
         top_keys: [],
         next_cursor: 'next-page',
@@ -494,25 +512,32 @@ describe('Subpool console', () => {
 
     render(<UsagePage />)
     const user = userEvent.setup()
+    await user.click(await screen.findByRole('button', { name: /Alex/i }))
     expect(await screen.findByText('model-alpha')).toBeInTheDocument()
     expect(screen.getByText('2.00M')).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Next usage page' }))
-    expect(await screen.findByText('model-beta')).toBeInTheDocument()
+    await screen.findByRole('button', { name: /Blair/i })
     expect(screen.queryByText('model-alpha')).not.toBeInTheDocument()
+    expect(screen.queryByText('model-beta')).not.toBeInTheDocument()
     expect(screen.getByText('2.00M')).toBeInTheDocument()
     expect(screen.getByText('Page 2')).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Previous usage page' }))
+    const alex = await screen.findByRole('button', { name: /Alex/i })
+    expect(screen.queryByText('model-alpha')).not.toBeInTheDocument()
+    await user.click(alex)
     expect(await screen.findByText('model-alpha')).toBeInTheDocument()
     expect(screen.getByText('Page 1')).toBeInTheDocument()
   })
 
   it('keeps the current usage page visible when refresh fails', async () => {
-    let requests = 0
-    vi.mocked(fetch).mockImplementation(async () => {
-      requests += 1
-      if (requests > 1) return json({ error: { message: 'Usage service unavailable' } }, 503)
+    let summaryRequests = 0
+    vi.mocked(fetch).mockImplementation(async (input) => {
+      const path = String(input)
+      if (path.startsWith(`/api/v1/usage/employees/${employeeAID}/details?`)) return json({ data: { items: [{ api_key_id: 'key-1', employee_name: 'Alex', key_hint: '1111', model: 'model-alpha', input_tokens: 100, output_tokens: 25 }], next_cursor: '' } })
+      summaryRequests += 1
+      if (summaryRequests > 1) return json({ error: { message: 'Usage service unavailable' } }, 503)
       return json({ data: {
-        items: [{ api_key_id: 'key-1', employee_name: 'Alex', key_hint: '1111', model: 'model-alpha', input_tokens: 100, output_tokens: 25 }],
+        items: [{ employee_id: employeeAID, employee_name: 'Alex', key_count: 1, model_count: 1, input_tokens: 100, output_tokens: 25 }],
         summary: { input_tokens: 100, output_tokens: 25 },
         top_keys: [],
         next_cursor: '',
@@ -521,6 +546,7 @@ describe('Subpool console', () => {
 
     render(<UsagePage />)
     const user = userEvent.setup()
+    await user.click(await screen.findByRole('button', { name: /Alex/i }))
     expect(await screen.findByText('model-alpha')).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Refresh' }))
     expect(await screen.findByRole('alert')).toHaveTextContent('Usage service unavailable')
@@ -534,7 +560,7 @@ describe('Subpool console', () => {
       if (path === '/api/v1/pools') return json({ data: [{ id: 'pool-1', name: 'Example pool', provider: 'codex' }] })
       if (path === '/api/v1/api-keys') return json({ data: [{ id: 'key-1', pool_id: 'pool-1', provider_account_id: 'account-1', employee_name: 'Example employee', key_hint: '1234', created_at: '2026-09-01T00:00:00Z', last_used_at: '2026-09-02T00:00:00Z' }] })
       if (path === '/api/v1/usage?limit=1') return json({ data: {
-        items: [{ api_key_id: 'key-1', employee_name: 'Example employee', key_hint: '1234', model: 'example-model', input_tokens: 1_200, output_tokens: 300 }],
+        items: [{ employee_id: employeeAID, employee_name: 'Example employee', key_count: 1, model_count: 1, input_tokens: 1_200, output_tokens: 300 }],
         summary: { input_tokens: 1_200, output_tokens: 300 },
         top_keys: [{ api_key_id: 'key-1', employee_name: 'Example employee', key_hint: '1234', input_tokens: 1_200, output_tokens: 300 }],
         next_cursor: '',

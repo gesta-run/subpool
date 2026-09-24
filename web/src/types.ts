@@ -104,6 +104,7 @@ export interface APIKeyRecord {
   pool_id: string
   provider_account_id?: string
   pool_name?: string
+  employee_id: string
   employee_name: string
   key_hint: string
   scopes?: string[]
@@ -122,6 +123,20 @@ export interface UsageRecord {
   output_tokens: number
 }
 
+export interface UsageEmployeeSummary {
+  employee_id: string
+  employee_name: string
+  key_count: number
+  model_count: number
+  input_tokens: number
+  output_tokens: number
+}
+
+export interface UsageDetailsResponse {
+  items: UsageRecord[]
+  next_cursor: string
+}
+
 export interface UsageKeySummary {
   api_key_id: string
   employee_name: string
@@ -136,7 +151,7 @@ export interface UsageTotals {
 }
 
 export interface UsagePageResponse {
-  items: UsageRecord[]
+  items: UsageEmployeeSummary[]
   summary: UsageTotals
   top_keys: UsageKeySummary[]
   next_cursor: string

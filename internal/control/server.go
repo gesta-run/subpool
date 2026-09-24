@@ -96,6 +96,7 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/api-keys", s.admin(s.createAPIKey))
 	mux.HandleFunc("POST /api/v1/api-keys/{id}/revoke", s.admin(s.revokeAPIKey))
 	mux.HandleFunc("GET /api/v1/usage", s.admin(s.listUsage))
+	mux.HandleFunc("GET /api/v1/usage/employees/{id}/details", s.admin(s.listUsageDetails))
 }
 
 func (s *Server) session(w http.ResponseWriter, _ *http.Request) {

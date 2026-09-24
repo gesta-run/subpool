@@ -171,6 +171,7 @@ func (s *Server) addPoolAccount(w http.ResponseWriter, r *http.Request) {
 func (s *Server) createAPIKey(w http.ResponseWriter, r *http.Request) {
 	var request struct {
 		PoolID       string     `json:"pool_id"`
+		EmployeeID   string     `json:"employee_id"`
 		EmployeeName string     `json:"employee_name"`
 		Scopes       []string   `json:"scopes"`
 		RateLimit    int        `json:"rate_limit"`
@@ -179,8 +180,14 @@ func (s *Server) createAPIKey(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &request) {
 		return
 	}
-	if strings.TrimSpace(request.EmployeeName) == "" || request.PoolID == "" {
-		writeError(w, http.StatusBadRequest, "pool_id and employee_name are required")
+	request.EmployeeID = strings.TrimSpace(request.EmployeeID)
+	request.EmployeeName = strings.TrimSpace(request.EmployeeName)
+	if request.PoolID == "" || (request.EmployeeID == "") == (request.EmployeeName == "") {
+		writeError(w, http.StatusBadRequest, "pool_id and exactly one of employee_id or employee_name are required")
+		return
+	}
+	if request.EmployeeID != "" && !id.Valid(request.EmployeeID) {
+		writeError(w, http.StatusBadRequest, "employee_id must be a UUID")
 		return
 	}
 	if request.RateLimit < 0 {
@@ -201,18 +208,26 @@ func (s *Server) createAPIKey(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to generate API key")
 		return
 	}
-	key := domain.APIKey{ID: keyID, PoolID: request.PoolID, EmployeeName: strings.TrimSpace(request.EmployeeName), KeyHMAC: digest, KeyHint: hint, Scopes: request.Scopes, RateLimit: request.RateLimit, ExpiresAt: request.ExpiresAt}
+	employeeID := request.EmployeeID
+	if employeeID == "" {
+		employeeID, err = id.New()
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to generate employee identity")
+			return
+		}
+	}
+	key := domain.APIKey{ID: keyID, PoolID: request.PoolID, EmployeeID: employeeID, EmployeeName: request.EmployeeName, KeyHMAC: digest, KeyHint: hint, Scopes: request.Scopes, RateLimit: request.RateLimit, ExpiresAt: request.ExpiresAt}
 	accountID, err := s.store.CreateAPIKeyAndBind(r.Context(), key)
 	if errors.Is(err, store.ErrNoEligibleAccount) {
 		writeJSON(w, http.StatusConflict, map[string]any{"error": map[string]any{"code": "subpool_no_eligible_account", "message": "the pool has no eligible account"}})
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to create API key")
+		writeStoreError(w, err)
 		return
 	}
 	s.audit(r.Context(), "api_key.create", "api_key", keyID, "success")
-	writeJSON(w, http.StatusCreated, map[string]any{"id": keyID, "api_key": plain, "key_hint": hint, "provider_account_id": accountID})
+	writeJSON(w, http.StatusCreated, map[string]any{"id": keyID, "employee_id": employeeID, "api_key": plain, "key_hint": hint, "provider_account_id": accountID})
 }
 func (s *Server) listAPIKeys(w http.ResponseWriter, r *http.Request) {
 	keys, err := s.store.ListAPIKeys(r.Context())
@@ -232,25 +247,25 @@ func (s *Server) revokeAPIKey(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"revoked": true})
 }
 
-func (s *Server) listUsage(w http.ResponseWriter, r *http.Request) {
-	const (
-		defaultLimit = 50
-		maximumLimit = 100
-		topKeyLimit  = 5
-		maxCursorLen = 1024
-	)
+const (
+	defaultUsageLimit = 50
+	maximumUsageLimit = 100
+	topKeyLimit       = 5
+	maxCursorLen      = 1024
+)
 
-	filter := domain.UsageSummaryFilter{APIKeyID: strings.TrimSpace(r.URL.Query().Get("api_key_id")), Limit: defaultLimit + 1}
+func parseUsageFilter(w http.ResponseWriter, r *http.Request) (domain.UsageSummaryFilter, int, bool) {
+	filter := domain.UsageSummaryFilter{APIKeyID: strings.TrimSpace(r.URL.Query().Get("api_key_id")), Limit: defaultUsageLimit + 1}
 	if filter.APIKeyID != "" && !id.Valid(filter.APIKeyID) {
 		writeError(w, http.StatusBadRequest, "api_key_id must be a UUID")
-		return
+		return domain.UsageSummaryFilter{}, 0, false
 	}
-	limit := defaultLimit
+	limit := defaultUsageLimit
 	if raw := r.URL.Query().Get("limit"); raw != "" {
 		value, err := strconv.Atoi(raw)
-		if err != nil || value < 1 || value > maximumLimit {
+		if err != nil || value < 1 || value > maximumUsageLimit {
 			writeError(w, http.StatusBadRequest, "limit must be between 1 and 100")
-			return
+			return domain.UsageSummaryFilter{}, 0, false
 		}
 		limit = value
 		filter.Limit = limit + 1
@@ -271,10 +286,18 @@ func (s *Server) listUsage(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "dates must use YYYY-MM-DD")
-		return
+		return domain.UsageSummaryFilter{}, 0, false
 	}
 	if filter.From != nil && filter.To != nil && filter.From.After(*filter.To) {
 		writeError(w, http.StatusBadRequest, "from must be on or before to")
+		return domain.UsageSummaryFilter{}, 0, false
+	}
+	return filter, limit, true
+}
+
+func (s *Server) listUsage(w http.ResponseWriter, r *http.Request) {
+	filter, limit, ok := parseUsageFilter(w, r)
+	if !ok {
 		return
 	}
 	if raw := r.URL.Query().Get("cursor"); raw != "" {
@@ -288,11 +311,10 @@ func (s *Server) listUsage(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		filter.AfterTotal = &cursor.TotalTokens
-		filter.AfterAPIKey = cursor.APIKeyID
-		filter.AfterModel = cursor.Model
+		filter.AfterID = cursor.EmployeeID
 	}
 
-	rows, err := s.store.ListUsageSummary(r.Context(), filter)
+	rows, err := s.store.ListUsageEmployees(r.Context(), filter)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list usage")
 		return
@@ -314,8 +336,7 @@ func (s *Server) listUsage(w http.ResponseWriter, r *http.Request) {
 		last := rows[len(rows)-1]
 		nextCursor, err = encodeUsageCursor(usageCursor{
 			TotalTokens: last.InputTokens + last.OutputTokens,
-			APIKeyID:    last.APIKeyID,
-			Model:       last.Model,
+			EmployeeID:  last.EmployeeID,
 		})
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to paginate usage")
@@ -323,7 +344,7 @@ func (s *Server) listUsage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if rows == nil {
-		rows = []domain.UsageSummary{}
+		rows = []domain.UsageEmployeeSummary{}
 	}
 	if topKeys == nil {
 		topKeys = []domain.UsageKeySummary{}
@@ -335,8 +356,7 @@ func (s *Server) listUsage(w http.ResponseWriter, r *http.Request) {
 
 type usageCursor struct {
 	TotalTokens int64  `json:"t"`
-	APIKeyID    string `json:"k"`
-	Model       string `json:"m"`
+	EmployeeID  string `json:"e"`
 }
 
 func encodeUsageCursor(cursor usageCursor) (string, error) {
@@ -361,8 +381,90 @@ func decodeUsageCursor(value string) (usageCursor, error) {
 	if err = decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
 		return usageCursor{}, errors.New("cursor contains trailing data")
 	}
-	if cursor.TotalTokens < 0 || !id.Valid(cursor.APIKeyID) || strings.TrimSpace(cursor.Model) == "" {
+	if cursor.TotalTokens < 0 || !id.Valid(cursor.EmployeeID) {
 		return usageCursor{}, errors.New("cursor fields are invalid")
+	}
+	return cursor, nil
+}
+
+type usageDetailsCursor struct {
+	TotalTokens int64  `json:"t"`
+	APIKeyID    string `json:"k"`
+	Model       string `json:"m"`
+}
+
+func (s *Server) listUsageDetails(w http.ResponseWriter, r *http.Request) {
+	employeeID := r.PathValue("id")
+	if !id.Valid(employeeID) {
+		writeError(w, http.StatusBadRequest, "employee id must be a UUID")
+		return
+	}
+	filter, limit, ok := parseUsageFilter(w, r)
+	if !ok {
+		return
+	}
+	if raw := r.URL.Query().Get("cursor"); raw != "" {
+		if len(raw) > maxCursorLen {
+			writeError(w, http.StatusBadRequest, "invalid cursor")
+			return
+		}
+		cursor, err := decodeUsageDetailsCursor(raw)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid cursor")
+			return
+		}
+		filter.AfterTotal = &cursor.TotalTokens
+		filter.AfterID = cursor.APIKeyID
+		filter.AfterModel = cursor.Model
+	}
+	rows, err := s.store.ListUsageDetails(r.Context(), employeeID, filter)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list usage details")
+		return
+	}
+	nextCursor := ""
+	if len(rows) > limit {
+		rows = rows[:limit]
+		last := rows[len(rows)-1]
+		nextCursor, err = encodeUsageDetailsCursor(usageDetailsCursor{
+			TotalTokens: last.InputTokens + last.OutputTokens,
+			APIKeyID:    last.APIKeyID, Model: last.Model,
+		})
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to paginate usage details")
+			return
+		}
+	}
+	if rows == nil {
+		rows = []domain.UsageSummary{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"data": map[string]any{"items": rows, "next_cursor": nextCursor}})
+}
+
+func encodeUsageDetailsCursor(cursor usageDetailsCursor) (string, error) {
+	raw, err := json.Marshal(cursor)
+	if err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(raw), nil
+}
+
+func decodeUsageDetailsCursor(value string) (usageDetailsCursor, error) {
+	raw, err := base64.RawURLEncoding.Strict().DecodeString(value)
+	if err != nil {
+		return usageDetailsCursor{}, err
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	var cursor usageDetailsCursor
+	if err = decoder.Decode(&cursor); err != nil {
+		return usageDetailsCursor{}, err
+	}
+	if err = decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return usageDetailsCursor{}, errors.New("cursor contains trailing data")
+	}
+	if cursor.TotalTokens < 0 || !id.Valid(cursor.APIKeyID) || strings.TrimSpace(cursor.Model) == "" {
+		return usageDetailsCursor{}, errors.New("cursor fields are invalid")
 	}
 	return cursor, nil
 }
@@ -393,6 +495,10 @@ func decode(w http.ResponseWriter, r *http.Request, target any) bool {
 func writeStoreError(w http.ResponseWriter, err error) {
 	if errors.Is(err, store.ErrNotFound) {
 		writeError(w, http.StatusNotFound, "resource not found")
+		return
+	}
+	if errors.Is(err, store.ErrConflict) {
+		writeError(w, http.StatusConflict, "resource reference is invalid or already exists")
 		return
 	}
 	writeError(w, http.StatusInternalServerError, "operation failed")

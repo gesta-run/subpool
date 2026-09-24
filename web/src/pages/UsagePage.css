@@ -59,6 +59,141 @@
   font-size: 10px;
 }
 
+.usage-employee-toggle {
+  min-width: 0;
+  min-height: 36px;
+  border: 0;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 11px;
+  color: var(--ink);
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+}
+
+.usage-employee-toggle__icon {
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+  transition: border-color 160ms ease, background-color 160ms ease;
+}
+
+.usage-employee-toggle__icon svg {
+  width: 14px;
+  height: 14px;
+  color: var(--ink-muted);
+  transition: transform 160ms ease, color 160ms ease;
+}
+
+.usage-employee-toggle[aria-expanded="true"] .usage-employee-toggle__icon {
+  border-color: oklch(0.68 0.18 255 / .48);
+  background: oklch(0.3 0.045 255);
+}
+
+.usage-employee-toggle[aria-expanded="true"] svg {
+  transform: rotate(180deg);
+  color: var(--acid-deep);
+}
+
+.usage-employee-toggle:focus-visible {
+  border-radius: 4px;
+  outline: 2px solid var(--acid-deep);
+  outline-offset: 4px;
+}
+
+.usage-breakdown-count {
+  color: var(--ink-muted);
+  font-size: 10px;
+}
+
+.usage-employee-row:has(.usage-employee-toggle[aria-expanded="true"]) td,
+.usage-detail-row td {
+  background: oklch(0.205 0.006 255);
+}
+
+.usage-employee-row:has(.usage-employee-toggle[aria-expanded="true"]) td {
+  border-bottom-color: transparent;
+}
+
+.usage-detail-row:hover {
+  background: transparent;
+}
+
+.usage-detail-row td {
+  padding: 0 18px 15px 52px;
+}
+
+.usage-detail-list {
+  width: 100%;
+  overflow: hidden;
+  border-left: 2px solid var(--acid-deep);
+  border-radius: 0 7px 7px 0;
+  background: oklch(0.17 0.004 255);
+}
+
+.usage-detail-region {
+  display: grid;
+  justify-items: end;
+  gap: 10px;
+}
+
+.usage-detail-list > div {
+  min-height: 48px;
+  padding: 0 16px 0 18px;
+  display: grid;
+  grid-template-columns: minmax(110px, .7fr) minmax(180px, 1fr) repeat(3, minmax(90px, .55fr));
+  align-items: center;
+  gap: 20px;
+  border-bottom: 1px solid var(--line);
+}
+
+.usage-detail-list > div:last-child {
+  border-bottom: 0;
+}
+
+.usage-detail-list .usage-detail-list__header {
+  min-height: 32px;
+  color: var(--ink-muted);
+  font-size: 9px;
+  font-weight: 650;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+.usage-detail-list > div > span:nth-child(n + 3),
+.usage-detail-list > div > strong {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.usage-detail-state {
+  min-height: 48px;
+  margin: 0;
+  padding: 14px 18px;
+  color: var(--ink-muted);
+  font-size: 11px;
+}
+
+.usage-detail-state button {
+  border: 0;
+  border-bottom: 1px solid currentColor;
+  padding: 0;
+  color: var(--ink);
+  background: transparent;
+}
+
+.usage-detail-more {
+  min-height: 34px;
+  padding-inline: 13px;
+  font-size: 11px;
+}
+
 .usage-model-cell {
   display: grid;
   gap: 3px;

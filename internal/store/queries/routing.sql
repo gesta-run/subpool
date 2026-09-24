@@ -80,9 +80,13 @@ SELECT (
 FROM global_settings settings
 WHERE settings.singleton;
 
+-- name: CreateEmployee :exec
+INSERT INTO employees(id, name)
+VALUES (sqlc.arg(id), sqlc.arg(name));
+
 -- name: CreateAPIKey :exec
-INSERT INTO api_keys(id, pool_id, employee_name, key_hmac, key_hint, scopes, rate_limit, expires_at)
-VALUES (sqlc.arg(id), sqlc.arg(pool_id), sqlc.arg(employee_name), sqlc.arg(key_hmac),
+INSERT INTO api_keys(id, pool_id, employee_id, key_hmac, key_hint, scopes, rate_limit, expires_at)
+VALUES (sqlc.arg(id), sqlc.arg(pool_id), sqlc.arg(employee_id), sqlc.arg(key_hmac),
     sqlc.arg(key_hint), sqlc.arg(scopes), sqlc.arg(rate_limit), sqlc.narg(expires_at));
 
 -- name: BindAPIKey :exec
@@ -91,9 +95,10 @@ VALUES (sqlc.arg(api_key_id), sqlc.arg(provider_account_id));
 
 -- name: ListAPIKeys :many
 SELECT k.id, k.pool_id, COALESCE(b.provider_account_id::text, '')::text AS provider_account_id,
-    k.employee_name, k.key_hint, k.scopes, k.rate_limit, k.expires_at, k.revoked_at,
+    k.employee_id, e.name AS employee_name, k.key_hint, k.scopes, k.rate_limit, k.expires_at, k.revoked_at,
     k.last_used_at, k.created_at
 FROM api_keys k
+JOIN employees e ON e.id = k.employee_id
 LEFT JOIN api_key_account_bindings b ON b.api_key_id = k.id
 ORDER BY k.last_used_at DESC NULLS LAST, k.created_at DESC;
 
@@ -103,7 +108,7 @@ WHERE id = sqlc.arg(id) AND revoked_at IS NULL;
 
 -- name: ResolveAPIKey :one
 SELECT
-    k.id AS key_id, k.pool_id AS key_pool_id, k.employee_name, k.key_hint, k.scopes,
+    k.id AS key_id, k.pool_id AS key_pool_id, k.employee_id, e.name AS employee_name, k.key_hint, k.scopes,
     k.rate_limit, k.expires_at AS key_expires_at, k.revoked_at, k.last_used_at,
     k.created_at AS key_created_at,
     p.id AS pool_id, p.name AS pool_name, p.provider AS pool_provider,
@@ -114,6 +119,7 @@ SELECT
     a.last_success_at, a.last_failure_at, a.created_at AS account_created_at,
     a.updated_at AS account_updated_at, pa.enabled AS membership_enabled
 FROM api_keys k
+JOIN employees e ON e.id = k.employee_id
 JOIN pools p ON p.id = k.pool_id
 JOIN api_key_account_bindings b ON b.api_key_id = k.id
 JOIN provider_accounts a ON a.id = b.provider_account_id
@@ -124,7 +130,7 @@ WHERE k.key_hmac = sqlc.arg(key_hmac)
 
 -- name: ResolvePinnedAPIKey :one
 SELECT
-    k.id AS key_id, k.pool_id AS key_pool_id, k.employee_name, k.key_hint, k.scopes,
+    k.id AS key_id, k.pool_id AS key_pool_id, k.employee_id, e.name AS employee_name, k.key_hint, k.scopes,
     k.rate_limit, k.expires_at AS key_expires_at, k.revoked_at, k.last_used_at,
     k.created_at AS key_created_at,
     p.id AS pool_id, p.name AS pool_name, p.provider AS pool_provider,
@@ -135,6 +141,7 @@ SELECT
     a.last_success_at, a.last_failure_at, a.created_at AS account_created_at,
     a.updated_at AS account_updated_at, pa.enabled AS membership_enabled
 FROM api_keys k
+JOIN employees e ON e.id = k.employee_id
 JOIN pools p ON p.id = k.pool_id
 JOIN pool_accounts pa ON pa.pool_id = p.id AND pa.provider_account_id = sqlc.arg(account_id)
 JOIN provider_accounts a ON a.id = pa.provider_account_id
@@ -223,25 +230,50 @@ UPDATE api_keys
 SET last_used_at = GREATEST(COALESCE(last_used_at, sqlc.arg(occurred_at)), sqlc.arg(occurred_at))
 WHERE id = sqlc.arg(id);
 
--- name: ListUsageSummary :many
-WITH summary AS (
-    SELECT u.api_key_id, k.employee_name, k.key_hint, u.model,
+-- name: ListUsageEmployees :many
+WITH employee_totals AS (
+    SELECT e.id AS employee_id, e.name AS employee_name,
+        COUNT(DISTINCT u.api_key_id)::bigint AS key_count,
+        COUNT(DISTINCT u.model)::bigint AS model_count,
         SUM(u.input_tokens)::bigint AS input_tokens,
         SUM(u.output_tokens)::bigint AS output_tokens,
         (SUM(u.input_tokens) + SUM(u.output_tokens))::bigint AS total_tokens
     FROM api_key_usage_daily u
     JOIN api_keys k ON k.id = u.api_key_id
+    JOIN employees e ON e.id = k.employee_id
     WHERE (NULLIF(sqlc.arg(api_key_id)::text, '')::uuid IS NULL OR u.api_key_id = NULLIF(sqlc.arg(api_key_id)::text, '')::uuid)
       AND (sqlc.narg(from_time)::timestamptz IS NULL OR u.usage_date >= sqlc.narg(from_time)::date)
       AND (sqlc.narg(to_time)::timestamptz IS NULL OR u.usage_date <= sqlc.narg(to_time)::date)
-    GROUP BY u.api_key_id, k.employee_name, k.key_hint, u.model
+    GROUP BY e.id, e.name
 )
-SELECT api_key_id, employee_name, key_hint, model, input_tokens, output_tokens
-FROM summary
+SELECT employee_id, employee_name, key_count, model_count, input_tokens, output_tokens
+FROM employee_totals
 WHERE sqlc.narg(after_total)::bigint IS NULL
    OR total_tokens < sqlc.narg(after_total)::bigint
-   OR (total_tokens = sqlc.narg(after_total)::bigint AND api_key_id::text > sqlc.arg(after_api_key)::text)
-   OR (total_tokens = sqlc.narg(after_total)::bigint AND api_key_id::text = sqlc.arg(after_api_key)::text AND model > sqlc.arg(after_model)::text)
+   OR (total_tokens = sqlc.narg(after_total)::bigint AND employee_id::text > sqlc.arg(after_id)::text)
+ORDER BY total_tokens DESC, employee_id
+LIMIT sqlc.arg(page_limit);
+
+-- name: ListUsageDetails :many
+WITH details AS (
+    SELECT u.api_key_id, e.name AS employee_name, k.key_hint, u.model,
+        SUM(u.input_tokens)::bigint AS input_tokens,
+        SUM(u.output_tokens)::bigint AS output_tokens,
+        (SUM(u.input_tokens) + SUM(u.output_tokens))::bigint AS total_tokens
+    FROM api_key_usage_daily u
+    JOIN api_keys k ON k.id = u.api_key_id
+    JOIN employees e ON e.id = k.employee_id
+    WHERE k.employee_id = sqlc.arg(employee_id)::uuid
+      AND (sqlc.narg(from_time)::timestamptz IS NULL OR u.usage_date >= sqlc.narg(from_time)::date)
+      AND (sqlc.narg(to_time)::timestamptz IS NULL OR u.usage_date <= sqlc.narg(to_time)::date)
+    GROUP BY u.api_key_id, e.name, k.key_hint, u.model
+)
+SELECT api_key_id, employee_name, key_hint, model, input_tokens, output_tokens
+FROM details
+WHERE sqlc.narg(after_total)::bigint IS NULL
+   OR total_tokens < sqlc.narg(after_total)::bigint
+   OR (total_tokens = sqlc.narg(after_total)::bigint AND api_key_id::text > sqlc.arg(after_id)::text)
+   OR (total_tokens = sqlc.narg(after_total)::bigint AND api_key_id::text = sqlc.arg(after_id)::text AND model > sqlc.arg(after_model)::text)
 ORDER BY total_tokens DESC, api_key_id, model
 LIMIT sqlc.arg(page_limit);
 
@@ -255,15 +287,16 @@ WHERE (NULLIF(sqlc.arg(api_key_id)::text, '')::uuid IS NULL OR u.api_key_id = NU
   AND (sqlc.narg(to_time)::timestamptz IS NULL OR u.usage_date <= sqlc.narg(to_time)::date);
 
 -- name: ListTopUsageKeys :many
-SELECT u.api_key_id, k.employee_name, k.key_hint,
+SELECT u.api_key_id, e.name AS employee_name, k.key_hint,
     SUM(u.input_tokens)::bigint AS input_tokens,
     SUM(u.output_tokens)::bigint AS output_tokens
 FROM api_key_usage_daily u
 JOIN api_keys k ON k.id = u.api_key_id
+JOIN employees e ON e.id = k.employee_id
 WHERE (NULLIF(sqlc.arg(api_key_id)::text, '')::uuid IS NULL OR u.api_key_id = NULLIF(sqlc.arg(api_key_id)::text, '')::uuid)
   AND (sqlc.narg(from_time)::timestamptz IS NULL OR u.usage_date >= sqlc.narg(from_time)::date)
   AND (sqlc.narg(to_time)::timestamptz IS NULL OR u.usage_date <= sqlc.narg(to_time)::date)
-GROUP BY u.api_key_id, k.employee_name, k.key_hint
+GROUP BY u.api_key_id, e.name, k.key_hint
 ORDER BY (SUM(u.input_tokens) + SUM(u.output_tokens)) DESC, u.api_key_id
 LIMIT sqlc.arg(top_limit);
 

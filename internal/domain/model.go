@@ -89,6 +89,7 @@ type APIKey struct {
 	ID                string     `json:"id"`
 	PoolID            string     `json:"pool_id"`
 	ProviderAccountID string     `json:"provider_account_id"`
+	EmployeeID        string     `json:"employee_id"`
 	EmployeeName      string     `json:"employee_name"`
 	KeyHMAC           []byte     `json:"-"`
 	KeyHint           string     `json:"key_hint"`
@@ -116,6 +117,15 @@ type UsageSummary struct {
 	OutputTokens int64  `json:"output_tokens"`
 }
 
+type UsageEmployeeSummary struct {
+	EmployeeID   string `json:"employee_id"`
+	EmployeeName string `json:"employee_name"`
+	KeyCount     int64  `json:"key_count"`
+	ModelCount   int64  `json:"model_count"`
+	InputTokens  int64  `json:"input_tokens"`
+	OutputTokens int64  `json:"output_tokens"`
+}
+
 type UsageKeySummary struct {
 	APIKeyID     string `json:"api_key_id"`
 	EmployeeName string `json:"employee_name"`
@@ -130,13 +140,13 @@ type UsageTotals struct {
 }
 
 type UsageSummaryFilter struct {
-	APIKeyID    string
-	From        *time.Time
-	To          *time.Time
-	AfterTotal  *int64
-	AfterAPIKey string
-	AfterModel  string
-	Limit       int
+	APIKeyID   string
+	From       *time.Time
+	To         *time.Time
+	AfterTotal *int64
+	AfterID    string
+	AfterModel string
+	Limit      int
 }
 
 type AuditEvent struct {

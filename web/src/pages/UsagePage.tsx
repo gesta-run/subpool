@@ -1,7 +1,8 @@
-import { useMemo, useState } from 'react'
-import { RefreshIcon } from '../components/Icons'
+import { Fragment, useMemo, useState } from 'react'
+import { ChevronDownIcon, RefreshIcon } from '../components/Icons'
 import { PageSkeleton } from '../components/PageSkeleton'
 import { StatePanel } from '../components/StatePanel'
+import { UsageDetails } from '../components/UsageDetails'
 import { useUsagePage } from '../hooks/useUsagePage'
 import './UsagePage.css'
 
@@ -36,10 +37,24 @@ function usagePath(range: Range, cursor: string) {
   return `/api/v1/usage?${query.toString()}`
 }
 
+function usageDetailsPath(employeeID: string, range: Range) {
+  const query = new URLSearchParams({ limit: String(pageSize) })
+  if (range !== 'all') {
+    const to = new Date()
+    const from = new Date(to)
+    if (range === '7d') from.setDate(from.getDate() - 6)
+    if (range === '30d') from.setDate(from.getDate() - 29)
+    query.set('from', localDate(from))
+    query.set('to', localDate(to))
+  }
+  return `/api/v1/usage/employees/${employeeID}/details?${query.toString()}`
+}
+
 export function UsagePage() {
   const [range, setRange] = useState<Range>('7d')
   const [pageIndex, setPageIndex] = useState(0)
   const [cursors, setCursors] = useState([''])
+  const [expandedEmployeeID, setExpandedEmployeeID] = useState('')
   const path = useMemo(() => usagePath(range, cursors[pageIndex] ?? ''), [range, cursors, pageIndex])
   const { data, loading, error, reload } = useUsagePage(path)
 
@@ -47,15 +62,20 @@ export function UsagePage() {
     setRange(value)
     setPageIndex(0)
     setCursors([''])
+    setExpandedEmployeeID('')
   }
 
   const nextPage = () => {
     if (!data?.next_cursor) return
     setCursors((current) => [...current.slice(0, pageIndex + 1), data.next_cursor])
     setPageIndex((current) => current + 1)
+    setExpandedEmployeeID('')
   }
 
-  const previousPage = () => setPageIndex((current) => Math.max(0, current - 1))
+  const previousPage = () => {
+    setPageIndex((current) => Math.max(0, current - 1))
+    setExpandedEmployeeID('')
+  }
 
   return (
     <section className="usage-page" aria-labelledby="usage-heading" aria-busy={loading}>
@@ -79,18 +99,25 @@ export function UsagePage() {
         {data.items.length === 0 && pageIndex === 0 ? <StatePanel kind="empty" title="No token usage yet" description="Usage will appear after an employee API key completes its first request." /> : (
           <div className="table-frame usage-table-frame">
             <header className="usage-table-heading">
-              <div><h3>Usage by API key and model</h3><p>Server-aggregated totals, ordered by token volume.</p></div>
+              <div><h3>Usage by employee</h3><p>Expand an employee to inspect API key and model totals.</p></div>
               <button className="button button--secondary" type="button" disabled={loading} onClick={() => void reload()}><RefreshIcon className="button__icon" /> {loading ? 'Refreshing…' : 'Refresh'}</button>
             </header>
-            <table className="usage-table"><thead><tr><th>Employee</th><th>API key</th><th>Model</th><th className="number">Input tokens</th><th className="number">Output tokens</th><th className="number">Total</th></tr></thead>
-              <tbody>{data.items.map((item) => <tr key={`${item.api_key_id}:${item.model}`}>
-                <td data-label="Employee"><strong>{item.employee_name || 'Unassigned'}</strong></td>
-                <td data-label="API key"><code>••••{item.key_hint || item.api_key_id.slice(-4)}</code></td>
-                <td data-label="Model"><span className="usage-model-cell"><strong>{item.model === 'unknown' ? 'Unattributed' : item.model}</strong>{item.model === 'unknown' ? <small>Historical usage</small> : null}</span></td>
-                <td data-label="Input tokens" className="number">{formatTokens(item.input_tokens)}</td>
-                <td data-label="Output tokens" className="number">{formatTokens(item.output_tokens)}</td>
-                <td data-label="Total" className="number"><strong>{formatTokens(item.input_tokens + item.output_tokens)}</strong></td>
-              </tr>)}</tbody>
+            <table className="usage-table"><thead><tr><th>Employee</th><th>Breakdown</th><th className="number">Input tokens</th><th className="number">Output tokens</th><th className="number">Total</th></tr></thead>
+              <tbody>{data.items.map((item, index) => {
+                const employee = item.employee_name || 'Unassigned'
+                const expanded = expandedEmployeeID === item.employee_id
+                const detailsID = `usage-details-${pageIndex}-${index}`
+                return <Fragment key={item.employee_id}>
+                  <tr className="usage-employee-row">
+                    <td data-label="Employee"><button className="usage-employee-toggle" type="button" aria-expanded={expanded} aria-controls={detailsID} onClick={() => setExpandedEmployeeID(expanded ? '' : item.employee_id)}><span className="usage-employee-toggle__icon"><ChevronDownIcon /></span><strong>{employee}</strong></button></td>
+                    <td data-label="Breakdown"><span className="usage-breakdown-count">{item.key_count} {item.key_count === 1 ? 'key' : 'keys'} · {item.model_count} {item.model_count === 1 ? 'model' : 'models'}</span></td>
+                    <td data-label="Input tokens" className="number">{formatTokens(item.input_tokens)}</td>
+                    <td data-label="Output tokens" className="number">{formatTokens(item.output_tokens)}</td>
+                    <td data-label="Total" className="number"><strong>{formatTokens(item.input_tokens + item.output_tokens)}</strong></td>
+                  </tr>
+                  {expanded ? <tr className="usage-detail-row"><td colSpan={5}><UsageDetails employee={employee} id={detailsID} path={usageDetailsPath(item.employee_id, range)} /></td></tr> : null}
+                </Fragment>
+              })}</tbody>
             </table>
             <nav className="usage-pagination" aria-label="Usage pages">
               <button className="button button--secondary" type="button" disabled={loading || pageIndex === 0} onClick={previousPage} aria-label="Previous usage page">Previous</button>

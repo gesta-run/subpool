@@ -43,10 +43,11 @@ function APIKeysBody(props: APIKeysBodyProps) {
   </>
 }
 
-function CreateKeyDialog(props: { actionError: string; employee: string; expiryDays: string; poolID: string; pools: Pool[]; poolsLoading: boolean; saving: boolean; onClose: () => void; onCreate: () => void; onEmployeeChange: (value: string) => void; onExpiryChange: (value: string) => void; onPoolChange: (value: string) => void }) {
+function CreateKeyDialog(props: { actionError: string; employee: string; employeeID: string; employees: { id: string; name: string }[]; expiryDays: string; poolID: string; pools: Pool[]; poolsLoading: boolean; saving: boolean; onClose: () => void; onCreate: () => void; onEmployeeChange: (value: string) => void; onEmployeeIDChange: (value: string) => void; onExpiryChange: (value: string) => void; onPoolChange: (value: string) => void }) {
   return <Modal title="Create employee API key" description="Subpool automatically assigns this key to an account with an available slot." onClose={props.onClose}>
     <div className="form-stack">
-      <div className="field"><label htmlFor="employee-name">Employee name <span aria-hidden="true">*</span></label><input id="employee-name" value={props.employee} onChange={(event) => props.onEmployeeChange(event.target.value)} placeholder="Alex Chen" /></div>
+      {props.employees.length > 0 ? <div className="field"><label htmlFor="employee-id">Employee <span aria-hidden="true">*</span></label><SelectMenu id="employee-id" value={props.employeeID} onChange={props.onEmployeeIDChange} options={[{ value: 'new', label: 'New employee' }, ...props.employees.map((employee) => ({ value: employee.id, label: `${employee.name} · ${employee.id.slice(0, 8)}` }))]} /></div> : null}
+      {props.employeeID === 'new' ? <div className="field"><label htmlFor="employee-name">Employee name <span aria-hidden="true">*</span></label><input id="employee-name" value={props.employee} onChange={(event) => props.onEmployeeChange(event.target.value)} placeholder="Alex Chen" /></div> : null}
       <div className="field"><label htmlFor="key-pool">Account pool <span aria-hidden="true">*</span></label><SelectMenu id="key-pool" value={props.poolID || props.pools[0]?.id || ''} onChange={props.onPoolChange} disabled={props.poolsLoading || props.pools.length === 0} options={props.pools.length > 0 ? props.pools.map((pool) => ({ value: pool.id, label: pool.name })) : [{ value: '', label: 'No pools available', disabled: true }]} /></div>
       <div className="field"><label htmlFor="key-expiry">Expiration</label><SelectMenu id="key-expiry" value={props.expiryDays} onChange={props.onExpiryChange} options={[{ value: 'never', label: 'Never' }, { value: '30', label: '30 days' }, { value: '60', label: '60 days' }, { value: '90', label: '90 days' }]} /></div>
       {props.actionError ? <div className="inline-alert" role="alert">{props.actionError}</div> : null}
@@ -70,6 +71,7 @@ export function APIKeysPage() {
   const accounts = useRemoteList<ProviderAccount>('/api/v1/provider-accounts', ['provider_accounts', 'accounts'])
   const [showCreate, setShowCreate] = useState(false)
   const [employee, setEmployee] = useState('')
+  const [employeeID, setEmployeeID] = useState('new')
   const [poolID, setPoolID] = useState('')
   const [expiryDays, setExpiryDays] = useState('never')
   const [createdKey, setCreatedKey] = useState('')
@@ -83,10 +85,11 @@ export function APIKeysPage() {
   const usedKeys = activeKeys.filter((key) => key.last_used_at).length
   const loading = keys.loading || pools.loading || accounts.loading
   const loadError = keys.error || pools.error || accounts.error
+  const employees = Array.from(new Map(keys.items.filter((key) => key.employee_id).map((key) => [key.employee_id, { id: key.employee_id, name: key.employee_name }])).values())
 
   async function createKey() {
     const selectedPool = poolID || pools.items[0]?.id
-    if (!employee.trim()) {
+    if (employeeID === 'new' && !employee.trim()) {
       setActionError('Enter the employee name.')
       return
     }
@@ -100,7 +103,7 @@ export function APIKeysPage() {
       const expiresAt = expiryDays === 'never' ? null : new Date(Date.now() + Number(expiryDays) * 24 * 60 * 60 * 1000).toISOString()
       const result = await request<Record<string, unknown>>('/api/v1/api-keys', {
         method: 'POST',
-        body: JSON.stringify({ employee_name: employee.trim(), pool_id: selectedPool, expires_at: expiresAt }),
+        body: JSON.stringify({ ...(employeeID === 'new' ? { employee_name: employee.trim() } : { employee_id: employeeID }), pool_id: selectedPool, expires_at: expiresAt }),
       })
       const secret = String(result.key ?? result.api_key ?? result.secret ?? '')
       if (!secret) throw new Error('The server created the key but did not return its one-time secret.')
@@ -137,6 +140,7 @@ export function APIKeysPage() {
   function closeSecret() {
     setCreatedKey('')
     setEmployee('')
+    setEmployeeID('new')
     setExpiryDays('never')
     setCopied(false)
     setCopyError('')
@@ -149,7 +153,7 @@ export function APIKeysPage() {
         {!loading && !loadError && activeKeys.length > 0 ? <button className="button button--primary" type="button" onClick={() => { setActionError(''); setShowCreate(true) }}><PlusIcon className="button__icon" /> Create API key</button> : null}
       </header>
       <APIKeysBody accounts={accounts.items} actionError={!showCreate ? actionError : ''} activeKeys={activeKeys} loadError={loadError} loading={loading} pools={pools.items} usedKeys={usedKeys} onCreate={() => setShowCreate(true)} onReload={() => { void keys.reload(); void pools.reload(); void accounts.reload() }} onRemove={setPendingRemove} />
-      {showCreate ? <CreateKeyDialog actionError={actionError} employee={employee} expiryDays={expiryDays} poolID={poolID} pools={pools.items} poolsLoading={pools.loading} saving={saving} onClose={() => setShowCreate(false)} onCreate={() => void createKey()} onEmployeeChange={setEmployee} onExpiryChange={setExpiryDays} onPoolChange={setPoolID} /> : null}
+      {showCreate ? <CreateKeyDialog actionError={actionError} employee={employee} employeeID={employeeID} employees={employees} expiryDays={expiryDays} poolID={poolID} pools={pools.items} poolsLoading={pools.loading} saving={saving} onClose={() => setShowCreate(false)} onCreate={() => void createKey()} onEmployeeChange={setEmployee} onEmployeeIDChange={setEmployeeID} onExpiryChange={setExpiryDays} onPoolChange={setPoolID} /> : null}
       {createdKey ? <CreatedKeyDialog copied={copied} copyError={copyError} secret={createdKey} onClose={closeSecret} onCopy={() => void copyCreatedKey()} /> : null}
       {pendingRemove ? <ConfirmDialog
         title={`Remove ${pendingRemove.employee_name}'s API key?`}

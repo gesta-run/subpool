@@ -85,33 +85,48 @@ func (q *Queries) BindAPIKey(ctx context.Context, arg BindAPIKeyParams) error {
 }
 
 const createAPIKey = `-- name: CreateAPIKey :exec
-INSERT INTO api_keys(id, pool_id, employee_name, key_hmac, key_hint, scopes, rate_limit, expires_at)
+INSERT INTO api_keys(id, pool_id, employee_id, key_hmac, key_hint, scopes, rate_limit, expires_at)
 VALUES ($1, $2, $3, $4,
     $5, $6, $7, $8)
 `
 
 type CreateAPIKeyParams struct {
-	ID           string
-	PoolID       string
-	EmployeeName string
-	KeyHmac      []byte
-	KeyHint      string
-	Scopes       []string
-	RateLimit    int32
-	ExpiresAt    pgtype.Timestamptz
+	ID         string
+	PoolID     string
+	EmployeeID string
+	KeyHmac    []byte
+	KeyHint    string
+	Scopes     []string
+	RateLimit  int32
+	ExpiresAt  pgtype.Timestamptz
 }
 
 func (q *Queries) CreateAPIKey(ctx context.Context, arg CreateAPIKeyParams) error {
 	_, err := q.db.Exec(ctx, createAPIKey,
 		arg.ID,
 		arg.PoolID,
-		arg.EmployeeName,
+		arg.EmployeeID,
 		arg.KeyHmac,
 		arg.KeyHint,
 		arg.Scopes,
 		arg.RateLimit,
 		arg.ExpiresAt,
 	)
+	return err
+}
+
+const createEmployee = `-- name: CreateEmployee :exec
+INSERT INTO employees(id, name)
+VALUES ($1, $2)
+`
+
+type CreateEmployeeParams struct {
+	ID   string
+	Name string
+}
+
+func (q *Queries) CreateEmployee(ctx context.Context, arg CreateEmployeeParams) error {
+	_, err := q.db.Exec(ctx, createEmployee, arg.ID, arg.Name)
 	return err
 }
 
@@ -240,9 +255,10 @@ func (q *Queries) GetUsageTotals(ctx context.Context, arg GetUsageTotalsParams) 
 
 const listAPIKeys = `-- name: ListAPIKeys :many
 SELECT k.id, k.pool_id, COALESCE(b.provider_account_id::text, '')::text AS provider_account_id,
-    k.employee_name, k.key_hint, k.scopes, k.rate_limit, k.expires_at, k.revoked_at,
+    k.employee_id, e.name AS employee_name, k.key_hint, k.scopes, k.rate_limit, k.expires_at, k.revoked_at,
     k.last_used_at, k.created_at
 FROM api_keys k
+JOIN employees e ON e.id = k.employee_id
 LEFT JOIN api_key_account_bindings b ON b.api_key_id = k.id
 ORDER BY k.last_used_at DESC NULLS LAST, k.created_at DESC
 `
@@ -251,6 +267,7 @@ type ListAPIKeysRow struct {
 	ID                string
 	PoolID            string
 	ProviderAccountID string
+	EmployeeID        string
 	EmployeeName      string
 	KeyHint           string
 	Scopes            []string
@@ -274,6 +291,7 @@ func (q *Queries) ListAPIKeys(ctx context.Context) ([]ListAPIKeysRow, error) {
 			&i.ID,
 			&i.PoolID,
 			&i.ProviderAccountID,
+			&i.EmployeeID,
 			&i.EmployeeName,
 			&i.KeyHint,
 			&i.Scopes,
@@ -358,15 +376,16 @@ func (q *Queries) ListPools(ctx context.Context) ([]Pool, error) {
 }
 
 const listTopUsageKeys = `-- name: ListTopUsageKeys :many
-SELECT u.api_key_id, k.employee_name, k.key_hint,
+SELECT u.api_key_id, e.name AS employee_name, k.key_hint,
     SUM(u.input_tokens)::bigint AS input_tokens,
     SUM(u.output_tokens)::bigint AS output_tokens
 FROM api_key_usage_daily u
 JOIN api_keys k ON k.id = u.api_key_id
+JOIN employees e ON e.id = k.employee_id
 WHERE (NULLIF($1::text, '')::uuid IS NULL OR u.api_key_id = NULLIF($1::text, '')::uuid)
   AND ($2::timestamptz IS NULL OR u.usage_date >= $2::date)
   AND ($3::timestamptz IS NULL OR u.usage_date <= $3::date)
-GROUP BY u.api_key_id, k.employee_name, k.key_hint
+GROUP BY u.api_key_id, e.name, k.key_hint
 ORDER BY (SUM(u.input_tokens) + SUM(u.output_tokens)) DESC, u.api_key_id
 LIMIT $4
 `
@@ -417,21 +436,22 @@ func (q *Queries) ListTopUsageKeys(ctx context.Context, arg ListTopUsageKeysPara
 	return items, nil
 }
 
-const listUsageSummary = `-- name: ListUsageSummary :many
-WITH summary AS (
-    SELECT u.api_key_id, k.employee_name, k.key_hint, u.model,
+const listUsageDetails = `-- name: ListUsageDetails :many
+WITH details AS (
+    SELECT u.api_key_id, e.name AS employee_name, k.key_hint, u.model,
         SUM(u.input_tokens)::bigint AS input_tokens,
         SUM(u.output_tokens)::bigint AS output_tokens,
         (SUM(u.input_tokens) + SUM(u.output_tokens))::bigint AS total_tokens
     FROM api_key_usage_daily u
     JOIN api_keys k ON k.id = u.api_key_id
-    WHERE (NULLIF($5::text, '')::uuid IS NULL OR u.api_key_id = NULLIF($5::text, '')::uuid)
+    JOIN employees e ON e.id = k.employee_id
+    WHERE k.employee_id = $5::uuid
       AND ($6::timestamptz IS NULL OR u.usage_date >= $6::date)
       AND ($7::timestamptz IS NULL OR u.usage_date <= $7::date)
-    GROUP BY u.api_key_id, k.employee_name, k.key_hint, u.model
+    GROUP BY u.api_key_id, e.name, k.key_hint, u.model
 )
 SELECT api_key_id, employee_name, key_hint, model, input_tokens, output_tokens
-FROM summary
+FROM details
 WHERE $1::bigint IS NULL
    OR total_tokens < $1::bigint
    OR (total_tokens = $1::bigint AND api_key_id::text > $2::text)
@@ -440,17 +460,17 @@ ORDER BY total_tokens DESC, api_key_id, model
 LIMIT $4
 `
 
-type ListUsageSummaryParams struct {
-	AfterTotal  *int64
-	AfterApiKey string
-	AfterModel  string
-	PageLimit   int32
-	ApiKeyID    string
-	FromTime    pgtype.Timestamptz
-	ToTime      pgtype.Timestamptz
+type ListUsageDetailsParams struct {
+	AfterTotal *int64
+	AfterID    string
+	AfterModel string
+	PageLimit  int32
+	EmployeeID string
+	FromTime   pgtype.Timestamptz
+	ToTime     pgtype.Timestamptz
 }
 
-type ListUsageSummaryRow struct {
+type ListUsageDetailsRow struct {
 	ApiKeyID     string
 	EmployeeName string
 	KeyHint      string
@@ -459,11 +479,88 @@ type ListUsageSummaryRow struct {
 	OutputTokens int64
 }
 
-func (q *Queries) ListUsageSummary(ctx context.Context, arg ListUsageSummaryParams) ([]ListUsageSummaryRow, error) {
-	rows, err := q.db.Query(ctx, listUsageSummary,
+func (q *Queries) ListUsageDetails(ctx context.Context, arg ListUsageDetailsParams) ([]ListUsageDetailsRow, error) {
+	rows, err := q.db.Query(ctx, listUsageDetails,
 		arg.AfterTotal,
-		arg.AfterApiKey,
+		arg.AfterID,
 		arg.AfterModel,
+		arg.PageLimit,
+		arg.EmployeeID,
+		arg.FromTime,
+		arg.ToTime,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListUsageDetailsRow
+	for rows.Next() {
+		var i ListUsageDetailsRow
+		if err := rows.Scan(
+			&i.ApiKeyID,
+			&i.EmployeeName,
+			&i.KeyHint,
+			&i.Model,
+			&i.InputTokens,
+			&i.OutputTokens,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listUsageEmployees = `-- name: ListUsageEmployees :many
+WITH employee_totals AS (
+    SELECT e.id AS employee_id, e.name AS employee_name,
+        COUNT(DISTINCT u.api_key_id)::bigint AS key_count,
+        COUNT(DISTINCT u.model)::bigint AS model_count,
+        SUM(u.input_tokens)::bigint AS input_tokens,
+        SUM(u.output_tokens)::bigint AS output_tokens,
+        (SUM(u.input_tokens) + SUM(u.output_tokens))::bigint AS total_tokens
+    FROM api_key_usage_daily u
+    JOIN api_keys k ON k.id = u.api_key_id
+    JOIN employees e ON e.id = k.employee_id
+    WHERE (NULLIF($4::text, '')::uuid IS NULL OR u.api_key_id = NULLIF($4::text, '')::uuid)
+      AND ($5::timestamptz IS NULL OR u.usage_date >= $5::date)
+      AND ($6::timestamptz IS NULL OR u.usage_date <= $6::date)
+    GROUP BY e.id, e.name
+)
+SELECT employee_id, employee_name, key_count, model_count, input_tokens, output_tokens
+FROM employee_totals
+WHERE $1::bigint IS NULL
+   OR total_tokens < $1::bigint
+   OR (total_tokens = $1::bigint AND employee_id::text > $2::text)
+ORDER BY total_tokens DESC, employee_id
+LIMIT $3
+`
+
+type ListUsageEmployeesParams struct {
+	AfterTotal *int64
+	AfterID    string
+	PageLimit  int32
+	ApiKeyID   string
+	FromTime   pgtype.Timestamptz
+	ToTime     pgtype.Timestamptz
+}
+
+type ListUsageEmployeesRow struct {
+	EmployeeID   string
+	EmployeeName string
+	KeyCount     int64
+	ModelCount   int64
+	InputTokens  int64
+	OutputTokens int64
+}
+
+func (q *Queries) ListUsageEmployees(ctx context.Context, arg ListUsageEmployeesParams) ([]ListUsageEmployeesRow, error) {
+	rows, err := q.db.Query(ctx, listUsageEmployees,
+		arg.AfterTotal,
+		arg.AfterID,
 		arg.PageLimit,
 		arg.ApiKeyID,
 		arg.FromTime,
@@ -473,14 +570,14 @@ func (q *Queries) ListUsageSummary(ctx context.Context, arg ListUsageSummaryPara
 		return nil, err
 	}
 	defer rows.Close()
-	var items []ListUsageSummaryRow
+	var items []ListUsageEmployeesRow
 	for rows.Next() {
-		var i ListUsageSummaryRow
+		var i ListUsageEmployeesRow
 		if err := rows.Scan(
-			&i.ApiKeyID,
+			&i.EmployeeID,
 			&i.EmployeeName,
-			&i.KeyHint,
-			&i.Model,
+			&i.KeyCount,
+			&i.ModelCount,
 			&i.InputTokens,
 			&i.OutputTokens,
 		); err != nil {
@@ -612,7 +709,7 @@ func (q *Queries) RecordRequestSuccess(ctx context.Context, arg RecordRequestSuc
 
 const resolveAPIKey = `-- name: ResolveAPIKey :one
 SELECT
-    k.id AS key_id, k.pool_id AS key_pool_id, k.employee_name, k.key_hint, k.scopes,
+    k.id AS key_id, k.pool_id AS key_pool_id, k.employee_id, e.name AS employee_name, k.key_hint, k.scopes,
     k.rate_limit, k.expires_at AS key_expires_at, k.revoked_at, k.last_used_at,
     k.created_at AS key_created_at,
     p.id AS pool_id, p.name AS pool_name, p.provider AS pool_provider,
@@ -623,6 +720,7 @@ SELECT
     a.last_success_at, a.last_failure_at, a.created_at AS account_created_at,
     a.updated_at AS account_updated_at, pa.enabled AS membership_enabled
 FROM api_keys k
+JOIN employees e ON e.id = k.employee_id
 JOIN pools p ON p.id = k.pool_id
 JOIN api_key_account_bindings b ON b.api_key_id = k.id
 JOIN provider_accounts a ON a.id = b.provider_account_id
@@ -635,6 +733,7 @@ WHERE k.key_hmac = $1
 type ResolveAPIKeyRow struct {
 	KeyID                string
 	KeyPoolID            string
+	EmployeeID           string
 	EmployeeName         string
 	KeyHint              string
 	Scopes               []string
@@ -672,6 +771,7 @@ func (q *Queries) ResolveAPIKey(ctx context.Context, keyHmac []byte) (ResolveAPI
 	err := row.Scan(
 		&i.KeyID,
 		&i.KeyPoolID,
+		&i.EmployeeID,
 		&i.EmployeeName,
 		&i.KeyHint,
 		&i.Scopes,
@@ -707,7 +807,7 @@ func (q *Queries) ResolveAPIKey(ctx context.Context, keyHmac []byte) (ResolveAPI
 
 const resolvePinnedAPIKey = `-- name: ResolvePinnedAPIKey :one
 SELECT
-    k.id AS key_id, k.pool_id AS key_pool_id, k.employee_name, k.key_hint, k.scopes,
+    k.id AS key_id, k.pool_id AS key_pool_id, k.employee_id, e.name AS employee_name, k.key_hint, k.scopes,
     k.rate_limit, k.expires_at AS key_expires_at, k.revoked_at, k.last_used_at,
     k.created_at AS key_created_at,
     p.id AS pool_id, p.name AS pool_name, p.provider AS pool_provider,
@@ -718,6 +818,7 @@ SELECT
     a.last_success_at, a.last_failure_at, a.created_at AS account_created_at,
     a.updated_at AS account_updated_at, pa.enabled AS membership_enabled
 FROM api_keys k
+JOIN employees e ON e.id = k.employee_id
 JOIN pools p ON p.id = k.pool_id
 JOIN pool_accounts pa ON pa.pool_id = p.id AND pa.provider_account_id = $1
 JOIN provider_accounts a ON a.id = pa.provider_account_id
@@ -736,6 +837,7 @@ type ResolvePinnedAPIKeyParams struct {
 type ResolvePinnedAPIKeyRow struct {
 	KeyID                string
 	KeyPoolID            string
+	EmployeeID           string
 	EmployeeName         string
 	KeyHint              string
 	Scopes               []string
@@ -773,6 +875,7 @@ func (q *Queries) ResolvePinnedAPIKey(ctx context.Context, arg ResolvePinnedAPIK
 	err := row.Scan(
 		&i.KeyID,
 		&i.KeyPoolID,
+		&i.EmployeeID,
 		&i.EmployeeName,
 		&i.KeyHint,
 		&i.Scopes,

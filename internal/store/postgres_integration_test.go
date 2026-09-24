@@ -398,17 +398,13 @@ func assertUsageActivity(t *testing.T, ctx context.Context, database *Postgres, 
 	if err := database.AddUsage(ctx, key.ID, bytes.Repeat([]byte{12}, 32), "second-model", day, 30, 2); err != nil {
 		t.Fatal(err)
 	}
-	firstPage, err := database.ListUsageSummary(ctx, domain.UsageSummaryFilter{APIKeyID: key.ID, Limit: 1})
-	if err != nil || len(firstPage) != 1 || firstPage[0].Model != "second-model" || firstPage[0].InputTokens != 30 || firstPage[0].OutputTokens != 2 {
-		t.Fatalf("first usage page = %#v, %v", firstPage, err)
+	employees, err := database.ListUsageEmployees(ctx, domain.UsageSummaryFilter{APIKeyID: key.ID, Limit: 1})
+	if err != nil || len(employees) != 1 || employees[0].EmployeeName != key.EmployeeName || employees[0].KeyCount != 1 || employees[0].ModelCount != 2 || employees[0].InputTokens != 42 || employees[0].OutputTokens != 7 {
+		t.Fatalf("employee usage = %#v, %v", employees, err)
 	}
-	afterTotal := firstPage[0].InputTokens + firstPage[0].OutputTokens
-	secondPage, err := database.ListUsageSummary(ctx, domain.UsageSummaryFilter{
-		APIKeyID: key.ID, Limit: 1, AfterTotal: &afterTotal,
-		AfterAPIKey: firstPage[0].APIKeyID, AfterModel: firstPage[0].Model,
-	})
-	if err != nil || len(secondPage) != 1 || secondPage[0].Model != "test-model" || secondPage[0].InputTokens != 12 || secondPage[0].OutputTokens != 5 {
-		t.Fatalf("second usage page = %#v, %v", secondPage, err)
+	details, err := database.ListUsageDetails(ctx, employees[0].EmployeeID, domain.UsageSummaryFilter{Limit: 10})
+	if err != nil || len(details) != 2 || details[0].Model != "second-model" || details[0].InputTokens != 30 || details[1].Model != "test-model" || details[1].InputTokens != 12 {
+		t.Fatalf("employee usage details = %#v, %v", details, err)
 	}
 	totals, err := database.GetUsageTotals(ctx, domain.UsageSummaryFilter{APIKeyID: key.ID})
 	if err != nil || totals.InputTokens != 42 || totals.OutputTokens != 7 {
