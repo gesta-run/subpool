@@ -7,6 +7,8 @@ import (
 	"io"
 	"net/http"
 	"strings"
+
+	"github.com/gesta-run/subpool/internal/gateway/responseevent"
 )
 
 func chatToResponses(raw []byte) ([]byte, error) {
@@ -153,7 +155,7 @@ func (s *Server) proxyChatStream(w http.ResponseWriter, r *http.Request, keyID, 
 	terminal := false
 	hasToolCalls := false
 	for scanner.Scan() {
-		data := sseData(scanner.Bytes())
+		data := responseevent.SSEData(scanner.Bytes())
 		if len(data) == 0 || string(data) == "[DONE]" {
 			continue
 		}
@@ -162,10 +164,10 @@ func (s *Server) proxyChatStream(w http.ResponseWriter, r *http.Request, keyID, 
 			continue
 		}
 		eventType, _ := event["type"].(string)
-		if eventID := responseIDFromEvent(data); eventID != "" {
+		if eventID := responseevent.ResponseID(data); eventID != "" {
 			id = eventID
 		}
-		i, o := usageFromEvent(data)
+		i, o := responseevent.Usage(data)
 		if i > input {
 			input = i
 		}
@@ -224,7 +226,7 @@ func (s *Server) proxyCompatibleChatJSON(w http.ResponseWriter, keyID, model str
 		return
 	}
 	raw, _ := json.Marshal(value)
-	input, output := usageFromEvent(raw)
+	input, output := responseevent.Usage(raw)
 	responseID := ""
 	if payload, ok := value.(map[string]any); ok {
 		responseID, _ = payload["id"].(string)
@@ -242,7 +244,7 @@ func (s *Server) proxyCompatibleChatStream(w http.ResponseWriter, keyID, model s
 	w.WriteHeader(resp.StatusCode)
 	responseID := ""
 	input, output, err := copySSE(w, resp.Body, func(data []byte) {
-		if id := responseIDFromEvent(data); id != "" {
+		if id := responseevent.ResponseID(data); id != "" {
 			responseID = id
 		}
 	})

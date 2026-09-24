@@ -1,7 +1,8 @@
-package gateway
+package responsesws
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -9,11 +10,10 @@ import (
 	"sync/atomic"
 
 	"github.com/coder/websocket"
-	"github.com/gesta-run/subpool/internal/auth"
 )
 
-type responsesWSHub struct {
-	server          *Server
+type Hub struct {
+	backend         Backend
 	enabled         bool
 	forceHTTPBridge bool
 	codexUpstream   string
@@ -33,28 +33,29 @@ type responsesWSHub struct {
 	upstreamFailures  atomic.Int64
 }
 
-func newResponsesWSHub(server *Server) *responsesWSHub {
-	return &responsesWSHub{
-		server:       server,
+func New(backend Backend) *Hub {
+	return &Hub{
+		backend:      backend,
 		sessions:     make(map[*responsesWSSession]struct{}),
 		connections:  make(map[string]int),
 		accountTurns: make(map[string]int),
 	}
 }
 
-func (h *responsesWSHub) configure(enabled, forceHTTPBridge bool, codexUpstream string) {
+func (h *Hub) Configure(enabled, forceHTTPBridge bool, codexUpstream string) {
 	h.enabled = enabled
 	h.forceHTTPBridge = forceHTTPBridge
 	h.codexUpstream = strings.TrimRight(strings.TrimSpace(codexUpstream), "/")
 }
 
-func (h *responsesWSHub) handle(w http.ResponseWriter, r *http.Request) {
-	route, requestErr := h.server.authenticate(r.Context(), r.Header.Get("Authorization"), "responses")
+func (h *Hub) Enabled() bool { return h.enabled }
+
+func (h *Hub) Handle(w http.ResponseWriter, r *http.Request) {
+	route, keyDigest, requestErr := h.backend.Authenticate(r.Context(), r.Header.Get("Authorization"), "responses")
 	if requestErr != nil {
-		writeOpenAIError(w, requestErr.status, requestErr.message, requestErr.code)
+		writeOpenAIError(w, requestErr.Status, requestErr.Message, requestErr.Code)
 		return
 	}
-	plain, _ := auth.Bearer(r.Header.Get("Authorization"))
 	if !h.reserveConnection(route.Key.ID) {
 		writeOpenAIError(w, http.StatusServiceUnavailable, "WebSocket connection capacity exceeded", "subpool_capacity_exceeded")
 		return
@@ -64,10 +65,11 @@ func (h *responsesWSHub) handle(w http.ResponseWriter, r *http.Request) {
 		h.releaseConnection(route.Key.ID)
 		return
 	}
-	conn.SetReadLimit(h.server.maxRequestBodyBytes)
+	bodyState := h.backend.RequestBodyState()
+	conn.SetReadLimit(bodyState.MaxBytes)
 	ctx, cancel := context.WithTimeout(r.Context(), responsesWSLifetime)
 	session := &responsesWSSession{
-		hub: h, conn: conn, ctx: ctx, cancel: cancel, keyDigest: h.server.keys.Digest(plain),
+		hub: h, conn: conn, ctx: ctx, cancel: cancel, keyDigest: keyDigest,
 		keyID: route.Key.ID, poolID: route.Pool.ID, headers: r.Header.Clone(), done: make(chan struct{}),
 		streams: make(map[string]*responsesWSStream),
 		named:   make(map[string]struct{}), responses: make(map[string]struct{}),
@@ -90,7 +92,7 @@ func (h *responsesWSHub) handle(w http.ResponseWriter, r *http.Request) {
 	session.readClient()
 }
 
-func (h *responsesWSHub) reserveConnection(keyID string) bool {
+func (h *Hub) reserveConnection(keyID string) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.closing || h.activeConnections >= responsesWSMaxConnections || h.connections[keyID] >= responsesWSMaxConnectionsPerKey {
@@ -102,7 +104,7 @@ func (h *responsesWSHub) reserveConnection(keyID string) bool {
 	return true
 }
 
-func (h *responsesWSHub) addSession(session *responsesWSSession) bool {
+func (h *Hub) addSession(session *responsesWSSession) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.closing {
@@ -112,7 +114,7 @@ func (h *responsesWSHub) addSession(session *responsesWSSession) bool {
 	return true
 }
 
-func (h *responsesWSHub) releaseConnection(keyID string) {
+func (h *Hub) releaseConnection(keyID string) {
 	h.mu.Lock()
 	if h.activeConnections > 0 {
 		h.activeConnections--
@@ -125,14 +127,14 @@ func (h *responsesWSHub) releaseConnection(keyID string) {
 	h.mu.Unlock()
 }
 
-func (h *responsesWSHub) removeSession(session *responsesWSSession) {
+func (h *Hub) removeSession(session *responsesWSSession) {
 	h.mu.Lock()
 	delete(h.sessions, session)
 	h.mu.Unlock()
 	h.releaseConnection(session.keyID)
 }
 
-func (h *responsesWSHub) reserveAccountTurn(accountID string) bool {
+func (h *Hub) reserveAccountTurn(accountID string) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.accountTurns[accountID] >= responsesWSMaxTurnsPerAccount {
@@ -142,7 +144,7 @@ func (h *responsesWSHub) reserveAccountTurn(accountID string) bool {
 	return true
 }
 
-func (h *responsesWSHub) releaseAccountTurn(accountID string) {
+func (h *Hub) releaseAccountTurn(accountID string) {
 	h.mu.Lock()
 	if h.accountTurns[accountID] <= 1 {
 		delete(h.accountTurns, accountID)
@@ -152,7 +154,7 @@ func (h *responsesWSHub) releaseAccountTurn(accountID string) {
 	h.mu.Unlock()
 }
 
-func (h *responsesWSHub) closeAll() {
+func (h *Hub) CloseAll() {
 	h.mu.Lock()
 	h.closing = true
 	sessions := make([]*responsesWSSession, 0, len(h.sessions))
@@ -168,7 +170,7 @@ func (h *responsesWSHub) closeAll() {
 	}
 }
 
-func (h *responsesWSHub) closeAccount(accountID string) {
+func (h *Hub) CloseAccount(accountID string) {
 	h.mu.Lock()
 	sessions := make([]*responsesWSSession, 0, len(h.sessions))
 	for session := range h.sessions {
@@ -185,7 +187,7 @@ func (h *responsesWSHub) closeAccount(accountID string) {
 	}
 }
 
-func (h *responsesWSHub) metrics() string {
+func (h *Hub) Metrics() string {
 	h.mu.Lock()
 	activeConnections := len(h.sessions)
 	activeTurns := 0
@@ -207,10 +209,8 @@ func (h *responsesWSHub) metrics() string {
 	)
 }
 
-func (s *Server) CloseResponsesWebSockets() { s.responsesWS.closeAll() }
-
-func (s *Server) CloseResponsesWebSocketsForAccount(accountID string) {
-	s.responsesWS.closeAccount(accountID)
+func writeOpenAIError(w http.ResponseWriter, status int, message, code string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]any{"message": message, "type": code, "code": code}})
 }
-
-func (s *Server) ResponsesWebSocketMetrics() string { return s.responsesWS.metrics() }

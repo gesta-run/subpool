@@ -15,7 +15,6 @@ import (
 	"github.com/gesta-run/subpool/internal/domain"
 	"github.com/gesta-run/subpool/internal/provider/codex"
 	"github.com/gesta-run/subpool/internal/provider/openaicompat"
-	"github.com/gesta-run/subpool/internal/store"
 )
 
 type responsesWSBridgeProvider struct {
@@ -111,6 +110,27 @@ func TestResponsesWebSocketUsesConfiguredRequestLimit(t *testing.T) {
 	}
 }
 
+func TestResponsesWebSocketCodexNormalizationClassifiesFailures(t *testing.T) {
+	server, _, _, _ := newTestServer(t)
+	backend := responsesWSBackend{server: server}
+
+	_, requestErr := backend.NormalizeCodexRequest(
+		[]byte(`{"type":"response.create","model":"gpt-test","input":"hello"}`),
+		domain.ProviderAccount{},
+	)
+	if requestErr == nil || requestErr.Status != http.StatusInternalServerError || requestErr.Code != "server_error" {
+		t.Fatalf("identity error = %#v", requestErr)
+	}
+
+	_, requestErr = backend.NormalizeCodexRequest(
+		[]byte(`{"type":"response.create","model":"gpt-test","input":"hello","client_metadata":"invalid"}`),
+		domain.ProviderAccount{ID: "account-1"},
+	)
+	if requestErr == nil || requestErr.Status != http.StatusBadRequest || requestErr.Code != "invalid_request_error" {
+		t.Fatalf("payload error = %#v", requestErr)
+	}
+}
+
 func TestResponsesWebSocketCodexHTTPBridgePreservesFastRouting(t *testing.T) {
 	server, st, provider, plain := newTestServer(t)
 	st.route.Account.FastModeEnabled = true
@@ -194,20 +214,6 @@ func TestResponsesWebSocketRejectsDisabledPinnedAccount(t *testing.T) {
 	errorValue, _ := event["error"].(map[string]any)
 	if event["type"] != "error" || errorValue["code"] != "subpool_session_account_unavailable" {
 		t.Fatalf("event = %#v", event)
-	}
-}
-
-func TestResponsesWebSocketPublishesContinuationBeforeFinishing(t *testing.T) {
-	server, st, _, _ := newTestServer(t)
-	st.sessionErr = store.ErrNotFound
-	session := &responsesWSSession{
-		hub: server.responsesWS, ctx: context.Background(), keyID: st.route.Key.ID,
-		account: st.route.Account, responses: make(map[string]struct{}),
-	}
-	turn := &responsesWSTurn{accountID: st.route.Account.ID}
-	session.observeTurn(turn, []byte(`{"type":"response.completed","response":{"id":"resp-local"}}`), "response.completed")
-	if requestErr := session.validateContinuation("resp-local"); requestErr != nil {
-		t.Fatalf("continuation error = %#v", requestErr)
 	}
 }
 
@@ -377,59 +383,6 @@ func TestResponsesWebSocketNativeCodexClosesWhenModelChanges(t *testing.T) {
 	cancelRead()
 	if err == nil {
 		t.Fatal("model change did not close the downstream WebSocket")
-	}
-}
-
-func TestParseResponsesWSRequestRejectsDuplicateControlField(t *testing.T) {
-	_, requestErr := parseResponsesWSRequest([]byte(`{"type":"response.create","previous_response_id":"first","previous_response_id":"second"}`))
-	if requestErr == nil || !strings.Contains(requestErr.message, "duplicate previous_response_id") {
-		t.Fatalf("request error = %#v", requestErr)
-	}
-}
-
-func TestParseResponsesWSRequestValidatesStreamID(t *testing.T) {
-	for _, streamID := range []string{"", "has space", "worker/1", "任务"} {
-		payload, _ := json.Marshal(map[string]any{"type": "response.create", "stream_id": streamID})
-		if _, requestErr := parseResponsesWSRequest(payload); requestErr == nil || requestErr.code != "invalid_stream_id" {
-			t.Fatalf("stream_id %q was accepted", streamID)
-		}
-	}
-	valid := strings.Repeat("a", responsesWSMaxStreamIDBytes)
-	payload, _ := json.Marshal(map[string]any{"type": "response.create", "stream_id": valid})
-	if _, requestErr := parseResponsesWSRequest(payload); requestErr != nil {
-		t.Fatalf("valid stream_id was rejected: %#v", requestErr)
-	}
-}
-
-func TestClassifyResponsesWSLimitEvent(t *testing.T) {
-	for _, payload := range []string{
-		`{"type":"error","error":{"code":"usage_limit_reached"}}`,
-		`{"type":"error","error":{"message":"You have hit your usage limit. Please try again later."}}`,
-	} {
-		if classifyResponsesWSLimitEvent([]byte(payload)) != responsesWSLimitQuota {
-			t.Fatalf("usage limit event was not recognized: %s", payload)
-		}
-	}
-	if classifyResponsesWSLimitEvent([]byte(`{"type":"response.failed","response":{"error":{"type":"rate_limit_exceeded"}}}`)) != responsesWSLimitTemporary {
-		t.Fatal("temporary rate limit was not recognized")
-	}
-	if classifyResponsesWSLimitEvent([]byte(`{"type":"error","error":{"code":"invalid_request_error","message":"Invalid input"}}`)) != responsesWSLimitNone {
-		t.Fatal("invalid request was classified as a usage limit")
-	}
-}
-
-func TestResponsesWebSocketRejectsTurnDuringNativeFailover(t *testing.T) {
-	server, st, _, _ := newTestServer(t)
-	session := &responsesWSSession{
-		hub: server.responsesWS, ctx: context.Background(), account: st.route.Account,
-		native: true, nativeSwitching: true, streams: make(map[string]*responsesWSStream), named: make(map[string]struct{}),
-	}
-	request, requestErr := parseResponsesWSRequest([]byte(`{"type":"response.create","model":"gpt-test","input":"hello"}`))
-	if requestErr != nil {
-		t.Fatal(requestErr)
-	}
-	if _, reserveErr := session.reserveTurn(request, request.raw, nil); reserveErr == nil || reserveErr.code != "provider_error" {
-		t.Fatalf("reserve error = %#v", reserveErr)
 	}
 }
 
