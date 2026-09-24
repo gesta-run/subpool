@@ -2,11 +2,9 @@ package codex
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 )
 
@@ -53,10 +51,4 @@ func TestRefreshErrorClassification(t *testing.T) {
 			}
 		})
 	}
-}
-
-func testIDToken(t *testing.T, accountID, email string) string {
-	t.Helper()
-	payload, _ := json.Marshal(map[string]any{"email": email, "https://api.openai.com/auth": map[string]any{"chatgpt_account_id": accountID}})
-	return strings.Join([]string{base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"none"}`)), base64.RawURLEncoding.EncodeToString(payload), "signature"}, ".")
 }

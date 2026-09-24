@@ -19,6 +19,8 @@ import (
 	"github.com/gesta-run/subpool/internal/catalog"
 	"github.com/gesta-run/subpool/internal/credential"
 	"github.com/gesta-run/subpool/internal/domain"
+	"github.com/gesta-run/subpool/internal/gateway/responseevent"
+	"github.com/gesta-run/subpool/internal/gateway/responsesws"
 	"github.com/gesta-run/subpool/internal/jsonobject"
 	"github.com/gesta-run/subpool/internal/provider/codex"
 	"github.com/gesta-run/subpool/internal/provider/openaicompat"
@@ -72,7 +74,7 @@ type Server struct {
 	activity            *requestActivityThrottle
 	catalog             *catalog.Service
 	models              *modelCache
-	responsesWS         *responsesWSHub
+	responsesWS         *responsesws.Hub
 	maxRequestBodyBytes int64
 	requestBodyBudget   *byteBudget
 	requestBodyTimeout  time.Duration
@@ -88,7 +90,7 @@ func New(st store.Store, keys *auth.APIKeys, cipher Cipher, client CodexClient, 
 	server := &Server{store: st, keys: keys, cipher: cipher, codex: client, compatible: compatibleClient, refresher: refresher,
 		activity: newRequestActivityThrottle(), models: newModelCache(), maxRequestBodyBytes: defaultMaxRequestBodyBytes,
 		requestBodyBudget: newByteBudget(defaultMaxInflightRequestBodyBytes), requestBodyTimeout: defaultRequestBodyReadTimeout, now: time.Now}
-	server.responsesWS = newResponsesWSHub(server)
+	server.responsesWS = responsesws.New(responsesWSBackend{server: server})
 	return server
 }
 
@@ -109,14 +111,14 @@ func (s *Server) WithModelProviders(codexModels catalog.CodexModels, compatibleM
 }
 
 func (s *Server) WithResponsesWebSocket(enabled, forceHTTPBridge bool, codexUpstreamURL string) *Server {
-	s.responsesWS.configure(enabled, forceHTTPBridge, codexUpstreamURL)
+	s.responsesWS.Configure(enabled, forceHTTPBridge, codexUpstreamURL)
 	return s
 }
 
 func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/responses", s.handleResponses)
-	if s.responsesWS.enabled {
-		mux.HandleFunc("GET /v1/responses", s.responsesWS.handle)
+	if s.responsesWS.Enabled() {
+		mux.HandleFunc("GET /v1/responses", s.responsesWS.Handle)
 	}
 	mux.HandleFunc("POST /v1/chat/completions", s.handleChat)
 	mux.HandleFunc("GET /v1/models", s.handleModels)
@@ -226,8 +228,6 @@ type gatewayError struct {
 	message string
 	code    string
 }
-
-func (e *gatewayError) Error() string { return e.message }
 
 func (s *Server) authenticate(ctx context.Context, authorization, requiredScope string) (domain.KeyRoute, *gatewayError) {
 	plain, err := auth.Bearer(authorization)
@@ -341,7 +341,7 @@ func (s *Server) call(w http.ResponseWriter, r *http.Request, route domain.KeyRo
 	var err error
 	continuation := previousResponseID != ""
 	if continuation {
-		account, err = s.store.ResolveSessionAccount(r.Context(), route.Key.ID, sessionHash(previousResponseID))
+		account, err = s.store.ResolveSessionAccount(r.Context(), route.Key.ID, responseevent.SessionHash(previousResponseID))
 		if err != nil {
 			writeOpenAIError(w, http.StatusServiceUnavailable, "session account is unavailable", "subpool_session_account_unavailable")
 			return nil, false
@@ -526,14 +526,27 @@ func writeRetryFailure(w http.ResponseWriter, reason retryReason) {
 	}
 }
 
-func (s *Server) credentials(account domain.ProviderAccount) (codex.Credentials, error) {
+type providerCredentials struct {
+	codex      codex.Credentials
+	compatible openaicompat.Credentials
+}
+
+func (s *Server) credentials(account domain.ProviderAccount) (providerCredentials, error) {
 	plaintext, err := s.cipher.Decrypt(account.CredentialCiphertext)
 	if err != nil {
-		return codex.Credentials{}, err
+		return providerCredentials{}, err
 	}
-	var credentials codex.Credentials
-	if err = json.Unmarshal(plaintext, &credentials); err != nil {
-		return codex.Credentials{}, err
+	var credentials providerCredentials
+	switch account.Provider {
+	case "", domain.ProviderCodex:
+		err = json.Unmarshal(plaintext, &credentials.codex)
+	case domain.ProviderOpenAICompatible:
+		err = json.Unmarshal(plaintext, &credentials.compatible)
+	default:
+		err = fmt.Errorf("unsupported provider %q", account.Provider)
+	}
+	if err != nil {
+		return providerCredentials{}, err
 	}
 	return credentials, nil
 }
@@ -583,7 +596,7 @@ func drainAndClose(resp *http.Response) {
 	_ = resp.Body.Close()
 }
 
-func (s *Server) providerAccountResponse(ctx context.Context, request upstreamRequest, header http.Header, codexCredentials codex.Credentials, account domain.ProviderAccount) (*http.Response, error) {
+func (s *Server) providerAccountResponse(ctx context.Context, request upstreamRequest, header http.Header, credentials providerCredentials, account domain.ProviderAccount) (*http.Response, error) {
 	var (
 		resp           *http.Response
 		err            error
@@ -603,27 +616,17 @@ func (s *Server) providerAccountResponse(ctx context.Context, request upstreamRe
 		}
 		upstreamHeaders := codex.DeviceIdentityHeaders(header, installationID)
 		codex.SetRoutingHint(upstreamHeaders, request.model, account.FastModeEnabled)
-		resp, err = s.codex.Responses(ctx, codexBody, upstreamHeaders, codexCredentials)
+		resp, err = s.codex.Responses(ctx, codexBody, upstreamHeaders, credentials.codex)
 		responseFormat = "responses"
 	case domain.ProviderOpenAICompatible:
 		if s.compatible == nil {
 			err = errors.New("OpenAI-compatible provider client is unavailable")
 			break
 		}
-		plaintext, decryptErr := s.cipher.Decrypt(account.CredentialCiphertext)
-		if decryptErr != nil {
-			err = decryptErr
-			break
-		}
-		var credentials openaicompat.Credentials
-		if unmarshalErr := json.Unmarshal(plaintext, &credentials); unmarshalErr != nil {
-			err = unmarshalErr
-			break
-		}
 		if request.kind == "chat_completions" {
-			resp, err = s.compatible.ChatCompletions(ctx, request.body, header, credentials)
+			resp, err = s.compatible.ChatCompletions(ctx, request.body, header, credentials.compatible)
 		} else {
-			resp, err = s.compatible.Responses(ctx, forceProviderStream(request.body), header, credentials)
+			resp, err = s.compatible.Responses(ctx, forceProviderStream(request.body), header, credentials.compatible)
 		}
 	default:
 		err = fmt.Errorf("unsupported provider %q", account.Provider)

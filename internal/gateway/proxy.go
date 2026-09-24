@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,6 +12,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/gesta-run/subpool/internal/gateway/responseevent"
 )
 
 func (s *Server) proxyUpstreamError(w http.ResponseWriter, resp *http.Response) {
@@ -29,7 +30,7 @@ func (s *Server) proxyResponsesStream(w http.ResponseWriter, r *http.Request, ke
 	fallbackEventHash := s.randomUsageEventHash()
 	terminal := false
 	input, output, err := copySSE(w, resp.Body, func(data []byte) {
-		if id := responseIDFromEvent(data); id != "" {
+		if id := responseevent.ResponseID(data); id != "" {
 			responseID = id
 		}
 		if event := eventType(data); event == "response.completed" || event == "response.incomplete" {
@@ -76,9 +77,9 @@ func copySSE(w http.ResponseWriter, reader io.Reader, observe func([]byte)) (int
 			if _, writeErr := w.Write(line); writeErr != nil {
 				return input, output, writeErr
 			}
-			if data := sseData(line); len(data) > 0 {
+			if data := responseevent.SSEData(line); len(data) > 0 {
 				observe(data)
-				i, o := usageFromEvent(data)
+				i, o := responseevent.Usage(data)
 				if i > input {
 					input = i
 				}
@@ -99,21 +100,13 @@ func copySSE(w http.ResponseWriter, reader io.Reader, observe func([]byte)) (int
 	}
 }
 
-func sseData(line []byte) []byte {
-	trimmed := strings.TrimSpace(string(line))
-	if !strings.HasPrefix(trimmed, "data:") {
-		return nil
-	}
-	return []byte(strings.TrimSpace(strings.TrimPrefix(trimmed, "data:")))
-}
-
 func completedResponse(resp *http.Response) (any, int64, int64, string, error) {
 	contentType := resp.Header.Get("Content-Type")
 	if strings.Contains(contentType, "application/json") {
 		var value any
 		err := json.NewDecoder(io.LimitReader(resp.Body, 32<<20)).Decode(&value)
 		raw, _ := json.Marshal(value)
-		i, o := usageFromEvent(raw)
+		i, o := responseevent.Usage(raw)
 		status := ""
 		if response, ok := value.(map[string]any); ok {
 			status, _ = response["status"].(string)
@@ -130,11 +123,11 @@ func completedResponse(resp *http.Response) (any, int64, int64, string, error) {
 	var input, output int64
 	var streamedOutput []any
 	for scanner.Scan() {
-		data := sseData(scanner.Bytes())
+		data := responseevent.SSEData(scanner.Bytes())
 		if len(data) == 0 || string(data) == "[DONE]" {
 			continue
 		}
-		i, o := usageFromEvent(data)
+		i, o := responseevent.Usage(data)
 		if i > input {
 			input = i
 		}
@@ -148,7 +141,7 @@ func completedResponse(resp *http.Response) (any, int64, int64, string, error) {
 		eventType, _ := event["type"].(string)
 		if eventType == "response.output_item.added" || eventType == "response.output_item.done" {
 			if item, ok := event["item"].(map[string]any); ok {
-				index := int(number(event["output_index"]))
+				index := int(responseevent.Number(event["output_index"]))
 				for len(streamedOutput) <= index {
 					streamedOutput = append(streamedOutput, nil)
 				}
@@ -180,31 +173,6 @@ func completedResponse(resp *http.Response) (any, int64, int64, string, error) {
 	return completed, input, output, status, nil
 }
 
-func usageFromEvent(data []byte) (int64, int64) {
-	var value map[string]any
-	if json.Unmarshal(data, &value) != nil {
-		return 0, 0
-	}
-	usage, _ := value["usage"].(map[string]any)
-	if response, ok := value["response"].(map[string]any); ok {
-		if nested, ok := response["usage"].(map[string]any); ok {
-			usage = nested
-		}
-	}
-	if usage == nil {
-		return 0, 0
-	}
-	input := number(usage["input_tokens"])
-	if input == 0 {
-		input = number(usage["prompt_tokens"])
-	}
-	output := number(usage["output_tokens"])
-	if output == 0 {
-		output = number(usage["completion_tokens"])
-	}
-	return input, output
-}
-
 func eventType(data []byte) string {
 	var value struct {
 		Type string `json:"type"`
@@ -213,25 +181,6 @@ func eventType(data []byte) string {
 	return value.Type
 }
 
-func responseIDFromEvent(data []byte) string {
-	var value map[string]any
-	if json.Unmarshal(data, &value) != nil {
-		return ""
-	}
-	if id, ok := value["response_id"].(string); ok {
-		return id
-	}
-	if id, ok := value["id"].(string); ok {
-		return id
-	}
-	if response, ok := value["response"].(map[string]any); ok {
-		if id, ok := response["id"].(string); ok {
-			return id
-		}
-	}
-	return ""
-}
-func sessionHash(value string) []byte { sum := sha256.Sum256([]byte(value)); return sum[:] }
 func (s *Server) addUsage(keyID string, eventHash []byte, model string, input, output int64) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -268,7 +217,7 @@ func (s *Server) saveSession(keyID, poolID, responseID, accountID string) {
 	defer cancel()
 	var err error
 	for attempt := 1; attempt <= 3; attempt++ {
-		err = s.store.SaveSessionBinding(ctx, keyID, poolID, sessionHash(responseID), accountID, s.now().Add(24*time.Hour))
+		err = s.store.SaveSessionBinding(ctx, keyID, poolID, responseevent.SessionHash(responseID), accountID, s.now().Add(24*time.Hour))
 		if err == nil {
 			return
 		}
@@ -288,14 +237,4 @@ func waitRetry(ctx context.Context, delay time.Duration) bool {
 	case <-timer.C:
 		return true
 	}
-}
-func number(value any) int64 {
-	switch v := value.(type) {
-	case float64:
-		return int64(v)
-	case json.Number:
-		n, _ := v.Int64()
-		return n
-	}
-	return 0
 }

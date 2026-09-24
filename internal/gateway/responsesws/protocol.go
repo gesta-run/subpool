@@ -1,4 +1,4 @@
-package gateway
+package responsesws
 
 import (
 	"bufio"
@@ -10,10 +10,14 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/gesta-run/subpool/internal/gateway/responseevent"
 	"github.com/gesta-run/subpool/internal/jsonobject"
 )
 
-const responsesWSMaxStreamIDBytes = 256
+const (
+	responsesWSMaxStreamIDBytes = 256
+	maxResponsesWSEventBytes    = 32 << 20
+)
 
 type responsesWSLimitKind uint8
 
@@ -23,27 +27,27 @@ const (
 	responsesWSLimitQuota
 )
 
-func parseResponsesWSRequest(payload []byte) (responsesWSRequest, *gatewayError) {
+func parseResponsesWSRequest(payload []byte) (responsesWSRequest, *RequestError) {
 	trimmed := bytes.TrimSpace(payload)
 	if len(trimmed) == 0 {
-		return responsesWSRequest{}, &gatewayError{http.StatusBadRequest, "invalid response.create message", "invalid_request_error"}
+		return responsesWSRequest{}, &RequestError{http.StatusBadRequest, "invalid response.create message", "invalid_request_error"}
 	}
 	object, err := jsonobject.Parse(trimmed)
 	if err != nil {
-		return responsesWSRequest{}, &gatewayError{http.StatusBadRequest, "response.create message must be a JSON object", "invalid_request_error"}
+		return responsesWSRequest{}, &RequestError{http.StatusBadRequest, "response.create message must be a JSON object", "invalid_request_error"}
 	}
 	for _, field := range []string{"type", "stream_id", "previous_response_id", "model"} {
 		if object.Duplicate(field) {
-			return responsesWSRequest{}, &gatewayError{http.StatusBadRequest, fmt.Sprintf("duplicate %s field", field), "invalid_request_error"}
+			return responsesWSRequest{}, &RequestError{http.StatusBadRequest, fmt.Sprintf("duplicate %s field", field), "invalid_request_error"}
 		}
 	}
 	var request responsesWSRequest
 	if err := json.Unmarshal(trimmed, &request); err != nil || request.Type != "response.create" {
-		return responsesWSRequest{}, &gatewayError{http.StatusBadRequest, "type must be response.create", "invalid_request_error"}
+		return responsesWSRequest{}, &RequestError{http.StatusBadRequest, "type must be response.create", "invalid_request_error"}
 	}
 	if request.StreamID != nil {
 		if !validResponsesWSStreamID(*request.StreamID) {
-			return responsesWSRequest{}, &gatewayError{http.StatusBadRequest, "stream_id must contain 1-256 letters, numbers, underscores, hyphens, or periods", "invalid_stream_id"}
+			return responsesWSRequest{}, &RequestError{http.StatusBadRequest, "stream_id must contain 1-256 letters, numbers, underscores, hyphens, or periods", "invalid_stream_id"}
 		}
 	}
 	request.raw = trimmed
@@ -127,22 +131,22 @@ func terminalResponsesWSEvent(eventType string) bool {
 	}
 }
 
-func responseWSRetryError(reason retryReason) (string, string) {
+func responseWSRetryError(reason RetryReason) (string, string) {
 	switch reason {
-	case retryAuth:
+	case RetryAuth:
 		return "provider_authentication_error", "provider authentication failed"
-	case retryRateLimit:
+	case RetryRateLimit:
 		return "subpool_rate_limited", "provider is rate limited"
-	case retryInvalid:
+	case RetryInvalid:
 		return "invalid_request_error", "client_metadata must be an object"
 	default:
 		return "provider_error", "provider is unavailable"
 	}
 }
 
-func bridgeRetrySafe(reason retryReason) bool {
+func bridgeRetrySafe(reason RetryReason) bool {
 	switch reason {
-	case retryUnavailable, retryAuth, retryRefresh, retryRateLimit, retryProvider5xx:
+	case RetryUnavailable, RetryAuth, RetryRefresh, RetryRateLimit, RetryProvider5xx:
 		return true
 	default:
 		return false
@@ -191,7 +195,7 @@ func (s *responsesWSSession) forwardBridgeResponse(turn *responsesWSTurn, respon
 	scanner := bufio.NewScanner(response.Body)
 	scanner.Buffer(make([]byte, 64<<10), maxResponsesWSEventBytes)
 	for scanner.Scan() {
-		data := sseData(scanner.Bytes())
+		data := responseevent.SSEData(scanner.Bytes())
 		if len(data) > 0 && string(data) != "[DONE]" {
 			if err := s.forwardBridgeEvent(turn, data); err != nil {
 				return err
@@ -228,10 +232,10 @@ func (s *responsesWSSession) observeTurn(turn *responsesWSTurn, payload []byte, 
 		return
 	}
 	turn.forwarded = true
-	if responseID := responseIDFromEvent(payload); responseID != "" {
+	if responseID := responseevent.ResponseID(payload); responseID != "" {
 		turn.response = responseID
 	}
-	input, output := usageFromEvent(payload)
+	input, output := responseevent.Usage(payload)
 	if input > turn.input {
 		turn.input = input
 	}
