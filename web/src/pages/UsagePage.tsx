@@ -99,7 +99,7 @@ export function UsagePage() {
         {data.items.length === 0 && pageIndex === 0 ? <StatePanel kind="empty" title="No token usage yet" description="Usage will appear after an employee API key completes its first request." /> : (
           <div className="table-frame usage-table-frame">
             <header className="usage-table-heading">
-              <div><h3>Usage by employee</h3><p>Expand an employee to inspect API key and model totals.</p></div>
+              <div><h3>Usage by employee</h3><p>Expand an employee to inspect model totals.</p></div>
               <button className="button button--secondary" type="button" disabled={loading} onClick={() => void reload()}><RefreshIcon className="button__icon" /> {loading ? 'Refreshing…' : 'Refresh'}</button>
             </header>
             <table className="usage-table"><thead><tr><th>Employee</th><th>Breakdown</th><th className="number">Input tokens</th><th className="number">Output tokens</th><th className="number">Total</th></tr></thead>
@@ -110,7 +110,7 @@ export function UsagePage() {
                 return <Fragment key={item.employee_id}>
                   <tr className="usage-employee-row">
                     <td data-label="Employee"><button className="usage-employee-toggle" type="button" aria-expanded={expanded} aria-controls={detailsID} onClick={() => setExpandedEmployeeID(expanded ? '' : item.employee_id)}><span className="usage-employee-toggle__icon"><ChevronDownIcon /></span><strong>{employee}</strong></button></td>
-                    <td data-label="Breakdown"><span className="usage-breakdown-count">{item.key_count} {item.key_count === 1 ? 'key' : 'keys'} · {item.model_count} {item.model_count === 1 ? 'model' : 'models'}</span></td>
+                    <td data-label="Breakdown"><span className="usage-breakdown-count">{item.model_count} {item.model_count === 1 ? 'model' : 'models'}</span></td>
                     <td data-label="Input tokens" className="number">{formatTokens(item.input_tokens)}</td>
                     <td data-label="Output tokens" className="number">{formatTokens(item.output_tokens)}</td>
                     <td data-label="Total" className="number"><strong>{formatTokens(item.input_tokens + item.output_tokens)}</strong></td>

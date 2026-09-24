@@ -147,7 +147,7 @@
   min-height: 48px;
   padding: 0 16px 0 18px;
   display: grid;
-  grid-template-columns: minmax(110px, .7fr) minmax(180px, 1fr) repeat(3, minmax(90px, .55fr));
+  grid-template-columns: minmax(180px, 1fr) repeat(3, minmax(90px, .55fr));
   align-items: center;
   gap: 20px;
   border-bottom: 1px solid var(--line);
@@ -166,7 +166,7 @@
   text-transform: uppercase;
 }
 
-.usage-detail-list > div > span:nth-child(n + 3),
+.usage-detail-list > div > span:nth-child(n + 2),
 .usage-detail-list > div > strong {
   text-align: right;
   font-variant-numeric: tabular-nums;
