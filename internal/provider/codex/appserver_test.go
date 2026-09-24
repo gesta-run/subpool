@@ -101,7 +101,8 @@ func TestDeviceAuthReturnsOneTimeCodeAndCredentials(t *testing.T) {
 
 func TestDeviceAuthStartHonorsRequestCancellation(t *testing.T) {
 	executable := filepath.Join(t.TempDir(), "codex-hanging-test")
-	if err := os.WriteFile(executable, []byte("#!/bin/sh\nwhile IFS= read -r line; do :; done\n"), 0o700); err != nil {
+	wrapper := fmt.Sprintf("#!/bin/sh\nSUBPOOL_CODEX_HELPER=1 SUBPOOL_CODEX_STRESS_STDERR=1 exec %q -test.run=TestCodexAppServerHelperProcess -- \"$@\"\n", os.Args[0])
+	if err := os.WriteFile(executable, []byte(wrapper), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	client := NewDeviceAuth()
@@ -132,6 +133,11 @@ func codexTestExecutable(t *testing.T) string {
 func TestCodexAppServerHelperProcess(t *testing.T) {
 	if os.Getenv("SUBPOOL_CODEX_HELPER") != "1" {
 		return
+	}
+	if os.Getenv("SUBPOOL_CODEX_STRESS_STDERR") == "1" {
+		for {
+			_, _ = fmt.Fprintln(os.Stderr, "Codex app-server is still starting")
+		}
 	}
 	scanner := bufio.NewScanner(os.Stdin)
 	consumed := false

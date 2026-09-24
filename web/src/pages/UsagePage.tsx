@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
-import { collection, errorMessage, request } from '../api'
+import { useMemo, useState } from 'react'
 import { ChevronDownIcon, RefreshIcon } from '../components/Icons'
 import { PageSkeleton } from '../components/PageSkeleton'
 import { StatePanel } from '../components/StatePanel'
+import { useRemoteList } from '../hooks/useRemoteList'
 import type { UsageRecord } from '../types'
 import './UsagePage.css'
 
@@ -37,25 +37,9 @@ function rangeQuery(range: Range) {
 
 export function UsagePage() {
   const [range, setRange] = useState<Range>('7d')
-  const [items, setItems] = useState<UsageRecord[]>([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState('')
   const [expandedKey, setExpandedKey] = useState('')
-
-  const load = useCallback(async () => {
-    setLoading(true)
-    setError('')
-    try {
-      const payload = await request<unknown>(`/api/v1/usage${rangeQuery(range)}`)
-      setItems(collection<UsageRecord>(payload, ['usage', 'records']))
-    } catch (caught) {
-      setError(errorMessage(caught))
-    } finally {
-      setLoading(false)
-    }
-  }, [range])
-
-  useEffect(() => { void load() }, [load])
+  const usage = useRemoteList<UsageRecord>(`/api/v1/usage${rangeQuery(range)}`, ['usage', 'records'])
+  const { items, loading, error, reload: load } = usage
 
   const summary = useMemo(() => items.reduce((result, item) => ({
     input: result.input + item.input_tokens,

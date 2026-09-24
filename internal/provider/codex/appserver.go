@@ -160,10 +160,27 @@ type appServerSession struct {
 	cmd         *exec.Cmd
 	stdin       io.WriteCloser
 	scanner     *bufio.Scanner
-	stderr      *bytes.Buffer
+	stderr      *lockedBuffer
 	configDir   string
 	credentials Credentials
 	closeOnce   sync.Once
+}
+
+type lockedBuffer struct {
+	mu     sync.Mutex
+	buffer bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(value []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buffer.Write(value)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buffer.String()
 }
 
 func startAppServerSession(ctx context.Context, executable string, credentials Credentials) (*appServerSession, error) {
@@ -214,7 +231,7 @@ func launchAppServerProcess(ctx context.Context, executable string, credentials 
 		_ = os.RemoveAll(configDir)
 		return nil, fmt.Errorf("open Codex app-server output: %w", err)
 	}
-	stderr := &bytes.Buffer{}
+	stderr := &lockedBuffer{}
 	cmd.Stderr = stderr
 	if err = cmd.Start(); err != nil {
 		_ = os.RemoveAll(configDir)
