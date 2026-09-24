@@ -40,6 +40,11 @@ type controlStore struct {
 	membership       domain.PoolAccount
 	resetSnapshot    []byte
 	resetCheckedAt   *time.Time
+	usageRows        []domain.UsageSummary
+	usageTotals      domain.UsageTotals
+	topUsageKeys     []domain.UsageKeySummary
+	usageFilters     []domain.UsageSummaryFilter
+	topUsageLimit    int
 }
 
 func (f *controlStore) CreateProviderAccount(ctx context.Context, account domain.ProviderAccount) error {
@@ -163,6 +168,19 @@ func (f *controlStore) ClaimProviderResetCreditRefresh(context.Context, string, 
 	return true, nil
 }
 func (f *controlStore) ReleaseProviderResetCreditRefresh(context.Context, string) error { return nil }
+func (f *controlStore) ListUsageSummary(_ context.Context, filter domain.UsageSummaryFilter) ([]domain.UsageSummary, error) {
+	f.usageFilters = append(f.usageFilters, filter)
+	return f.usageRows, nil
+}
+func (f *controlStore) GetUsageTotals(_ context.Context, filter domain.UsageSummaryFilter) (domain.UsageTotals, error) {
+	f.usageFilters = append(f.usageFilters, filter)
+	return f.usageTotals, nil
+}
+func (f *controlStore) ListTopUsageKeys(_ context.Context, filter domain.UsageSummaryFilter, limit int) ([]domain.UsageKeySummary, error) {
+	f.usageFilters = append(f.usageFilters, filter)
+	f.topUsageLimit = limit
+	return f.topUsageKeys, nil
+}
 
 type controlDeviceAuth struct {
 	credentials codex.Credentials
@@ -255,6 +273,93 @@ func TestAdminAuthenticationProtectsControlPlane(t *testing.T) {
 	cookie := login.Result().Cookies()[0]
 	if !cookie.HttpOnly || cookie.SameSite != http.SameSiteStrictMode {
 		t.Fatalf("cookie = %#v", cookie)
+	}
+}
+
+func TestListUsageReturnsBoundedSummaryPage(t *testing.T) {
+	server, st, _ := newControlServer(t)
+	const firstKeyID = "00000000-0000-4000-8000-000000000001"
+	st.usageRows = []domain.UsageSummary{
+		{APIKeyID: firstKeyID, EmployeeName: "Alex", KeyHint: "1111", Model: "model-a", InputTokens: 20, OutputTokens: 5},
+		{APIKeyID: "00000000-0000-4000-8000-000000000002", EmployeeName: "Blair", KeyHint: "2222", Model: "model-b", InputTokens: 10, OutputTokens: 2},
+	}
+	st.usageTotals = domain.UsageTotals{InputTokens: 100, OutputTokens: 25}
+	st.topUsageKeys = []domain.UsageKeySummary{{APIKeyID: firstKeyID, EmployeeName: "Alex", KeyHint: "1111", InputTokens: 60, OutputTokens: 15}}
+	mux := http.NewServeMux()
+	server.Register(mux)
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/usage?from=2026-09-01&to=2026-09-24&api_key_id="+firstKeyID+"&limit=1", nil)
+	request.AddCookie(loginCookie(t, mux))
+	response := httptest.NewRecorder()
+	mux.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	var envelope struct {
+		Data struct {
+			Items      []domain.UsageSummary    `json:"items"`
+			Summary    domain.UsageTotals       `json:"summary"`
+			TopKeys    []domain.UsageKeySummary `json:"top_keys"`
+			NextCursor string                   `json:"next_cursor"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if len(envelope.Data.Items) != 1 || envelope.Data.Items[0].APIKeyID != firstKeyID || envelope.Data.Summary.InputTokens != 100 || len(envelope.Data.TopKeys) != 1 || envelope.Data.NextCursor == "" {
+		t.Fatalf("response = %#v", envelope.Data)
+	}
+	if len(st.usageFilters) != 3 || st.usageFilters[0].Limit != 2 || st.usageFilters[0].APIKeyID != firstKeyID || st.usageFilters[0].From == nil || st.usageFilters[0].To == nil || st.topUsageLimit != 5 {
+		t.Fatalf("filters=%#v top limit=%d", st.usageFilters, st.topUsageLimit)
+	}
+	cursor, err := decodeUsageCursor(envelope.Data.NextCursor)
+	if err != nil || cursor.TotalTokens != 25 || cursor.APIKeyID != firstKeyID || cursor.Model != "model-a" {
+		t.Fatalf("cursor=%#v error=%v", cursor, err)
+	}
+}
+
+func TestListUsageAcceptsCursor(t *testing.T) {
+	server, st, _ := newControlServer(t)
+	const firstKeyID = "00000000-0000-4000-8000-000000000001"
+	cursor, err := encodeUsageCursor(usageCursor{TotalTokens: 25, APIKeyID: firstKeyID, Model: "model-a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mux := http.NewServeMux()
+	server.Register(mux)
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/usage?cursor="+cursor, nil)
+	request.AddCookie(loginCookie(t, mux))
+	response := httptest.NewRecorder()
+	mux.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK || len(st.usageFilters) != 3 || st.usageFilters[0].AfterTotal == nil || *st.usageFilters[0].AfterTotal != 25 || st.usageFilters[0].AfterAPIKey != firstKeyID || st.usageFilters[0].AfterModel != "model-a" {
+		t.Fatalf("status=%d filters=%#v body=%s", response.Code, st.usageFilters, response.Body.String())
+	}
+}
+
+func TestListUsageRejectsInvalidQuery(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		query string
+	}{
+		{name: "invalid limit", query: "limit=101"},
+		{name: "invalid date", query: "from=09-01-2026"},
+		{name: "reversed dates", query: "from=2026-09-24&to=2026-09-01"},
+		{name: "invalid cursor", query: "cursor=not-base64!"},
+		{name: "invalid API key", query: "api_key_id=not-a-uuid"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			server, st, _ := newControlServer(t)
+			mux := http.NewServeMux()
+			server.Register(mux)
+			request := httptest.NewRequest(http.MethodGet, "/api/v1/usage?"+test.query, nil)
+			request.AddCookie(loginCookie(t, mux))
+			response := httptest.NewRecorder()
+			mux.ServeHTTP(response, request)
+			if response.Code != http.StatusBadRequest || len(st.usageFilters) != 0 {
+				t.Fatalf("status=%d filters=%#v body=%s", response.Code, st.usageFilters, response.Body.String())
+			}
+		})
 	}
 }
 

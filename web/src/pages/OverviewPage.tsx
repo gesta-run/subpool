@@ -1,8 +1,10 @@
-import { useMemo } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { errorMessage, request } from '../api'
 import { PageSkeleton } from '../components/PageSkeleton'
 import { StatePanel } from '../components/StatePanel'
 import { useRemoteList } from '../hooks/useRemoteList'
-import type { APIKeyRecord, Pool, ProviderAccount, UsageRecord } from '../types'
+import { useUsagePage } from '../hooks/useUsagePage'
+import type { APIKeyRecord, Pool, ProviderAccount, UsageKeySummary, UsagePageResponse, UsageTotals } from '../types'
 import './OverviewPage.css'
 
 function compact(value: number) {
@@ -41,7 +43,7 @@ function AssignmentsPanel({ accounts, error, onReload }: { accounts: ProviderAcc
   </section>
 }
 
-function UsagePanel({ items, error, onReload }: { items: UsageRecord[]; error: string; onReload: () => void }) {
+function UsagePanel({ items, error, onReload }: { items: UsageKeySummary[]; error: string; onReload: () => void }) {
   return <section className="overview-panel" aria-labelledby="usage-heading-overview">
     <header><div><h3 id="usage-heading-overview">Token usage</h3><p>Input and output totals by API key</p></div><a href="#/usage">View usage</a></header>
     {error ? <StatePanel kind="error" title="Usage unavailable" description={error} actionLabel="Try again" onAction={onReload} /> : items.length === 0 ? <StatePanel kind="empty" title="No token usage yet" description="Usage appears after an employee key completes its first request." /> : <div className="usage-bars">
@@ -59,10 +61,10 @@ function UsagePanel({ items, error, onReload }: { items: UsageRecord[]; error: s
   </section>
 }
 
-function RecentKeysPanel({ accounts, keys, pools, usageByKey, error, onReload }: { accounts: ProviderAccount[]; keys: APIKeyRecord[]; pools: Pool[]; usageByKey: Map<string, UsageRecord>; error: string; onReload: () => void }) {
+function RecentKeysPanel({ accounts, keys, pools, usageByKey, error, onReload }: { accounts: ProviderAccount[]; keys: APIKeyRecord[]; pools: Pool[]; usageByKey: Map<string, UsageTotals>; error: string; onReload: () => void }) {
   return <section className="overview-panel overview-panel--table" aria-labelledby="recent-keys-heading">
     <header><div><h3 id="recent-keys-heading">Recent key activity</h3><p>Usage totals only; request content is never stored</p></div><a href="#/api-keys">Manage keys</a></header>
-    {error ? <StatePanel kind="error" title="API keys unavailable" description={error} actionLabel="Try again" onAction={onReload} /> : keys.length === 0 ? <StatePanel kind="empty" title="No API keys issued" description="Create an employee key after a routing pool is ready." /> : <div className="table-frame"><table><thead><tr><th>Employee</th><th>Pool</th><th>Bound account</th><th className="number">Input</th><th className="number">Output</th><th>Last used</th></tr></thead><tbody>
+    {error ? <StatePanel kind="error" title="Key activity unavailable" description={error} actionLabel="Try again" onAction={onReload} /> : keys.length === 0 ? <StatePanel kind="empty" title="No API keys issued" description="Create an employee key after a routing pool is ready." /> : <div className="table-frame"><table><thead><tr><th>Employee</th><th>Pool</th><th>Bound account</th><th className="number">Input</th><th className="number">Output</th><th>Last used</th></tr></thead><tbody>
       {keys.slice(0, 5).map((key) => {
         const usage = usageByKey.get(key.id)
         return <tr key={key.id}>
@@ -76,37 +78,64 @@ function RecentKeysPanel({ accounts, keys, pools, usageByKey, error, onReload }:
   </section>
 }
 
+function useKeyUsageTotals(keyIDs: string[]) {
+  const [items, setItems] = useState(new Map<string, UsageTotals>())
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const requestID = useRef(0)
+  const activeRequest = useRef<AbortController | null>(null)
+  const keySignature = keyIDs.join('|')
+
+  const reload = useCallback(async () => {
+    const currentRequestID = requestID.current + 1
+    requestID.current = currentRequestID
+    activeRequest.current?.abort()
+    const controller = new AbortController()
+    activeRequest.current = controller
+    setLoading(true)
+    setError('')
+    try {
+      const ids = keySignature ? keySignature.split('|') : []
+      const responses = await Promise.all(ids.map(async (keyID) => {
+        const query = new URLSearchParams({ api_key_id: keyID, limit: '1' })
+        const payload = await request<UsagePageResponse>(`/api/v1/usage?${query.toString()}`, { signal: controller.signal })
+        return [keyID, payload.summary] as const
+      }))
+      if (requestID.current !== currentRequestID) return
+      setItems(new Map(responses))
+    } catch (caught) {
+      if (controller.signal.aborted || requestID.current !== currentRequestID) return
+      setError(errorMessage(caught))
+    } finally {
+      if (requestID.current !== currentRequestID) return
+      activeRequest.current = null
+      setLoading(false)
+    }
+  }, [keySignature])
+
+  useEffect(() => {
+    void reload()
+    return () => {
+      requestID.current += 1
+      activeRequest.current?.abort()
+      activeRequest.current = null
+    }
+  }, [reload])
+
+  return { items, loading, error, reload }
+}
+
 export function OverviewPage() {
   const accounts = useRemoteList<ProviderAccount>('/api/v1/provider-accounts', ['provider_accounts', 'accounts'])
   const pools = useRemoteList<Pool>('/api/v1/pools', ['pools'])
   const keys = useRemoteList<APIKeyRecord>('/api/v1/api-keys', ['api_keys', 'keys'])
-  const usage = useRemoteList<UsageRecord>('/api/v1/usage', ['usage', 'records'])
-
-  const summary = useMemo(() => usage.items.reduce((total, item) => ({
-    input: total.input + item.input_tokens,
-    output: total.output + item.output_tokens,
-  }), { input: 0, output: 0 }), [usage.items])
-
-  const usageByKey = useMemo(() => {
-    const result = new Map<string, UsageRecord>()
-    for (const item of usage.items) {
-      const existing = result.get(item.api_key_id)
-      if (existing) {
-        existing.input_tokens += item.input_tokens
-        existing.output_tokens += item.output_tokens
-      } else {
-        result.set(item.api_key_id, { ...item })
-      }
-    }
-    return result
-  }, [usage.items])
-
-  const topUsage = useMemo(() => [...usageByKey.values()]
-    .sort((a, b) => b.input_tokens + b.output_tokens - a.input_tokens - a.output_tokens)
-    .slice(0, 5), [usageByKey])
+  const usage = useUsagePage('/api/v1/usage?limit=1')
 
   const activeKeys = keys.items.filter((key) => !key.revoked_at)
-  const loading = accounts.loading || pools.loading || keys.loading || usage.loading
+  const recentUsage = useKeyUsageTotals(activeKeys.slice(0, 5).map((key) => key.id))
+  const summary = usage.data?.summary ?? { input_tokens: 0, output_tokens: 0 }
+  const topUsage = usage.data?.top_keys ?? []
+  const loading = accounts.loading || pools.loading || keys.loading || usage.loading || recentUsage.loading
 
   return (
     <section aria-labelledby="overview-heading">
@@ -119,12 +148,12 @@ export function OverviewPage() {
 
       {loading ? <PageSkeleton metrics={4} variant="dashboard" /> : (
         <>
-          <OverviewMetrics accounts={accounts.items} pools={pools.items} keys={activeKeys} input={summary.input} output={summary.output} />
+          <OverviewMetrics accounts={accounts.items} pools={pools.items} keys={activeKeys} input={summary.input_tokens} output={summary.output_tokens} />
           <div className="overview-grid">
             <AssignmentsPanel accounts={accounts.items} error={accounts.error} onReload={() => void accounts.reload()} />
             <UsagePanel items={topUsage} error={usage.error} onReload={() => void usage.reload()} />
           </div>
-          <RecentKeysPanel accounts={accounts.items} keys={activeKeys} pools={pools.items} usageByKey={usageByKey} error={keys.error} onReload={() => void keys.reload()} />
+          <RecentKeysPanel accounts={accounts.items} keys={activeKeys} pools={pools.items} usageByKey={recentUsage.items} error={keys.error || recentUsage.error} onReload={() => { void keys.reload(); void recentUsage.reload() }} />
         </>
       )}
     </section>

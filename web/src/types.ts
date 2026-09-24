@@ -115,16 +115,29 @@ export interface APIKeyRecord {
 
 export interface UsageRecord {
   api_key_id: string
-  employee_name?: string
-  key_hint?: string
-  model?: string
-  usage_date?: string
+  employee_name: string
+  key_hint: string
+  model: string
   input_tokens: number
   output_tokens: number
 }
 
-export interface UsageResponse {
-  items: UsageRecord[]
+export interface UsageKeySummary {
+  api_key_id: string
+  employee_name: string
+  key_hint: string
   input_tokens: number
   output_tokens: number
+}
+
+export interface UsageTotals {
+  input_tokens: number
+  output_tokens: number
+}
+
+export interface UsagePageResponse {
+  items: UsageRecord[]
+  summary: UsageTotals
+  top_keys: UsageKeySummary[]
+  next_cursor: string
 }

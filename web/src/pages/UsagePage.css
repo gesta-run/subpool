@@ -59,44 +59,57 @@
   font-size: 10px;
 }
 
-.usage-page .usage-key-row:has(.usage-key-toggle[aria-expanded="true"]) td,
-.usage-page .usage-model-detail td {
-  background: var(--panel);
+.usage-model-cell {
+  display: grid;
+  gap: 3px;
 }
 
-.usage-page .usage-model-detail td {
-  padding: 0 16px 16px;
+.usage-model-cell small {
+  color: var(--ink-muted);
+  font-size: 9px;
 }
 
-.usage-page .usage-model-list {
-  border: 1px solid var(--line);
-  border-radius: var(--radius-nested);
-  background: var(--paper);
+.usage-feedback {
+  margin-bottom: 16px;
+  min-height: 44px;
+  padding: 10px 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border: 1px solid oklch(0.55 0.12 22 / 0.55);
+  border-radius: var(--radius-control);
+  color: var(--red);
+  background: oklch(0.24 0.04 22);
+  font-size: 11px;
 }
 
-.usage-key-toggle { min-width: 0; border: 0; padding: 0; display: inline-flex; align-items: center; gap: 11px; color: var(--ink); background: transparent; cursor: pointer; text-align: left; }
-.usage-key-toggle__icon { width: 26px; height: 26px; display: grid; place-items: center; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); transition: border-color 160ms ease, background-color 160ms ease; }
-.usage-key-toggle__icon svg { width: 14px; height: 14px; color: var(--ink-muted); transition: transform 160ms ease, color 160ms ease; }
-.usage-key-toggle__label { display: grid; gap: 2px; }
-.usage-key-toggle__label small { margin: 0; color: var(--ink-muted); font-size: 9px; font-weight: 500; }
-.usage-key-toggle[aria-expanded="true"] .usage-key-toggle__icon { border-color: oklch(0.68 0.18 255 / .48); background: oklch(0.3 0.045 255); }
-.usage-key-toggle[aria-expanded="true"] svg { transform: rotate(180deg); color: var(--acid-deep); }
-.usage-key-toggle:focus-visible { border-radius: 4px; outline: 2px solid var(--acid-deep); outline-offset: 4px; }
-.usage-key-row:has(.usage-key-toggle[aria-expanded="true"]) td { border-bottom-color: transparent; background: oklch(0.205 0.006 255); }
-.usage-model-detail:hover { background: transparent; }
-.usage-model-detail td { padding: 0 18px 15px 52px; background: oklch(0.205 0.006 255); }
-.usage-model-list { overflow: hidden; border-left: 2px solid var(--acid-deep); border-radius: 0 7px 7px 0; background: oklch(0.17 0.004 255); }
-.usage-model-list > div { min-height: 48px; padding: 0 16px 0 18px; display: grid; grid-template-columns: minmax(180px, 1fr) repeat(3, minmax(90px, .45fr)); align-items: center; gap: 20px; border-bottom: 1px solid var(--line); }
-.usage-model-list > div:last-child { border-bottom: 0; }
-.usage-model-list .usage-model-list__header { min-height: 32px; color: var(--ink-muted); background: transparent; font-size: 9px; font-weight: 650; letter-spacing: .08em; text-transform: uppercase; }
-.usage-model-list span,
-.usage-model-list strong { text-align: right; font-variant-numeric: tabular-nums; }
-.usage-model-list__header span:first-child { text-align: left; }
-.usage-model-name { display: flex; align-items: center; gap: 10px; text-align: left !important; }
-.usage-model-name > i { width: 6px; height: 6px; flex: 0 0 auto; border-radius: 50%; background: var(--acid-deep); box-shadow: 0 0 0 4px oklch(0.68 0.18 255 / .1); }
-.usage-model-name > span { display: grid; gap: 2px; text-align: left; }
-.usage-model-name strong { color: var(--ink); text-align: left; }
-.usage-model-name small { margin: 0; color: var(--ink-muted); font-size: 9px; text-align: left; }
+.usage-feedback button {
+  min-height: 32px;
+  border: 1px solid currentColor;
+  border-radius: var(--radius-control);
+  padding: 0 12px;
+  color: inherit;
+  background: transparent;
+  font-weight: 650;
+}
+
+.usage-pagination {
+  min-height: 64px;
+  padding: 12px 18px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.usage-pagination span {
+  min-width: 56px;
+  color: var(--ink-muted);
+  font-size: 10px;
+  text-align: center;
+}
 
 @media (max-width: 760px) {
   .usage-page .page-heading {
@@ -114,6 +127,10 @@
   }
 
   .usage-table-heading {
-    min-width: 820px;
+    min-width: 920px;
+  }
+
+  .usage-pagination {
+    min-width: 920px;
   }
 }
