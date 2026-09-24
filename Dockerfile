@@ -20,7 +20,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
 FROM alpine:3.22
 ARG CODEX_CLI_VERSION=0.152.1
 USER root
-RUN apk add --no-cache ca-certificates tzdata nodejs npm \
+RUN apk add --no-cache ca-certificates tzdata nodejs npm tini \
     && npm install -g "@openai/codex@${CODEX_CLI_VERSION}" \
     && npm cache clean --force \
     && addgroup -g 10001 subpool \
@@ -30,4 +30,4 @@ COPY --from=go-builder /out/subpool /usr/local/bin/subpool
 COPY --from=web-builder /src/web/dist ./web/dist
 USER subpool
 EXPOSE 8080
-ENTRYPOINT ["/usr/local/bin/subpool"]
+ENTRYPOINT ["/sbin/tini", "--", "/usr/local/bin/subpool"]
