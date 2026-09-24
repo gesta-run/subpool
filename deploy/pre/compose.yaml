@@ -3,6 +3,7 @@ name: subpool-pre
 services:
   subpool:
     image: ${SUBPOOL_IMAGE:?Set SUBPOOL_IMAGE}
+    init: true
     restart: unless-stopped
     depends_on:
       postgres:
