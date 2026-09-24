@@ -467,6 +467,196 @@ func TestPostgresConcurrentAssignmentHonorsCapacity(t *testing.T) {
 	}
 }
 
+func TestPostgresAssignmentsAndDeletionDoNotUseGlobalLock(t *testing.T) {
+	databaseURL := os.Getenv("SUBPOOL_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("SUBPOOL_TEST_DATABASE_URL is not set")
+	}
+	ctx := context.Background()
+	database, err := Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if err = database.UpdateSettings(ctx, domain.Settings{MaxAPIKeysPerAccount: 3}); err != nil {
+		t.Fatal(err)
+	}
+
+	accounts := []domain.ProviderAccount{
+		{ID: "00000000-0000-4000-8000-000000000901", DisplayName: "Pool A account", SubjectHMAC: bytes.Repeat([]byte{91}, 32)},
+		{ID: "00000000-0000-4000-8000-000000000902", DisplayName: "Pool B account", SubjectHMAC: bytes.Repeat([]byte{92}, 32)},
+		{ID: "00000000-0000-4000-8000-000000000903", DisplayName: "Deletion account", SubjectHMAC: bytes.Repeat([]byte{93}, 32)},
+	}
+	for index := range accounts {
+		accounts[index].Provider = domain.ProviderCodex
+		accounts[index].CredentialType = domain.CredentialSubscription
+		accounts[index].CredentialCiphertext = []byte("encrypted")
+		accounts[index].CredentialVersion = 1
+		accounts[index].Status = domain.AccountActive
+		if err = database.CreateProviderAccount(ctx, accounts[index]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pools := []domain.Pool{
+		{ID: "00000000-0000-4000-8000-000000000911", Name: "Independent pool A", Provider: domain.ProviderCodex},
+		{ID: "00000000-0000-4000-8000-000000000912", Name: "Independent pool B", Provider: domain.ProviderCodex},
+	}
+	for index, pool := range pools {
+		if err = database.CreatePool(ctx, pool); err != nil {
+			t.Fatal(err)
+		}
+		if err = database.AddPoolAccount(ctx, domain.PoolAccount{PoolID: pool.ID, ProviderAccountID: accounts[index].ID, Weight: 1, Enabled: true}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	blocker, err := database.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = blocker.Rollback(ctx) }()
+	if _, err = blocker.Exec(ctx, `SELECT pg_advisory_xact_lock(731242002)`); err != nil {
+		t.Fatal(err)
+	}
+	if err = database.queries.WithTx(blocker).LockPoolAssignments(ctx, pools[0].ID); err != nil {
+		t.Fatal(err)
+	}
+
+	poolBResult := make(chan error, 1)
+	go func() {
+		_, createErr := database.CreateAPIKeyAndBind(ctx, domain.APIKey{
+			ID: "00000000-0000-4000-8000-000000000921", PoolID: pools[1].ID,
+			EmployeeName: "Pool B employee", KeyHMAC: bytes.Repeat([]byte{94}, 32), KeyHint: "0094",
+		})
+		poolBResult <- createErr
+	}()
+	select {
+	case createErr := <-poolBResult:
+		if createErr != nil {
+			t.Fatal(createErr)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("assignment in another pool waited for an unrelated lock")
+	}
+
+	deleteResult := make(chan error, 1)
+	go func() { deleteResult <- database.DeleteProviderAccount(ctx, accounts[2].ID) }()
+	select {
+	case deleteErr := <-deleteResult:
+		if deleteErr != nil {
+			t.Fatal(deleteErr)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("provider deletion waited for the legacy global lock")
+	}
+
+	poolAResult := make(chan error, 1)
+	go func() {
+		_, createErr := database.CreateAPIKeyAndBind(ctx, domain.APIKey{
+			ID: "00000000-0000-4000-8000-000000000922", PoolID: pools[0].ID,
+			EmployeeName: "Pool A employee", KeyHMAC: bytes.Repeat([]byte{95}, 32), KeyHint: "0095",
+		})
+		poolAResult <- createErr
+	}()
+	select {
+	case createErr := <-poolAResult:
+		t.Fatalf("assignment in the locked pool completed early: %v", createErr)
+	case <-time.After(150 * time.Millisecond):
+	}
+	if err = blocker.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case createErr := <-poolAResult:
+		if createErr != nil {
+			t.Fatal(createErr)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("assignment did not resume after its pool lock was released")
+	}
+}
+
+func TestPostgresCrossPoolAssignmentHonorsSharedAccountCapacity(t *testing.T) {
+	databaseURL := os.Getenv("SUBPOOL_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("SUBPOOL_TEST_DATABASE_URL is not set")
+	}
+	ctx := context.Background()
+	database, err := Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if err = database.UpdateSettings(ctx, domain.Settings{MaxAPIKeysPerAccount: 1}); err != nil {
+		t.Fatal(err)
+	}
+	account := domain.ProviderAccount{
+		ID: "00000000-0000-4000-8000-000000000931", Provider: domain.ProviderCodex,
+		CredentialType: domain.CredentialSubscription, DisplayName: "Shared account",
+		SubjectHMAC: bytes.Repeat([]byte{96}, 32), CredentialCiphertext: []byte("encrypted"),
+		CredentialVersion: 1, Status: domain.AccountActive,
+	}
+	if err = database.CreateProviderAccount(ctx, account); err != nil {
+		t.Fatal(err)
+	}
+	pools := []domain.Pool{
+		{ID: "00000000-0000-4000-8000-000000000932", Name: "Shared capacity pool A", Provider: domain.ProviderCodex},
+		{ID: "00000000-0000-4000-8000-000000000933", Name: "Shared capacity pool B", Provider: domain.ProviderCodex},
+	}
+	for _, pool := range pools {
+		if err = database.CreatePool(ctx, pool); err != nil {
+			t.Fatal(err)
+		}
+		if err = database.AddPoolAccount(ctx, domain.PoolAccount{PoolID: pool.ID, ProviderAccountID: account.ID, Weight: 1, Enabled: true}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	blocker, err := database.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = blocker.Rollback(ctx) }()
+	if _, err = database.queries.WithTx(blocker).LockProviderAccountForDeletion(ctx, account.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	results := make(chan error, len(pools))
+	for index, pool := range pools {
+		index, pool := index, pool
+		go func() {
+			_, createErr := database.CreateAPIKeyAndBind(ctx, domain.APIKey{
+				ID: fmt.Sprintf("00000000-0000-4000-8000-%012d", 940+index), PoolID: pool.ID,
+				EmployeeName: fmt.Sprintf("Shared employee %d", index),
+				KeyHMAC:      bytes.Repeat([]byte{byte(97 + index)}, 32), KeyHint: fmt.Sprintf("009%d", 7+index),
+			})
+			results <- createErr
+		}()
+	}
+	time.Sleep(150 * time.Millisecond)
+	if err = blocker.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+	successes, noEligibleErrors := 0, 0
+	for range pools {
+		select {
+		case createErr := <-results:
+			if createErr == nil {
+				successes++
+			} else if errors.Is(createErr, ErrNoEligibleAccount) {
+				noEligibleErrors++
+			} else {
+				t.Fatalf("unexpected assignment error: %v", createErr)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("cross-pool assignment did not finish")
+		}
+	}
+	if successes != 1 || noEligibleErrors != 1 {
+		t.Fatalf("successes=%d no_eligible_errors=%d", successes, noEligibleErrors)
+	}
+}
+
 func TestPostgresMixedPoolPrefersSubscriptionPriority(t *testing.T) {
 	databaseURL := os.Getenv("SUBPOOL_TEST_DATABASE_URL")
 	if databaseURL == "" {

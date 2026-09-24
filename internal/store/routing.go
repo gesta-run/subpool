@@ -8,8 +8,10 @@ import (
 	"time"
 
 	"github.com/gesta-run/subpool/internal/domain"
+	"github.com/gesta-run/subpool/internal/store/storedb"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 func (p *Postgres) CreatePool(ctx context.Context, pool domain.Pool) error {
@@ -18,14 +20,16 @@ func (p *Postgres) CreatePool(ctx context.Context, pool domain.Pool) error {
 		return wrapDB("begin pool creation", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	if _, err = tx.Exec(ctx, `INSERT INTO pools(id,name,provider) VALUES($1,$2,$3)`, pool.ID, pool.Name, pool.Provider); err != nil {
+	queries := p.queries.WithTx(tx)
+	if err = queries.CreatePool(ctx, storedb.CreatePoolParams{ID: pool.ID, Name: pool.Name, Provider: pool.Provider}); err != nil {
 		return wrapDB("create pool", err)
 	}
 	for _, membership := range pool.Accounts {
-		tag, membershipErr := tx.Exec(ctx, `INSERT INTO pool_accounts(pool_id,provider_account_id,weight,priority,enabled)
-			SELECT $1,$2,$3,$4,$5 FROM provider_accounts a WHERE a.id=$2`,
-			pool.ID, membership.ProviderAccountID, membership.Weight, membership.Priority, membership.Enabled)
-		if membershipErr = wrapMutation("add initial pool account", tag.RowsAffected(), membershipErr); membershipErr != nil {
+		affected, membershipErr := queries.AddInitialPoolAccount(ctx, storedb.AddInitialPoolAccountParams{
+			PoolID: pool.ID, ProviderAccountID: membership.ProviderAccountID,
+			Weight: int32(membership.Weight), Priority: int32(membership.Priority), Enabled: membership.Enabled,
+		})
+		if membershipErr = wrapMutation("add initial pool account", affected, membershipErr); membershipErr != nil {
 			return membershipErr
 		}
 	}
@@ -36,49 +40,37 @@ func (p *Postgres) CreatePool(ctx context.Context, pool domain.Pool) error {
 }
 
 func (p *Postgres) UpdatePool(ctx context.Context, pool domain.Pool) error {
-	tag, err := p.pool.Exec(ctx, `UPDATE pools SET name=$2,updated_at=now() WHERE id=$1`, pool.ID, pool.Name)
-	return wrapMutation("update pool", tag.RowsAffected(), err)
+	affected, err := p.queries.UpdatePool(ctx, storedb.UpdatePoolParams{Name: pool.Name, ID: pool.ID})
+	return wrapMutation("update pool", affected, err)
 }
 
 func (p *Postgres) ListPools(ctx context.Context) ([]domain.Pool, error) {
-	rows, err := p.pool.Query(ctx, `SELECT id,name,provider,created_at,updated_at FROM pools ORDER BY created_at`)
+	rows, err := p.queries.ListPools(ctx)
 	if err != nil {
 		return nil, wrapDB("list pools", err)
 	}
-	defer rows.Close()
-	var out []domain.Pool
-	for rows.Next() {
-		var pool domain.Pool
-		if err = rows.Scan(&pool.ID, &pool.Name, &pool.Provider, &pool.CreatedAt, &pool.UpdatedAt); err != nil {
-			return nil, wrapDB("scan pool", err)
-		}
-		out = append(out, pool)
+	var pools []domain.Pool
+	poolIndexes := make(map[string]int, len(rows))
+	for _, row := range rows {
+		poolIndexes[row.ID] = len(pools)
+		pools = append(pools, domain.Pool{
+			ID: row.ID, Name: row.Name, Provider: row.Provider,
+			CreatedAt: row.CreatedAt.Time, UpdatedAt: row.UpdatedAt.Time,
+		})
 	}
-	if err = rows.Err(); err != nil {
-		return nil, wrapDB("list pools", err)
+	memberships, err := p.queries.ListPoolAccounts(ctx)
+	if err != nil {
+		return nil, wrapDB("list pool accounts", err)
 	}
-	poolIndexes := make(map[string]int, len(out))
-	for i := range out {
-		poolIndexes[out[i].ID] = i
-	}
-	memberRows, queryErr := p.pool.Query(ctx, `SELECT pool_id,provider_account_id,weight,priority,enabled FROM pool_accounts ORDER BY priority,provider_account_id`)
-	if queryErr != nil {
-		return nil, wrapDB("list pool accounts", queryErr)
-	}
-	defer memberRows.Close()
-	for memberRows.Next() {
-		var member domain.PoolAccount
-		if queryErr = memberRows.Scan(&member.PoolID, &member.ProviderAccountID, &member.Weight, &member.Priority, &member.Enabled); queryErr != nil {
-			return nil, wrapDB("scan pool account", queryErr)
-		}
-		if index, ok := poolIndexes[member.PoolID]; ok {
-			out[index].Accounts = append(out[index].Accounts, member)
+	for _, row := range memberships {
+		if index, ok := poolIndexes[row.PoolID]; ok {
+			pools[index].Accounts = append(pools[index].Accounts, domain.PoolAccount{
+				PoolID: row.PoolID, ProviderAccountID: row.ProviderAccountID,
+				Weight: int(row.Weight), Priority: int(row.Priority), Enabled: row.Enabled,
+			})
 		}
 	}
-	if queryErr = memberRows.Err(); queryErr != nil {
-		return nil, wrapDB("list pool accounts", queryErr)
-	}
-	return out, nil
+	return pools, nil
 }
 
 func (p *Postgres) AddPoolAccount(ctx context.Context, membership domain.PoolAccount) error {
@@ -87,22 +79,24 @@ func (p *Postgres) AddPoolAccount(ctx context.Context, membership domain.PoolAcc
 		return wrapDB("begin pool account addition", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	var poolProvider, accountProvider string
-	if err = tx.QueryRow(ctx, `SELECT provider FROM pools WHERE id=$1 FOR UPDATE`, membership.PoolID).Scan(&poolProvider); err != nil {
+	queries := p.queries.WithTx(tx)
+	poolProvider, err := queries.LockPoolForUpdate(ctx, membership.PoolID)
+	if err != nil {
 		return wrapDB("lock pool", err)
 	}
-	if err = tx.QueryRow(ctx, `SELECT provider FROM provider_accounts WHERE id=$1`, membership.ProviderAccountID).Scan(&accountProvider); err != nil {
+	accountProvider, err := queries.GetProviderAccountProvider(ctx, membership.ProviderAccountID)
+	if err != nil {
 		return wrapDB("read provider account", err)
 	}
-	tag, err := tx.Exec(ctx, `INSERT INTO pool_accounts(pool_id,provider_account_id,weight,priority,enabled)
-		VALUES($1,$2,$3,$4,$5)
-		ON CONFLICT(pool_id,provider_account_id) DO UPDATE SET weight=excluded.weight,priority=excluded.priority,enabled=excluded.enabled`,
-		membership.PoolID, membership.ProviderAccountID, membership.Weight, membership.Priority, membership.Enabled)
-	if err = wrapMutation("add pool account", tag.RowsAffected(), err); err != nil {
+	affected, err := queries.UpsertPoolAccount(ctx, storedb.UpsertPoolAccountParams{
+		PoolID: membership.PoolID, ProviderAccountID: membership.ProviderAccountID,
+		Weight: int32(membership.Weight), Priority: int32(membership.Priority), Enabled: membership.Enabled,
+	})
+	if err = wrapMutation("add pool account", affected, err); err != nil {
 		return err
 	}
 	if poolProvider != accountProvider && poolProvider != domain.ProviderMixed {
-		if _, err = tx.Exec(ctx, `UPDATE pools SET provider=$2,updated_at=now() WHERE id=$1`, membership.PoolID, domain.ProviderMixed); err != nil {
+		if err = queries.MarkPoolMixed(ctx, membership.PoolID); err != nil {
 			return wrapDB("mark pool mixed", err)
 		}
 	}
@@ -118,17 +112,21 @@ func (p *Postgres) CreateAPIKeyAndBind(ctx context.Context, key domain.APIKey) (
 		return "", wrapDB("begin API key assignment", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(731242002)`); err != nil {
+	queries := p.queries.WithTx(tx)
+	if err = queries.LockPoolAssignments(ctx, key.PoolID); err != nil {
 		return "", wrapDB("lock API key assignment", err)
 	}
-	accountID, err := selectAccountForUpdate(ctx, tx, key.PoolID, nil)
+	accountID, err := selectAccountForUpdate(ctx, queries, key.PoolID, nil)
 	if err != nil {
 		return "", err
 	}
-	_, err = tx.Exec(ctx, `INSERT INTO api_keys(id,pool_id,employee_name,key_hmac,key_hint,scopes,rate_limit,expires_at)
-		VALUES($1,$2,$3,$4,$5,$6,$7,$8)`, key.ID, key.PoolID, key.EmployeeName, key.KeyHMAC, key.KeyHint, nonNilStrings(key.Scopes), key.RateLimit, key.ExpiresAt)
+	err = queries.CreateAPIKey(ctx, storedb.CreateAPIKeyParams{
+		ID: key.ID, PoolID: key.PoolID, EmployeeName: key.EmployeeName,
+		KeyHmac: key.KeyHMAC, KeyHint: key.KeyHint, Scopes: nonNilStrings(key.Scopes),
+		RateLimit: int32(key.RateLimit), ExpiresAt: optionalDBTime(key.ExpiresAt),
+	})
 	if err == nil {
-		_, err = tx.Exec(ctx, `INSERT INTO api_key_account_bindings(api_key_id,provider_account_id) VALUES($1,$2)`, key.ID, accountID)
+		err = queries.BindAPIKey(ctx, storedb.BindAPIKeyParams{ApiKeyID: key.ID, ProviderAccountID: accountID})
 	}
 	if err != nil {
 		return "", wrapDB("create API key", err)
@@ -139,113 +137,118 @@ func (p *Postgres) CreateAPIKeyAndBind(ctx context.Context, key domain.APIKey) (
 	return accountID, nil
 }
 
-func selectAccountForUpdate(ctx context.Context, tx pgx.Tx, poolID string, excludeIDs []string) (string, error) {
-	var id string
-	err := tx.QueryRow(ctx, `SELECT a.id FROM provider_accounts a
-		JOIN pool_accounts pa ON pa.provider_account_id=a.id AND pa.pool_id=$1 AND pa.enabled
-		CROSS JOIN global_settings settings
-		WHERE NOT (a.id::text = ANY(COALESCE($2::text[], ARRAY[]::text[])))
-			AND (a.status='active' OR (a.status='cooling_down' AND a.cooldown_until<=now()))
-			AND COALESCE(NULLIF(a.health_status,''),'unknown')!='unhealthy'
-			AND (SELECT count(*) FROM api_key_account_bindings b JOIN api_keys k ON k.id=b.api_key_id
-				WHERE b.provider_account_id=a.id AND k.revoked_at IS NULL AND (k.expires_at IS NULL OR k.expires_at>now())) < settings.max_api_keys_per_account
-			ORDER BY pa.priority ASC,
-				(SELECT count(*)::numeric / GREATEST(pa.weight,1) FROM api_key_account_bindings b JOIN api_keys k ON k.id=b.api_key_id
-		  WHERE b.provider_account_id=a.id AND k.revoked_at IS NULL AND (k.expires_at IS NULL OR k.expires_at>now())) ASC,
-			 random()
-		FOR UPDATE OF a LIMIT 1`, poolID, excludeIDs).Scan(&id)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return "", ErrNoEligibleAccount
+func selectAccountForUpdate(ctx context.Context, queries *storedb.Queries, poolID string, excludeIDs []string) (string, error) {
+	excluded := append([]string(nil), excludeIDs...)
+	for {
+		id, err := queries.SelectAccountForUpdate(ctx, storedb.SelectAccountForUpdateParams{
+			PoolID: poolID, ExcludeIds: nonNilStrings(excluded),
+		})
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", ErrNoEligibleAccount
+		}
+		if err != nil {
+			return "", wrapDB("select provider account", err)
+		}
+		hasCapacity, err := queries.ProviderAccountHasCapacity(ctx, id)
+		if err != nil {
+			return "", wrapDB("check provider account capacity", err)
+		}
+		if hasCapacity {
+			return id, nil
+		}
+		excluded = append(excluded, id)
 	}
-	return id, wrapDB("select provider account", err)
 }
 
 func (p *Postgres) ListAPIKeys(ctx context.Context) ([]domain.APIKey, error) {
-	rows, err := p.pool.Query(ctx, `SELECT k.id,k.pool_id,COALESCE(b.provider_account_id::text,''),k.employee_name,k.key_hint,k.scopes,k.rate_limit,k.expires_at,k.revoked_at,k.last_used_at,k.created_at
-		FROM api_keys k LEFT JOIN api_key_account_bindings b ON b.api_key_id=k.id
-		ORDER BY k.last_used_at DESC NULLS LAST,k.created_at DESC`)
+	rows, err := p.queries.ListAPIKeys(ctx)
 	if err != nil {
 		return nil, wrapDB("list API keys", err)
 	}
-	defer rows.Close()
-	var out []domain.APIKey
-	for rows.Next() {
-		var key domain.APIKey
-		if err = rows.Scan(&key.ID, &key.PoolID, &key.ProviderAccountID, &key.EmployeeName, &key.KeyHint, &key.Scopes, &key.RateLimit, &key.ExpiresAt, &key.RevokedAt, &key.LastUsedAt, &key.CreatedAt); err != nil {
-			return nil, wrapDB("scan API key", err)
-		}
-		out = append(out, key)
+	var keys []domain.APIKey
+	for _, row := range rows {
+		keys = append(keys, domain.APIKey{
+			ID: row.ID, PoolID: row.PoolID, ProviderAccountID: row.ProviderAccountID,
+			EmployeeName: row.EmployeeName, KeyHint: row.KeyHint, Scopes: row.Scopes,
+			RateLimit: int(row.RateLimit), ExpiresAt: optionalTime(row.ExpiresAt),
+			RevokedAt: optionalTime(row.RevokedAt), LastUsedAt: optionalTime(row.LastUsedAt), CreatedAt: row.CreatedAt.Time,
+		})
 	}
-	return out, wrapDB("list API keys", rows.Err())
+	return keys, nil
 }
 
 func (p *Postgres) RevokeAPIKey(ctx context.Context, id string) error {
-	tag, err := p.pool.Exec(ctx, `UPDATE api_keys SET revoked_at=now() WHERE id=$1 AND revoked_at IS NULL`, id)
-	return wrapMutation("revoke API key", tag.RowsAffected(), err)
+	affected, err := p.queries.RevokeAPIKey(ctx, id)
+	return wrapMutation("revoke API key", affected, err)
 }
 
 func (p *Postgres) ResolveAPIKey(ctx context.Context, digest []byte) (domain.KeyRoute, error) {
-	var route domain.KeyRoute
-	err := p.pool.QueryRow(ctx, `SELECT k.id,k.pool_id,k.employee_name,k.key_hint,k.scopes,k.rate_limit,k.expires_at,k.revoked_at,k.last_used_at,k.created_at,
-		p.id,p.name,p.provider,p.created_at,p.updated_at,
-		a.id,a.provider,a.credential_type,a.display_name,a.credential_ciphertext,a.credential_version,a.status,a.fast_mode_enabled,a.health_status,a.quota_snapshot,a.cooldown_until,a.last_success_at,a.last_failure_at,a.created_at,a.updated_at,
-		pa.enabled
-		FROM api_keys k JOIN pools p ON p.id=k.pool_id JOIN api_key_account_bindings b ON b.api_key_id=k.id JOIN provider_accounts a ON a.id=b.provider_account_id
-		JOIN pool_accounts pa ON pa.pool_id=p.id AND pa.provider_account_id=a.id
-		WHERE k.key_hmac=$1 AND k.revoked_at IS NULL AND (k.expires_at IS NULL OR k.expires_at>now())`, digest).Scan(
-		&route.Key.ID, &route.Key.PoolID, &route.Key.EmployeeName, &route.Key.KeyHint, &route.Key.Scopes, &route.Key.RateLimit, &route.Key.ExpiresAt, &route.Key.RevokedAt, &route.Key.LastUsedAt, &route.Key.CreatedAt,
-		&route.Pool.ID, &route.Pool.Name, &route.Pool.Provider, &route.Pool.CreatedAt, &route.Pool.UpdatedAt,
-		&route.Account.ID, &route.Account.Provider, &route.Account.CredentialType, &route.Account.DisplayName, &route.Account.CredentialCiphertext, &route.Account.CredentialVersion, &route.Account.Status, &route.Account.FastModeEnabled, &route.Account.HealthStatus, &route.Account.QuotaSnapshot, &route.Account.CooldownUntil, &route.Account.LastSuccessAt, &route.Account.LastFailureAt, &route.Account.CreatedAt, &route.Account.UpdatedAt,
-		&route.MembershipEnabled)
-	return route, wrapDB("resolve API key", err)
+	row, err := p.queries.ResolveAPIKey(ctx, digest)
+	if err != nil {
+		return domain.KeyRoute{}, wrapDB("resolve API key", err)
+	}
+	return domain.KeyRoute{
+		Key: domain.APIKey{
+			ID: row.KeyID, PoolID: row.KeyPoolID, EmployeeName: row.EmployeeName, KeyHint: row.KeyHint,
+			Scopes: row.Scopes, RateLimit: int(row.RateLimit), ExpiresAt: optionalTime(row.KeyExpiresAt),
+			RevokedAt: optionalTime(row.RevokedAt), LastUsedAt: optionalTime(row.LastUsedAt), CreatedAt: row.KeyCreatedAt.Time,
+		},
+		Pool: domain.Pool{ID: row.PoolID, Name: row.PoolName, Provider: row.PoolProvider, CreatedAt: row.PoolCreatedAt.Time, UpdatedAt: row.PoolUpdatedAt.Time},
+		Account: routeAccount(row.AccountID, row.AccountProvider, row.CredentialType, row.DisplayName,
+			row.CredentialCiphertext, row.CredentialVersion, row.Status, row.FastModeEnabled, row.HealthStatus,
+			row.QuotaSnapshot, row.CooldownUntil, row.LastSuccessAt, row.LastFailureAt, row.AccountCreatedAt, row.AccountUpdatedAt),
+		MembershipEnabled: row.MembershipEnabled,
+	}, nil
 }
 
 func (p *Postgres) ResolvePinnedAPIKey(ctx context.Context, digest []byte, poolID, accountID string) (domain.KeyRoute, error) {
-	var route domain.KeyRoute
-	err := p.pool.QueryRow(ctx, `SELECT k.id,k.pool_id,k.employee_name,k.key_hint,k.scopes,k.rate_limit,k.expires_at,k.revoked_at,k.last_used_at,k.created_at,
-		p.id,p.name,p.provider,p.created_at,p.updated_at,
-		a.id,a.provider,a.credential_type,a.display_name,a.credential_ciphertext,a.credential_version,a.status,a.fast_mode_enabled,a.health_status,a.quota_snapshot,a.cooldown_until,a.last_success_at,a.last_failure_at,a.created_at,a.updated_at,
-		pa.enabled
-		FROM api_keys k JOIN pools p ON p.id=k.pool_id
-		JOIN pool_accounts pa ON pa.pool_id=p.id AND pa.provider_account_id=$3
-		JOIN provider_accounts a ON a.id=pa.provider_account_id
-		WHERE k.key_hmac=$1 AND k.pool_id=$2 AND k.revoked_at IS NULL AND (k.expires_at IS NULL OR k.expires_at>now())`, digest, poolID, accountID).Scan(
-		&route.Key.ID, &route.Key.PoolID, &route.Key.EmployeeName, &route.Key.KeyHint, &route.Key.Scopes, &route.Key.RateLimit, &route.Key.ExpiresAt, &route.Key.RevokedAt, &route.Key.LastUsedAt, &route.Key.CreatedAt,
-		&route.Pool.ID, &route.Pool.Name, &route.Pool.Provider, &route.Pool.CreatedAt, &route.Pool.UpdatedAt,
-		&route.Account.ID, &route.Account.Provider, &route.Account.CredentialType, &route.Account.DisplayName, &route.Account.CredentialCiphertext, &route.Account.CredentialVersion, &route.Account.Status, &route.Account.FastModeEnabled, &route.Account.HealthStatus, &route.Account.QuotaSnapshot, &route.Account.CooldownUntil, &route.Account.LastSuccessAt, &route.Account.LastFailureAt, &route.Account.CreatedAt, &route.Account.UpdatedAt,
-		&route.MembershipEnabled)
-	err = wrapDB("resolve pinned API key", err)
-	if !errors.Is(err, ErrNotFound) {
-		return route, err
+	row, err := p.queries.ResolvePinnedAPIKey(ctx, storedb.ResolvePinnedAPIKeyParams{
+		AccountID: accountID, KeyHmac: digest, PoolID: poolID,
+	})
+	if err == nil {
+		return domain.KeyRoute{
+			Key: domain.APIKey{
+				ID: row.KeyID, PoolID: row.KeyPoolID, EmployeeName: row.EmployeeName, KeyHint: row.KeyHint,
+				Scopes: row.Scopes, RateLimit: int(row.RateLimit), ExpiresAt: optionalTime(row.KeyExpiresAt),
+				RevokedAt: optionalTime(row.RevokedAt), LastUsedAt: optionalTime(row.LastUsedAt), CreatedAt: row.KeyCreatedAt.Time,
+			},
+			Pool: domain.Pool{ID: row.PoolID, Name: row.PoolName, Provider: row.PoolProvider, CreatedAt: row.PoolCreatedAt.Time, UpdatedAt: row.PoolUpdatedAt.Time},
+			Account: routeAccount(row.AccountID, row.AccountProvider, row.CredentialType, row.DisplayName,
+				row.CredentialCiphertext, row.CredentialVersion, row.Status, row.FastModeEnabled, row.HealthStatus,
+				row.QuotaSnapshot, row.CooldownUntil, row.LastSuccessAt, row.LastFailureAt, row.AccountCreatedAt, row.AccountUpdatedAt),
+			MembershipEnabled: row.MembershipEnabled,
+		}, nil
 	}
-	var keyValid bool
-	checkErr := p.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM api_keys
-		WHERE key_hmac=$1 AND pool_id=$2 AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at>now()))`, digest, poolID).Scan(&keyValid)
+	resolvedErr := wrapDB("resolve pinned API key", err)
+	if !errors.Is(resolvedErr, ErrNotFound) {
+		return domain.KeyRoute{}, resolvedErr
+	}
+	valid, checkErr := p.queries.PinnedAPIKeyValid(ctx, storedb.PinnedAPIKeyValidParams{KeyHmac: digest, PoolID: poolID})
 	if checkErr != nil {
 		return domain.KeyRoute{}, wrapDB("check pinned API key", checkErr)
 	}
-	if keyValid {
+	if valid {
 		return domain.KeyRoute{}, ErrPinnedUnavailable
 	}
 	return domain.KeyRoute{}, ErrNotFound
 }
 
 func (p *Postgres) ResolveSessionAccount(ctx context.Context, keyID string, sessionHash []byte) (domain.ProviderAccount, error) {
-	var account domain.ProviderAccount
-	err := p.pool.QueryRow(ctx, `SELECT a.id,a.provider,a.credential_type,a.display_name,a.credential_ciphertext,a.credential_version,a.status,
-		a.fast_mode_enabled,a.health_status,a.quota_snapshot,a.cooldown_until,a.last_success_at,a.last_failure_at,a.created_at,a.updated_at
-		FROM session_bindings s JOIN provider_accounts a ON a.id=s.provider_account_id
-		JOIN pool_accounts pa ON pa.pool_id=s.pool_id AND pa.provider_account_id=a.id AND pa.enabled
-		WHERE s.api_key_id=$1 AND s.session_hash=$2 AND s.expires_at>now()`, keyID, sessionHash).Scan(
-		&account.ID, &account.Provider, &account.CredentialType, &account.DisplayName, &account.CredentialCiphertext, &account.CredentialVersion, &account.Status,
-		&account.FastModeEnabled, &account.HealthStatus, &account.QuotaSnapshot, &account.CooldownUntil, &account.LastSuccessAt, &account.LastFailureAt, &account.CreatedAt, &account.UpdatedAt)
-	return account, wrapDB("resolve session account", err)
+	row, err := p.queries.ResolveSessionAccount(ctx, storedb.ResolveSessionAccountParams{ApiKeyID: keyID, SessionHash: sessionHash})
+	if err != nil {
+		return domain.ProviderAccount{}, wrapDB("resolve session account", err)
+	}
+	return routeAccount(row.ID, row.Provider, row.CredentialType, row.DisplayName,
+		row.CredentialCiphertext, row.CredentialVersion, row.Status, row.FastModeEnabled,
+		row.HealthStatus, row.QuotaSnapshot, row.CooldownUntil, row.LastSuccessAt,
+		row.LastFailureAt, row.CreatedAt, row.UpdatedAt), nil
 }
 
 func (p *Postgres) SaveSessionBinding(ctx context.Context, keyID, poolID string, sessionHash []byte, accountID string, expiresAt time.Time) error {
-	_, err := p.pool.Exec(ctx, `INSERT INTO session_bindings(api_key_id,pool_id,session_hash,provider_account_id,expires_at)
-		VALUES($1,$2,$3,$4,$5) ON CONFLICT(api_key_id,session_hash) DO UPDATE SET expires_at=GREATEST(session_bindings.expires_at,excluded.expires_at)
-		WHERE session_bindings.provider_account_id=excluded.provider_account_id`, keyID, poolID, sessionHash, accountID, expiresAt)
+	err := p.queries.SaveSessionBinding(ctx, storedb.SaveSessionBindingParams{
+		ApiKeyID: keyID, PoolID: poolID, SessionHash: sessionHash,
+		ProviderAccountID: accountID, ExpiresAt: dbTime(expiresAt),
+	})
 	return wrapDB("save session binding", err)
 }
 
@@ -255,38 +258,34 @@ func (p *Postgres) ReassignAPIKey(ctx context.Context, keyID, poolID string, exc
 		return domain.ProviderAccount{}, wrapDB("begin API key reassignment", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(731242002)`); err != nil {
+	queries := p.queries.WithTx(tx)
+	if err = queries.LockPoolAssignments(ctx, poolID); err != nil {
 		return domain.ProviderAccount{}, wrapDB("lock API key reassignment", err)
 	}
-	id, err := selectAccountForUpdate(ctx, tx, poolID, excludeIDs)
+	id, err := selectAccountForUpdate(ctx, queries, poolID, excludeIDs)
 	if err != nil {
 		return domain.ProviderAccount{}, err
 	}
-	_, err = tx.Exec(ctx, `UPDATE api_key_account_bindings SET provider_account_id=$2,assigned_at=now() WHERE api_key_id=$1`, keyID, id)
-	if err != nil {
+	if err = queries.ReassignAPIKey(ctx, storedb.ReassignAPIKeyParams{ProviderAccountID: id, ApiKeyID: keyID}); err != nil {
 		return domain.ProviderAccount{}, wrapDB("reassign API key", err)
 	}
-	var account domain.ProviderAccount
-	err = tx.QueryRow(ctx, `SELECT id,provider,credential_type,display_name,credential_ciphertext,credential_version,status,fast_mode_enabled,health_status,quota_snapshot,cooldown_until,last_success_at,last_failure_at,created_at,updated_at FROM provider_accounts WHERE id=$1`, id).Scan(
-		&account.ID, &account.Provider, &account.CredentialType, &account.DisplayName, &account.CredentialCiphertext, &account.CredentialVersion, &account.Status, &account.FastModeEnabled, &account.HealthStatus, &account.QuotaSnapshot, &account.CooldownUntil, &account.LastSuccessAt, &account.LastFailureAt, &account.CreatedAt, &account.UpdatedAt)
+	row, err := queries.GetRoutableProviderAccount(ctx, id)
 	if err != nil {
 		return domain.ProviderAccount{}, wrapDB("read reassigned account", err)
 	}
 	if err = tx.Commit(ctx); err != nil {
 		return domain.ProviderAccount{}, wrapDB("commit API key reassignment", err)
 	}
-	return account, nil
+	return routeAccount(row.ID, row.Provider, row.CredentialType, row.DisplayName,
+		row.CredentialCiphertext, row.CredentialVersion, row.Status, row.FastModeEnabled,
+		row.HealthStatus, row.QuotaSnapshot, row.CooldownUntil, row.LastSuccessAt,
+		row.LastFailureAt, row.CreatedAt, row.UpdatedAt), nil
 }
 
 func (p *Postgres) RecordRequestSuccess(ctx context.Context, accountID, keyID string, occurredAt time.Time) error {
-	_, err := p.pool.Exec(ctx, `WITH account AS (
-		UPDATE provider_accounts SET
-			status=CASE WHEN status IN ('disabled','exhausted') THEN status ELSE 'active' END,
-			cooldown_until=CASE WHEN status IN ('disabled','exhausted') THEN cooldown_until ELSE NULL END,
-			last_success_at=$3,
-			health_status='healthy',last_checked_at=$3,last_health_error_code=NULL,consecutive_health_failures=0,
-			updated_at=now() WHERE id=$1 RETURNING id
-	) UPDATE api_keys SET last_used_at=$3 WHERE id=$2 AND EXISTS(SELECT 1 FROM account)`, accountID, keyID, occurredAt)
+	err := p.queries.RecordRequestSuccess(ctx, storedb.RecordRequestSuccessParams{
+		OccurredAt: dbTime(occurredAt), ApiKeyID: keyID, AccountID: accountID,
+	})
 	return wrapDB("record request success", err)
 }
 
@@ -306,24 +305,25 @@ func (p *Postgres) AddUsage(ctx context.Context, keyID string, eventHash []byte,
 		return wrapDB("begin usage transaction", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	tag, err := tx.Exec(ctx, `INSERT INTO usage_event_dedup(api_key_id,event_hash) VALUES($1,$2) ON CONFLICT DO NOTHING`, keyID, eventHash)
+	queries := p.queries.WithTx(tx)
+	affected, err := queries.DeduplicateUsageEvent(ctx, storedb.DeduplicateUsageEventParams{ApiKeyID: keyID, EventHash: eventHash})
 	if err != nil {
 		return wrapDB("deduplicate usage event", err)
 	}
-	if tag.RowsAffected() == 0 {
+	if affected == 0 {
 		if err = tx.Commit(ctx); err != nil {
 			return wrapDB("commit duplicate usage event", err)
 		}
 		return nil
 	}
-	_, err = tx.Exec(ctx, `INSERT INTO api_key_usage_daily(api_key_id,usage_date,model,input_tokens,output_tokens)
-		VALUES($1,$2,$3,$4,$5) ON CONFLICT(api_key_id,usage_date,model) DO UPDATE SET
-		input_tokens=api_key_usage_daily.input_tokens+excluded.input_tokens,
-		output_tokens=api_key_usage_daily.output_tokens+excluded.output_tokens,updated_at=now()`, keyID, day.UTC(), model, input, output)
+	err = queries.AddUsage(ctx, storedb.AddUsageParams{
+		ApiKeyID: keyID, UsageDate: pgtype.Date{Time: day.UTC(), Valid: true},
+		Model: model, InputTokens: input, OutputTokens: output,
+	})
 	if err != nil {
 		return wrapDB("add usage", err)
 	}
-	_, err = tx.Exec(ctx, `UPDATE api_keys SET last_used_at=GREATEST(COALESCE(last_used_at,$2),$2) WHERE id=$1`, keyID, day.UTC())
+	err = queries.UpdateAPIKeyActivity(ctx, storedb.UpdateAPIKeyActivityParams{OccurredAt: dbTime(day.UTC()), ID: keyID})
 	if err != nil {
 		return wrapDB("update API key activity", err)
 	}
@@ -334,36 +334,44 @@ func (p *Postgres) AddUsage(ctx context.Context, keyID string, eventHash []byte,
 }
 
 func (p *Postgres) ListUsage(ctx context.Context, filter domain.UsageFilter) ([]domain.UsageRow, error) {
-	rows, err := p.pool.Query(ctx, `SELECT u.api_key_id,k.employee_name,k.key_hint,u.model,u.usage_date,u.input_tokens,u.output_tokens
-		FROM api_key_usage_daily u JOIN api_keys k ON k.id=u.api_key_id
-		WHERE (NULLIF($1,'')::uuid IS NULL OR u.api_key_id=NULLIF($1,'')::uuid) AND ($2::timestamptz IS NULL OR u.usage_date >= $2::date) AND ($3::timestamptz IS NULL OR u.usage_date <= $3::date)
-		ORDER BY u.usage_date DESC,k.employee_name,u.model`, filter.APIKeyID, filter.From, filter.To)
+	rows, err := p.queries.ListUsage(ctx, storedb.ListUsageParams{
+		ApiKeyID: filter.APIKeyID, FromTime: optionalDBTime(filter.From), ToTime: optionalDBTime(filter.To),
+	})
 	if err != nil {
 		return nil, wrapDB("list usage", err)
 	}
-	defer rows.Close()
-	var out []domain.UsageRow
-	for rows.Next() {
-		var row domain.UsageRow
-		if err = rows.Scan(&row.APIKeyID, &row.EmployeeName, &row.KeyHint, &row.Model, &row.UsageDate, &row.InputTokens, &row.OutputTokens); err != nil {
-			return nil, wrapDB("scan usage", err)
-		}
-		out = append(out, row)
+	var usage []domain.UsageRow
+	for _, row := range rows {
+		usage = append(usage, domain.UsageRow{
+			APIKeyID: row.ApiKeyID, EmployeeName: row.EmployeeName, KeyHint: row.KeyHint,
+			Model: row.Model, UsageDate: row.UsageDate.Time,
+			InputTokens: row.InputTokens, OutputTokens: row.OutputTokens,
+		})
 	}
-	return out, wrapDB("list usage", rows.Err())
+	return usage, nil
 }
 
 func (p *Postgres) Audit(ctx context.Context, event domain.AuditEvent) error {
-	_, err := p.pool.Exec(ctx, `INSERT INTO audit_events(actor,action,target_type,target_id,result) VALUES($1,$2,$3,$4,$5)`, event.Actor, event.Action, event.TargetType, event.TargetID, event.Result)
+	err := p.queries.WriteAuditEvent(ctx, storedb.WriteAuditEventParams{
+		Actor: event.Actor, Action: event.Action, TargetType: event.TargetType,
+		TargetID: event.TargetID, Result: event.Result,
+	})
 	return wrapDB("write audit event", err)
 }
 
-func nullableJSON(raw []byte) any {
-	if len(raw) == 0 {
-		return nil
+func routeAccount(id, provider, credentialType, displayName string, ciphertext []byte, version int32,
+	status string, fastMode bool, healthStatus string, quota []byte, cooldown, lastSuccess,
+	lastFailure, createdAt, updatedAt pgtype.Timestamptz,
+) domain.ProviderAccount {
+	return domain.ProviderAccount{
+		ID: id, Provider: provider, CredentialType: credentialType, DisplayName: displayName,
+		CredentialCiphertext: ciphertext, CredentialVersion: int(version), Status: status,
+		FastModeEnabled: fastMode, HealthStatus: healthStatus, QuotaSnapshot: quota,
+		CooldownUntil: optionalTime(cooldown), LastSuccessAt: optionalTime(lastSuccess),
+		LastFailureAt: optionalTime(lastFailure), CreatedAt: createdAt.Time, UpdatedAt: updatedAt.Time,
 	}
-	return string(raw)
 }
+
 func nonNilStrings(values []string) []string {
 	if values == nil {
 		return []string{}
@@ -389,7 +397,7 @@ func wrapDB(action string, err error) error {
 		return ErrNotFound
 	}
 	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+	if errors.As(err, &pgErr) && (pgErr.Code == "23503" || pgErr.Code == "23505") {
 		return ErrConflict
 	}
 	return fmt.Errorf("%s: %w", action, err)

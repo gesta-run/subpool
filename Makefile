@@ -1,4 +1,6 @@
-.PHONY: dev web-install web-test web-build test build compose-up compose-dev-up compose-down
+.PHONY: dev web-install web-test web-build generate test build compose-up compose-dev-up compose-down
+
+SQLC_VERSION ?= v1.30.0
 
 dev:
 	cd web && npm run dev
@@ -11,6 +13,9 @@ web-test:
 
 web-build:
 	cd web && npm run build
+
+generate:
+	go run github.com/sqlc-dev/sqlc/cmd/sqlc@$(SQLC_VERSION) generate
 
 test: web-test
 	go test ./...
