@@ -4,11 +4,15 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"mime"
 	"net/http"
 	"net/url"
 	"os"
 	"os/signal"
+	pathpkg "path"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -117,14 +121,62 @@ func registerWeb(mux *http.ServeMux) {
 	if info, err := os.Stat(dist); err == nil && info.IsDir() {
 		files := http.FileServer(http.Dir(dist))
 		mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
-			path := filepath.Join(dist, filepath.Clean(r.URL.Path))
-			if info, err := os.Stat(path); err == nil && !info.IsDir() {
+			cleanPath := pathpkg.Clean("/" + r.URL.Path)
+			filePath := filepath.Join(dist, filepath.FromSlash(strings.TrimPrefix(cleanPath, "/")))
+			if info, err := os.Stat(filePath); err == nil && !info.IsDir() {
+				if filepath.Ext(filePath) == ".html" {
+					w.Header().Set("Cache-Control", "no-cache")
+				} else if strings.HasPrefix(cleanPath, "/assets/") {
+					w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+					w.Header().Set("Vary", "Accept-Encoding")
+					if acceptsGzip(r.Header.Get("Accept-Encoding")) && serveGzipFile(w, r, filePath, info.ModTime()) {
+						return
+					}
+				}
 				files.ServeHTTP(w, r)
 				return
 			}
+			w.Header().Set("Cache-Control", "no-cache")
 			http.ServeFile(w, r, filepath.Join(dist, "index.html"))
 		})
 	}
+}
+
+func acceptsGzip(value string) bool {
+	for _, item := range strings.Split(value, ",") {
+		parts := strings.Split(item, ";")
+		if !strings.EqualFold(strings.TrimSpace(parts[0]), "gzip") {
+			continue
+		}
+		quality := 1.0
+		for _, parameter := range parts[1:] {
+			name, raw, found := strings.Cut(strings.TrimSpace(parameter), "=")
+			if !found || !strings.EqualFold(name, "q") {
+				continue
+			}
+			parsed, err := strconv.ParseFloat(strings.TrimSpace(raw), 64)
+			if err != nil {
+				return false
+			}
+			quality = parsed
+		}
+		return quality > 0
+	}
+	return false
+}
+
+func serveGzipFile(w http.ResponseWriter, r *http.Request, originalPath string, modTime time.Time) bool {
+	file, err := os.Open(originalPath + ".gz")
+	if err != nil {
+		return false
+	}
+	defer file.Close()
+	w.Header().Set("Content-Encoding", "gzip")
+	if contentType := mime.TypeByExtension(filepath.Ext(originalPath)); contentType != "" {
+		w.Header().Set("Content-Type", contentType)
+	}
+	http.ServeContent(w, r, filepath.Base(originalPath), modTime, file)
+	return true
 }
 
 func securityHeaders(next http.Handler) http.Handler {
