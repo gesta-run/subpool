@@ -231,6 +231,44 @@ func TestResponsesWebSocketBridgesCopilotAccount(t *testing.T) {
 	}
 }
 
+func TestResponsesWebSocketRestoresCopilotToolNamespace(t *testing.T) {
+	server, st, _, plain := newTestServer(t)
+	cipher := server.cipher.(*credential.Cipher)
+	st.route.Account = copilotAccountWithCipher(t, cipher, "copilot-account")
+	st.route.Pool.Provider = domain.ProviderCopilot
+	provider := &fakeCopilotProvider{response: sseResponse(http.StatusOK,
+		`data: {"id":"chatcmpl-ws-tool","model":"gpt-test","choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-1","type":"function","function":{"name":"workspace__read_file","arguments":"{\"path\":\"README.md\"}"}}]},"finish_reason":"tool_calls"}]}`+"\n\n"+
+			`data: {"id":"chatcmpl-ws-tool","choices":[],"usage":{"prompt_tokens":4,"completion_tokens":1}}`+"\n\n"+
+			"data: [DONE]\n\n")}
+	server.WithCopilot(provider)
+	server.WithResponsesWebSocket(true, false, "")
+
+	client, cleanup := dialResponsesWSTestServer(t, server, plain)
+	defer cleanup()
+	request := `{"type":"response.create","model":"gpt-test","input":"read it","tools":[{"type":"namespace","name":"workspace","tools":[{"type":"function","name":"read_file","defer_loading":true,"parameters":{"type":"object"}}]},{"type":"tool_search"}]}`
+	writeResponsesWSMessage(t, client, request)
+	foundNamespace := false
+	foundTerminal := false
+	for range 12 {
+		event := readResponsesWSMessage(t, client)
+		payload, _ := json.Marshal(event)
+		if strings.Contains(string(payload), `"name":"read_file"`) && strings.Contains(string(payload), `"namespace":"workspace"`) {
+			foundNamespace = true
+		}
+		if event["type"] == "response.completed" {
+			foundTerminal = true
+			break
+		}
+	}
+	if !foundNamespace || !foundTerminal {
+		t.Fatalf("namespace=%v terminal=%v upstream=%s", foundNamespace, foundTerminal, provider.body)
+	}
+	upstream := string(provider.body)
+	if !strings.Contains(upstream, `"name":"workspace__read_file"`) || strings.Contains(upstream, `tool_search`) || strings.Contains(upstream, `defer_loading`) {
+		t.Fatalf("upstream request = %s", upstream)
+	}
+}
+
 func TestResponsesWebSocketCopilotBridgeMarksQuotaExhausted(t *testing.T) {
 	server, st, _, plain := newTestServer(t)
 	cipher := server.cipher.(*credential.Cipher)

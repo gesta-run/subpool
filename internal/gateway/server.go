@@ -33,6 +33,7 @@ const (
 	accountHeader       = "X-Subpool-Internal-Account-Id"
 	formatHeader        = "X-Subpool-Internal-Response-Format"
 	customToolHeader    = "X-Subpool-Internal-Copilot-Custom-Tool"
+	namespaceToolHeader = "X-Subpool-Internal-Copilot-Namespace-Tool"
 	// Retry-After can point at the next quota window, days away, while quota may
 	// return sooner (manual reset, top-up); static keys have no quota probe.
 	maxRateLimitCooldown = 15 * time.Minute
@@ -144,11 +145,11 @@ type requestMeta struct {
 }
 
 type upstreamRequest struct {
-	kind               string
-	model              string
-	body               []byte
-	codexBody          []byte
-	copilotCustomTools map[string]struct{}
+	kind         string
+	model        string
+	body         []byte
+	codexBody    []byte
+	copilotTools map[string]copilotToolInfo
 }
 
 func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
@@ -169,27 +170,25 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
 	defer resp.Body.Close()
 	accountID := resp.Header.Get(accountHeader)
 	format := resp.Header.Get(formatHeader)
-	customTools := make(map[string]struct{})
-	for _, name := range resp.Header.Values(customToolHeader) {
-		customTools[name] = struct{}{}
-	}
+	copilotTools := copilotToolsFromHeaders(resp.Header)
 	resp.Header.Del(accountHeader)
 	resp.Header.Del(formatHeader)
 	resp.Header.Del(customToolHeader)
+	resp.Header.Del(namespaceToolHeader)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		s.proxyUpstreamError(w, resp)
 		return
 	}
 	if meta.Stream {
 		if format == "chat_completions" {
-			s.proxyCopilotResponsesStream(w, route.Key.ID, route.Pool.ID, accountID, meta.Model, customTools, resp)
+			s.proxyCopilotResponsesStream(w, route.Key.ID, route.Pool.ID, accountID, meta.Model, copilotTools, resp)
 			return
 		}
 		s.proxyResponsesStream(w, r, route.Key.ID, route.Pool.ID, accountID, meta.Model, resp)
 		return
 	}
 	if format == "chat_completions" {
-		s.proxyCopilotResponsesJSON(w, route.Key.ID, route.Pool.ID, accountID, meta.Model, customTools, resp)
+		s.proxyCopilotResponsesJSON(w, route.Key.ID, route.Pool.ID, accountID, meta.Model, copilotTools, resp)
 		return
 	}
 	s.proxyResponsesJSON(w, r, route.Key.ID, route.Pool.ID, accountID, meta.Model, resp)
@@ -429,7 +428,7 @@ func (s *Server) call(w http.ResponseWriter, r *http.Request, route domain.KeyRo
 
 func (s *Server) attemptAccount(r *http.Request, route domain.KeyRoute, request upstreamRequest, account domain.ProviderAccount) (*http.Response, retryReason, bool) {
 	if account.Provider == domain.ProviderCopilot && request.kind == "responses" {
-		body, customTools, err := responsesToChat(request.body)
+		body, copilotTools, err := responsesToChat(request.body)
 		if err != nil {
 			if route.Pool.Provider == domain.ProviderMixed {
 				return nil, retryUnsupported, false
@@ -437,7 +436,7 @@ func (s *Server) attemptAccount(r *http.Request, route domain.KeyRoute, request 
 			return openAIErrorResponse(http.StatusBadRequest, err.Error(), "unsupported_request"), "", true
 		}
 		request.body = body
-		request.copilotCustomTools = customTools
+		request.copilotTools = copilotTools
 	}
 	credentials, err := s.credentials(account)
 	if err != nil {
@@ -730,10 +729,7 @@ func (s *Server) providerAccountResponse(ctx context.Context, request upstreamRe
 		return nil, errors.New("provider returned an empty response")
 	}
 	resp.Header.Set(formatHeader, responseFormat)
-	resp.Header.Del(customToolHeader)
-	for name := range request.copilotCustomTools {
-		resp.Header.Add(customToolHeader, name)
-	}
+	setCopilotToolHeaders(resp.Header, request.copilotTools)
 	return resp, nil
 }
 

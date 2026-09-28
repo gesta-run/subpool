@@ -2,6 +2,8 @@ package gateway
 
 import (
 	"bufio"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -11,7 +13,15 @@ import (
 	"github.com/gesta-run/subpool/internal/gateway/responseevent"
 )
 
-func responsesToChat(raw []byte) ([]byte, map[string]struct{}, error) {
+const maxCopilotToolNameLength = 64
+
+type copilotToolInfo struct {
+	Name      string `json:"name"`
+	Namespace string `json:"namespace,omitempty"`
+	Custom    bool   `json:"custom,omitempty"`
+}
+
+func responsesToChat(raw []byte) ([]byte, map[string]copilotToolInfo, error) {
 	var response map[string]any
 	if err := json.Unmarshal(raw, &response); err != nil {
 		return nil, nil, fmt.Errorf("invalid JSON request")
@@ -20,7 +30,7 @@ func responsesToChat(raw []byte) ([]byte, map[string]struct{}, error) {
 		return nil, nil, fmt.Errorf("previous_response_id is not supported for GitHub Copilot Responses compatibility")
 	}
 	chat := make(map[string]any)
-	customTools := make(map[string]struct{})
+	copilotTools := make(map[string]copilotToolInfo)
 	for _, name := range []string{"model", "stream", "temperature", "top_p", "parallel_tool_calls"} {
 		if value, exists := response[name]; exists {
 			chat[name] = value
@@ -34,7 +44,17 @@ func responsesToChat(raw []byte) ([]byte, map[string]struct{}, error) {
 			chat["reasoning_effort"] = effort
 		}
 	}
-	messages, err := responsesInputToChat(response["input"])
+	if tools, exists := response["tools"]; exists {
+		converted, mappings, convertErr := responsesToolsToChat(tools)
+		if convertErr != nil {
+			return nil, nil, convertErr
+		}
+		if len(converted) > 0 {
+			chat["tools"] = converted
+		}
+		copilotTools = mappings
+	}
+	messages, err := responsesInputToChat(response["input"], copilotTools)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -48,16 +68,8 @@ func responsesToChat(raw []byte) ([]byte, map[string]struct{}, error) {
 		}
 	}
 	chat["messages"] = messages
-	if tools, exists := response["tools"]; exists {
-		converted, custom, convertErr := responsesToolsToChat(tools)
-		if convertErr != nil {
-			return nil, nil, convertErr
-		}
-		chat["tools"] = converted
-		customTools = custom
-	}
 	if choice, exists := response["tool_choice"]; exists {
-		converted, convertErr := responseToolChoiceToChat(choice)
+		converted, convertErr := responseToolChoiceToChat(choice, copilotTools)
 		if convertErr != nil {
 			return nil, nil, convertErr
 		}
@@ -76,10 +88,10 @@ func responsesToChat(raw []byte) ([]byte, map[string]struct{}, error) {
 		chat["stream_options"] = map[string]any{"include_usage": true}
 	}
 	body, err := json.Marshal(chat)
-	return body, customTools, err
+	return body, copilotTools, err
 }
 
-func responsesInputToChat(input any) ([]any, error) {
+func responsesInputToChat(input any, copilotTools map[string]copilotToolInfo) ([]any, error) {
 	if text, ok := input.(string); ok {
 		return []any{map[string]any{"role": "user", "content": text}}, nil
 	}
@@ -101,7 +113,7 @@ func responsesInputToChat(input any) ([]any, error) {
 			}
 			messages = append(messages, message)
 		case "function_call":
-			if err := appendResponseFunctionCall(&messages, item); err != nil {
+			if err := appendResponseFunctionCall(&messages, item, copilotTools); err != nil {
 				return nil, err
 			}
 		case "custom_tool_call":
@@ -113,7 +125,7 @@ func responsesInputToChat(input any) ([]any, error) {
 			customCall := map[string]any{
 				"call_id": item["call_id"], "name": item["name"], "arguments": string(arguments),
 			}
-			if err := appendResponseFunctionCall(&messages, customCall); err != nil {
+			if err := appendResponseFunctionCall(&messages, customCall, copilotTools); err != nil {
 				return nil, err
 			}
 		case "function_call_output", "custom_tool_call_output":
@@ -184,13 +196,15 @@ func responseContentToChat(content any) (any, error) {
 	return converted, nil
 }
 
-func appendResponseFunctionCall(messages *[]any, item map[string]any) error {
+func appendResponseFunctionCall(messages *[]any, item map[string]any, copilotTools map[string]copilotToolInfo) error {
 	callID, _ := item["call_id"].(string)
 	name, _ := item["name"].(string)
+	namespace, _ := item["namespace"].(string)
 	arguments, _ := item["arguments"].(string)
 	if callID == "" || name == "" {
 		return fmt.Errorf("function_call requires call_id and name")
 	}
+	name = copilotToolName(name, namespace, copilotTools)
 	call := map[string]any{"id": callID, "type": "function", "function": map[string]any{"name": name, "arguments": arguments}}
 	if len(*messages) > 0 {
 		if previous, ok := (*messages)[len(*messages)-1].(map[string]any); ok && previous["role"] == "assistant" && previous["content"] == nil {
@@ -215,13 +229,25 @@ func stringifyToolOutput(output any) string {
 	return string(raw)
 }
 
-func responsesToolsToChat(value any) ([]any, map[string]struct{}, error) {
+func responsesToolsToChat(value any) ([]any, map[string]copilotToolInfo, error) {
 	tools, ok := value.([]any)
 	if !ok {
 		return nil, nil, fmt.Errorf("tools must be an array")
 	}
 	converted := make([]any, 0, len(tools))
-	custom := make(map[string]struct{})
+	mappings := make(map[string]copilotToolInfo)
+	usedNames := make(map[string]struct{})
+	for _, rawTool := range tools {
+		tool, valid := rawTool.(map[string]any)
+		if !valid {
+			continue
+		}
+		if tool["type"] == "function" || tool["type"] == "custom" {
+			if name, _ := tool["name"].(string); name != "" {
+				usedNames[name] = struct{}{}
+			}
+		}
+	}
 	for _, rawTool := range tools {
 		tool, ok := rawTool.(map[string]any)
 		if !ok {
@@ -230,15 +256,9 @@ func responsesToolsToChat(value any) ([]any, map[string]struct{}, error) {
 		toolType, _ := tool["type"].(string)
 		switch toolType {
 		case "function":
-			name, _ := tool["name"].(string)
-			if name == "" {
-				return nil, nil, fmt.Errorf("function tool requires name")
-			}
-			function := map[string]any{"name": name}
-			for _, field := range []string{"description", "parameters", "strict"} {
-				if fieldValue, exists := tool[field]; exists {
-					function[field] = fieldValue
-				}
+			function, err := responseFunctionToolToChat(tool, "")
+			if err != nil {
+				return nil, nil, err
 			}
 			converted = append(converted, map[string]any{"type": "function", "function": function})
 		case "custom":
@@ -246,7 +266,7 @@ func responsesToolsToChat(value any) ([]any, map[string]struct{}, error) {
 			if name == "" {
 				return nil, nil, fmt.Errorf("custom tool requires name")
 			}
-			custom[name] = struct{}{}
+			mappings[name] = copilotToolInfo{Name: name, Custom: true}
 			function := map[string]any{"name": name}
 			if description, ok := tool["description"].(string); ok && description != "" {
 				function["description"] = description
@@ -256,14 +276,145 @@ func responsesToolsToChat(value any) ([]any, map[string]struct{}, error) {
 				"required": []string{"input"}, "additionalProperties": false,
 			}
 			converted = append(converted, map[string]any{"type": "function", "function": function})
+		case "namespace":
+			namespace, _ := tool["name"].(string)
+			if namespace == "" {
+				return nil, nil, fmt.Errorf("namespace tool requires name")
+			}
+			children, ok := tool["tools"].([]any)
+			if !ok {
+				return nil, nil, fmt.Errorf("namespace tool requires tools")
+			}
+			for _, rawChild := range children {
+				child, valid := rawChild.(map[string]any)
+				if !valid {
+					return nil, nil, fmt.Errorf("namespace tools entries must be objects")
+				}
+				if child["type"] != "function" {
+					return nil, nil, fmt.Errorf("namespace tool type %q is not supported for GitHub Copilot", child["type"])
+				}
+				name, _ := child["name"].(string)
+				upstreamName := namespacedCopilotToolName(namespace, name, usedNames)
+				function, err := responseFunctionToolToChat(child, upstreamName)
+				if err != nil {
+					return nil, nil, err
+				}
+				usedNames[upstreamName] = struct{}{}
+				mappings[upstreamName] = copilotToolInfo{Name: name, Namespace: namespace}
+				converted = append(converted, map[string]any{"type": "function", "function": function})
+			}
+		case "tool_search":
+			execution, exists := tool["execution"]
+			if !exists || execution == "server" {
+				continue
+			}
+			if mode, ok := execution.(string); ok {
+				return nil, nil, fmt.Errorf("tool_search execution %q is not supported for GitHub Copilot", mode)
+			}
+			return nil, nil, fmt.Errorf("tool_search execution must be \"server\" for GitHub Copilot")
 		default:
 			return nil, nil, fmt.Errorf("tool type %q is not supported for GitHub Copilot", toolType)
 		}
 	}
-	return converted, custom, nil
+	return converted, mappings, nil
 }
 
-func responseToolChoiceToChat(value any) (any, error) {
+func responseFunctionToolToChat(tool map[string]any, name string) (map[string]any, error) {
+	originalName, _ := tool["name"].(string)
+	if originalName == "" {
+		return nil, fmt.Errorf("function tool requires name")
+	}
+	if name == "" {
+		name = originalName
+	}
+	function := map[string]any{"name": name}
+	for _, field := range []string{"description", "parameters", "strict"} {
+		if fieldValue, exists := tool[field]; exists {
+			function[field] = fieldValue
+		}
+	}
+	return function, nil
+}
+
+func namespacedCopilotToolName(namespace, name string, used map[string]struct{}) string {
+	base := namespace + "__" + name
+	if len(base) <= maxCopilotToolNameLength {
+		if _, exists := used[base]; !exists {
+			return base
+		}
+	}
+	digest := fmt.Sprintf("%x", sha256.Sum256([]byte(namespace+"\x00"+name)))
+	for hashLength := 12; hashLength <= len(digest); hashLength += 4 {
+		suffix := "__" + digest[:hashLength]
+		prefixLength := maxCopilotToolNameLength - len(suffix)
+		candidate := base
+		if len(candidate) > prefixLength {
+			candidate = candidate[:prefixLength]
+		}
+		candidate += suffix
+		if _, exists := used[candidate]; !exists {
+			return candidate
+		}
+	}
+	return digest[:maxCopilotToolNameLength]
+}
+
+func copilotToolName(name, namespace string, mappings map[string]copilotToolInfo) string {
+	if namespace == "" {
+		return name
+	}
+	for upstreamName, info := range mappings {
+		if info.Name == name && info.Namespace == namespace {
+			return upstreamName
+		}
+	}
+	return namespacedCopilotToolName(namespace, name, nil)
+}
+
+func setCopilotToolHeaders(header http.Header, mappings map[string]copilotToolInfo) {
+	header.Del(customToolHeader)
+	header.Del(namespaceToolHeader)
+	for upstreamName, info := range mappings {
+		if info.Custom {
+			header.Add(customToolHeader, upstreamName)
+		}
+		if info.Namespace == "" {
+			continue
+		}
+		payload, err := json.Marshal(struct {
+			UpstreamName string `json:"upstream_name"`
+			Name         string `json:"name"`
+			Namespace    string `json:"namespace"`
+		}{upstreamName, info.Name, info.Namespace})
+		if err == nil {
+			header.Add(namespaceToolHeader, base64.RawURLEncoding.EncodeToString(payload))
+		}
+	}
+}
+
+func copilotToolsFromHeaders(header http.Header) map[string]copilotToolInfo {
+	mappings := make(map[string]copilotToolInfo)
+	for _, name := range header.Values(customToolHeader) {
+		mappings[name] = copilotToolInfo{Name: name, Custom: true}
+	}
+	for _, encoded := range header.Values(namespaceToolHeader) {
+		payload, err := base64.RawURLEncoding.DecodeString(encoded)
+		if err != nil {
+			continue
+		}
+		var value struct {
+			UpstreamName string `json:"upstream_name"`
+			Name         string `json:"name"`
+			Namespace    string `json:"namespace"`
+		}
+		if json.Unmarshal(payload, &value) == nil && value.UpstreamName != "" && value.Name != "" && value.Namespace != "" {
+			mappings[value.UpstreamName] = copilotToolInfo{Name: value.Name, Namespace: value.Namespace}
+		}
+	}
+	return mappings
+}
+
+func responseToolChoiceToChat(value any, copilotTools map[string]copilotToolInfo) (any, error) {
 	if choice, ok := value.(string); ok {
 		switch choice {
 		case "auto", "none", "required":
@@ -280,6 +431,8 @@ func responseToolChoiceToChat(value any) (any, error) {
 	if name == "" {
 		return nil, fmt.Errorf("function tool_choice requires name")
 	}
+	namespace, _ := choice["namespace"].(string)
+	name = copilotToolName(name, namespace, copilotTools)
 	return map[string]any{"type": "function", "function": map[string]any{"name": name}}, nil
 }
 
@@ -308,14 +461,14 @@ func responseTextFormatToChat(value any) (any, error) {
 	}
 }
 
-func (s *Server) proxyCopilotResponsesJSON(w http.ResponseWriter, keyID, poolID, accountID, model string, customTools map[string]struct{}, resp *http.Response) {
+func (s *Server) proxyCopilotResponsesJSON(w http.ResponseWriter, keyID, poolID, accountID, model string, copilotTools map[string]copilotToolInfo, resp *http.Response) {
 	var completion map[string]any
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 32<<20)).Decode(&completion); err != nil {
 		writeOpenAIError(w, http.StatusBadGateway, "invalid provider response", "provider_error")
 		return
 	}
 	fallbackID := fmt.Sprintf("subpool-%d-%d", s.now().UnixNano(), s.eventSeq.Add(1))
-	response, input, output, err := chatCompletionToResponse(completion, model, fallbackID, customTools)
+	response, input, output, err := chatCompletionToResponse(completion, model, fallbackID, copilotTools)
 	if err != nil {
 		writeOpenAIError(w, http.StatusBadGateway, "invalid provider response", "provider_error")
 		return
@@ -331,7 +484,7 @@ func (s *Server) proxyCopilotResponsesJSON(w http.ResponseWriter, keyID, poolID,
 	writeJSON(w, http.StatusOK, response)
 }
 
-func chatCompletionToResponse(completion map[string]any, fallbackModel, fallbackID string, customTools map[string]struct{}) (map[string]any, int64, int64, error) {
+func chatCompletionToResponse(completion map[string]any, fallbackModel, fallbackID string, copilotTools map[string]copilotToolInfo) (map[string]any, int64, int64, error) {
 	choices, ok := completion["choices"].([]any)
 	if !ok || len(choices) == 0 {
 		return nil, 0, 0, fmt.Errorf("chat completion has no choices")
@@ -351,7 +504,7 @@ func chatCompletionToResponse(completion map[string]any, fallbackModel, fallback
 		model = fallbackModel
 	}
 	created := responseevent.Number(completion["created"])
-	output, err := chatMessageToResponseOutput(message, responseID, customTools)
+	output, err := chatMessageToResponseOutput(message, responseID, copilotTools)
 	if err != nil {
 		return nil, 0, 0, err
 	}
@@ -363,7 +516,7 @@ func chatCompletionToResponse(completion map[string]any, fallbackModel, fallback
 	return response, input, outputTokens, nil
 }
 
-func chatMessageToResponseOutput(message map[string]any, responseID string, customTools map[string]struct{}) ([]any, error) {
+func chatMessageToResponseOutput(message map[string]any, responseID string, copilotTools map[string]copilotToolInfo) ([]any, error) {
 	output := make([]any, 0, 2)
 	content := make([]any, 0, 1)
 	if text, ok := message["content"].(string); ok && text != "" {
@@ -394,20 +547,28 @@ func chatMessageToResponseOutput(message map[string]any, responseID string, cust
 			if callID == "" || name == "" {
 				return nil, fmt.Errorf("chat completion function call is incomplete")
 			}
-			if _, custom := customTools[name]; custom {
-				output = append(output, responseCustomToolCall(callID, name, customToolInput(arguments), "completed"))
+			info, mapped := copilotTools[name]
+			if mapped && info.Custom {
+				output = append(output, responseCustomToolCall(callID, info.Name, customToolInput(arguments), "completed"))
 			} else {
-				output = append(output, responseFunctionCall(callID, name, arguments, "completed"))
+				if !mapped {
+					info.Name = name
+				}
+				output = append(output, responseFunctionCall(callID, info.Name, arguments, "completed", info.Namespace))
 			}
 		}
 	}
 	return output, nil
 }
 
-func responseFunctionCall(callID, name, arguments, status string) map[string]any {
-	return map[string]any{
+func responseFunctionCall(callID, name, arguments, status string, namespace ...string) map[string]any {
+	item := map[string]any{
 		"id": callID, "type": "function_call", "status": status, "call_id": callID, "name": name, "arguments": arguments,
 	}
+	if len(namespace) > 0 && namespace[0] != "" {
+		item["namespace"] = namespace[0]
+	}
+	return item
 }
 
 func responseCustomToolCall(callID, name, input, status string) map[string]any {
@@ -486,7 +647,7 @@ type copilotResponsesStreamState struct {
 	inputTokens  int64
 	outputTokens int64
 	usage        map[string]any
-	customTools  map[string]struct{}
+	copilotTools map[string]copilotToolInfo
 	limit        responseevent.LimitKind
 }
 
@@ -501,20 +662,22 @@ type copilotStreamMessage struct {
 }
 
 type copilotStreamTool struct {
-	id          string
-	name        strings.Builder
-	arguments   strings.Builder
-	outputIndex int
-	added       bool
-	custom      bool
+	id           string
+	name         strings.Builder
+	responseName string
+	namespace    string
+	arguments    strings.Builder
+	outputIndex  int
+	added        bool
+	custom       bool
 }
 
-func (s *Server) proxyCopilotResponsesStream(w http.ResponseWriter, keyID, poolID, accountID, model string, customTools map[string]struct{}, resp *http.Response) {
+func (s *Server) proxyCopilotResponsesStream(w http.ResponseWriter, keyID, poolID, accountID, model string, copilotTools map[string]copilotToolInfo, resp *http.Response) {
 	copyResponseHeaders(w.Header(), resp.Header)
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.WriteHeader(http.StatusOK)
-	state, err := s.writeCopilotResponsesStream(w, model, customTools, resp.Body)
+	state, err := s.writeCopilotResponsesStream(w, model, copilotTools, resp.Body)
 	s.recordProviderStreamLimit(accountID, state.limit)
 	if err != nil || state.failed {
 		return
@@ -527,11 +690,11 @@ func (s *Server) proxyCopilotResponsesStream(w http.ResponseWriter, keyID, poolI
 	}
 }
 
-func (s *Server) writeCopilotResponsesStream(w http.ResponseWriter, model string, customTools map[string]struct{}, reader io.Reader) (*copilotResponsesStreamState, error) {
+func (s *Server) writeCopilotResponsesStream(w http.ResponseWriter, model string, copilotTools map[string]copilotToolInfo, reader io.Reader) (*copilotResponsesStreamState, error) {
 	fallbackID := fmt.Sprintf("subpool-%d-%d", s.now().UnixNano(), s.eventSeq.Add(1))
 	state := &copilotResponsesStreamState{
 		responseID: copilotResponseID("", fallbackID), model: model, created: s.now().Unix(),
-		tools: make(map[int]*copilotStreamTool), customTools: customTools,
+		tools: make(map[int]*copilotStreamTool), copilotTools: copilotTools,
 	}
 	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 64<<10), 32<<20)
@@ -574,20 +737,18 @@ func (w *pipeResponseWriter) WriteHeader(int)                   {}
 func (w *pipeResponseWriter) Flush()                            {}
 
 func (s *Server) bridgeCopilotResponses(resp *http.Response, model string) *http.Response {
-	customTools := make(map[string]struct{})
-	for _, name := range resp.Header.Values(customToolHeader) {
-		customTools[name] = struct{}{}
-	}
+	copilotTools := copilotToolsFromHeaders(resp.Header)
 	header := resp.Header.Clone()
 	header.Del(accountHeader)
 	header.Del(formatHeader)
 	header.Del(customToolHeader)
+	header.Del(namespaceToolHeader)
 	header.Set("Content-Type", "text/event-stream")
 	reader, writer := io.Pipe()
 	go func() {
 		defer resp.Body.Close()
 		sink := &pipeResponseWriter{header: make(http.Header), writer: writer}
-		_, err := s.writeCopilotResponsesStream(sink, model, customTools, resp.Body)
+		_, err := s.writeCopilotResponsesStream(sink, model, copilotTools, resp.Body)
 		_ = writer.CloseWithError(err)
 	}()
 	return &http.Response{StatusCode: resp.StatusCode, Header: header, Body: reader}
@@ -745,10 +906,18 @@ func (s *copilotResponsesStreamState) addTool(w http.ResponseWriter, tool *copil
 		return
 	}
 	tool.added = true
-	_, tool.custom = s.customTools[tool.name.String()]
-	item := responseFunctionCall(tool.id, tool.name.String(), "", "in_progress")
+	upstreamName := tool.name.String()
+	info, mapped := s.copilotTools[upstreamName]
+	if mapped {
+		tool.responseName = info.Name
+		tool.namespace = info.Namespace
+		tool.custom = info.Custom
+	} else {
+		tool.responseName = upstreamName
+	}
+	item := responseFunctionCall(tool.id, tool.responseName, "", "in_progress", tool.namespace)
 	if tool.custom {
-		item = responseCustomToolCall(tool.id, tool.name.String(), "", "in_progress")
+		item = responseCustomToolCall(tool.id, tool.responseName, "", "in_progress")
 	}
 	s.emit(w, map[string]any{"type": "response.output_item.added", "output_index": tool.outputIndex, "item": item})
 }
@@ -768,12 +937,12 @@ func (s *copilotResponsesStreamState) finish(w http.ResponseWriter) bool {
 			}
 			s.addTool(w, tool)
 			arguments := tool.arguments.String()
-			item := responseFunctionCall(tool.id, tool.name.String(), arguments, "completed")
+			item := responseFunctionCall(tool.id, tool.responseName, arguments, "completed", tool.namespace)
 			if tool.custom {
 				input := customToolInput(arguments)
 				s.emit(w, map[string]any{"type": "response.custom_tool_call_input.delta", "item_id": tool.id, "output_index": tool.outputIndex, "delta": input})
 				s.emit(w, map[string]any{"type": "response.custom_tool_call_input.done", "item_id": tool.id, "output_index": tool.outputIndex, "input": input})
-				item = responseCustomToolCall(tool.id, tool.name.String(), input, "completed")
+				item = responseCustomToolCall(tool.id, tool.responseName, input, "completed")
 			} else {
 				s.emit(w, map[string]any{"type": "response.function_call_arguments.done", "item_id": tool.id, "output_index": tool.outputIndex, "arguments": arguments})
 			}
