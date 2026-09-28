@@ -14,6 +14,7 @@ import (
 
 	"github.com/gesta-run/subpool/internal/domain"
 	"github.com/gesta-run/subpool/internal/provider/codex"
+	"github.com/gesta-run/subpool/internal/provider/copilot"
 	"github.com/gesta-run/subpool/internal/provider/openaicompat"
 	"github.com/gesta-run/subpool/internal/store"
 )
@@ -35,6 +36,10 @@ type CompatibleModels interface {
 	Models(context.Context, openaicompat.Credentials) (*http.Response, error)
 }
 
+type CopilotValidator interface {
+	Validate(context.Context, copilot.Credentials) error
+}
+
 type Result struct {
 	HealthStatus     string
 	ErrorCode        string
@@ -52,11 +57,16 @@ type Checker struct {
 	cipher     Cipher
 	codex      CodexUsage
 	compatible CompatibleModels
+	copilot    CopilotValidator
 	now        func() time.Time
 }
 
-func NewChecker(st store.Store, cipher Cipher, codexUsage CodexUsage, compatible CompatibleModels) *Checker {
-	return &Checker{store: st, cipher: cipher, codex: codexUsage, compatible: compatible, now: time.Now}
+func NewChecker(st store.Store, cipher Cipher, codexUsage CodexUsage, compatible CompatibleModels, copilotValidator ...CopilotValidator) *Checker {
+	checker := &Checker{store: st, cipher: cipher, codex: codexUsage, compatible: compatible, now: time.Now}
+	if len(copilotValidator) > 0 {
+		checker.copilot = copilotValidator[0]
+	}
+	return checker
 }
 
 func (c *Checker) Check(ctx context.Context, account domain.ProviderAccount) Result {
@@ -109,6 +119,15 @@ func (c *Checker) Check(ctx context.Context, account domain.ProviderAccount) Res
 		default:
 			return Result{HealthStatus: domain.HealthUnknown, ErrorCode: "provider_error", Failure: true}
 		}
+	case domain.ProviderCopilot:
+		var credentials copilot.Credentials
+		if json.Unmarshal(plaintext, &credentials) != nil || c.copilot == nil {
+			return Result{HealthStatus: domain.HealthUnhealthy, ErrorCode: "credential_unavailable", Failure: true}
+		}
+		if err = c.copilot.Validate(ctx, credentials); err != nil {
+			return classifyError(err)
+		}
+		return Result{HealthStatus: domain.HealthHealthy, Email: credentials.Email}
 	default:
 		return Result{HealthStatus: domain.HealthUnknown, ErrorCode: "probe_unsupported"}
 	}
@@ -259,6 +278,9 @@ func (c *Checker) nextCheck(accountID string, now time.Time) time.Time {
 }
 
 func classifyError(err error) Result {
+	if copilot.IsDefinitiveAuthError(err) {
+		return Result{HealthStatus: domain.HealthUnhealthy, ErrorCode: "authentication_failed", AuthFailed: true}
+	}
 	message := strings.ToLower(err.Error())
 	if errors.Is(err, context.DeadlineExceeded) || strings.Contains(message, "timeout") {
 		return Result{HealthStatus: domain.HealthUnknown, ErrorCode: "timeout", Failure: true}

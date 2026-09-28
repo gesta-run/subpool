@@ -17,6 +17,7 @@ import (
 	"github.com/gesta-run/subpool/internal/credential"
 	"github.com/gesta-run/subpool/internal/domain"
 	"github.com/gesta-run/subpool/internal/provider/codex"
+	"github.com/gesta-run/subpool/internal/provider/copilot"
 	"github.com/gesta-run/subpool/internal/provider/openaicompat"
 	"github.com/gesta-run/subpool/internal/store"
 )
@@ -150,6 +151,25 @@ type fakeCompatibleProvider struct {
 	credentials   openaicompat.Credentials
 }
 
+type fakeCopilotProvider struct {
+	body        []byte
+	credentials copilot.Credentials
+	err         error
+	status      int
+}
+
+func (f *fakeCopilotProvider) ChatCompletions(_ context.Context, body []byte, _ http.Header, credentials copilot.Credentials) (*http.Response, error) {
+	f.body = append([]byte(nil), body...)
+	f.credentials = credentials
+	if f.err != nil {
+		return nil, f.err
+	}
+	if f.status != 0 {
+		return &http.Response{StatusCode: f.status, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"error":{"message":"model is not available"}}`))}, nil
+	}
+	return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"id":"copilot-chat","choices":[{"message":{"role":"assistant","content":"OK"},"finish_reason":"stop"}],"usage":{"prompt_tokens":7,"completion_tokens":3,"total_tokens":10}}`))}, nil
+}
+
 type countingCipher struct {
 	Cipher
 	decrypts int
@@ -275,6 +295,94 @@ func TestOpenAICompatibleChatPassesThroughAndMetersUsage(t *testing.T) {
 	}
 	if countedCipher.decrypts != 1 {
 		t.Fatalf("credential decryptions = %d, want 1", countedCipher.decrypts)
+	}
+}
+
+func TestCopilotChatPassesThroughAndMetersUsage(t *testing.T) {
+	cipher, err := credential.New(bytes.Repeat([]byte{3}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys := auth.NewAPIKeys(bytes.Repeat([]byte{4}, 32))
+	plain, _, _, err := keys.Generate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(copilot.Credentials{GitHubToken: "github-token", Login: "octocat", UserID: 42})
+	encrypted, err := cipher.Encrypt(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	account := domain.ProviderAccount{ID: "account-1", Provider: domain.ProviderCopilot, CredentialType: domain.CredentialSubscription, Status: domain.AccountActive, CredentialCiphertext: encrypted, CredentialVersion: 1}
+	st := &fakeStore{route: domain.KeyRoute{Key: domain.APIKey{ID: "key-1", PoolID: "pool-1"}, Pool: domain.Pool{ID: "pool-1", Provider: domain.ProviderCopilot}, Account: account, MembershipEnabled: true}}
+	provider := &fakeCopilotProvider{}
+	server := New(st, keys, cipher, &fakeProvider{}, &fakeRefresher{}).WithCopilot(provider)
+	body := `{"model":"gpt-test","messages":[{"role":"user","content":"hello"}]}`
+	recorder := serveGateway(t, server, plain, "/v1/chat/completions", body)
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"id":"copilot-chat"`) {
+		t.Fatalf("status = %d, body=%s", recorder.Code, recorder.Body.String())
+	}
+	if string(provider.body) != body || provider.credentials.Login != "octocat" || provider.credentials.GitHubToken != "github-token" {
+		t.Fatalf("upstream request = %s, credentials=%#v", provider.body, provider.credentials)
+	}
+	if st.usageInput != 7 || st.usageOutput != 3 {
+		t.Fatalf("usage = %d/%d", st.usageInput, st.usageOutput)
+	}
+}
+
+func TestCopilotResponsesReturnsEndpointError(t *testing.T) {
+	server, st, _, plain := newTestServer(t)
+	raw, _ := json.Marshal(copilot.Credentials{GitHubToken: "github-token", Login: "octocat", UserID: 42})
+	encrypted, _ := server.cipher.Encrypt(raw)
+	st.route.Account = domain.ProviderAccount{ID: "account-1", Provider: domain.ProviderCopilot, CredentialType: domain.CredentialSubscription, Status: domain.AccountActive, CredentialCiphertext: encrypted, CredentialVersion: 1}
+	st.route.Pool.Provider = domain.ProviderCopilot
+	recorder := serveGateway(t, server.WithCopilot(&fakeCopilotProvider{}), plain, "/v1/responses", `{"model":"gpt-test","input":"hello"}`)
+	if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), "support /v1/chat/completions") {
+		t.Fatalf("status = %d, body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestCopilotResponsesFailsOverToCompatibleAccount(t *testing.T) {
+	server, st, _, plain := newTestServer(t)
+	cipher := server.cipher.(*credential.Cipher)
+	first := copilotAccountWithCipher(t, cipher, "copilot-account")
+	second := compatibleAccountWithCipher(t, cipher, "compatible-account")
+	st.route.Account = first
+	st.route.Pool.Provider = domain.ProviderMixed
+	st.reassigned = second
+	compatible := &fakeCompatibleProvider{}
+	server.compatible = compatible
+	recorder := serveGateway(t, server.WithCopilot(&fakeCopilotProvider{}), plain, "/v1/responses", `{"model":"gpt-test","input":"hello"}`)
+	if recorder.Code != http.StatusOK || len(compatible.responsesBody) == 0 {
+		t.Fatalf("status = %d, compatible body = %s, response=%s", recorder.Code, compatible.responsesBody, recorder.Body.String())
+	}
+	if len(st.reassignExcludes) != 1 || len(st.reassignExcludes[0]) != 1 || st.reassignExcludes[0][0] != first.ID {
+		t.Fatalf("reassignment exclusions = %#v", st.reassignExcludes)
+	}
+}
+
+func TestCopilotForbiddenResponseDoesNotDisableAccount(t *testing.T) {
+	server, st, _, plain := newTestServer(t)
+	cipher := server.cipher.(*credential.Cipher)
+	st.route.Account = copilotAccountWithCipher(t, cipher, "copilot-account")
+	st.route.Pool.Provider = domain.ProviderCopilot
+	provider := &fakeCopilotProvider{status: http.StatusForbidden}
+	recorder := serveGateway(t, server.WithCopilot(provider), plain, "/v1/chat/completions", `{"model":"restricted-model","messages":[{"role":"user","content":"hello"}]}`)
+	if recorder.Code != http.StatusForbidden || len(st.status) != 0 {
+		t.Fatalf("status = %d, account statuses = %#v, body=%s", recorder.Code, st.status, recorder.Body.String())
+	}
+}
+
+func TestCopilotTokenRejectionDisablesAccount(t *testing.T) {
+	server, st, _, plain := newTestServer(t)
+	raw, _ := json.Marshal(copilot.Credentials{GitHubToken: "revoked-token", Login: "octocat", UserID: 42})
+	encrypted, _ := server.cipher.Encrypt(raw)
+	st.route.Account = domain.ProviderAccount{ID: "account-1", Provider: domain.ProviderCopilot, CredentialType: domain.CredentialSubscription, Status: domain.AccountActive, CredentialCiphertext: encrypted, CredentialVersion: 1}
+	st.route.Pool.Provider = domain.ProviderCopilot
+	provider := &fakeCopilotProvider{err: &copilot.HTTPError{StatusCode: http.StatusUnauthorized, Operation: "Copilot token exchange"}}
+	recorder := serveGateway(t, server.WithCopilot(provider), plain, "/v1/chat/completions", `{"model":"gpt-test","messages":[{"role":"user","content":"hello"}]}`)
+	if recorder.Code != http.StatusUnauthorized || len(st.status) != 1 || st.status[0] != domain.AccountAuthFailed {
+		t.Fatalf("status = %d, account statuses = %#v, body=%s", recorder.Code, st.status, recorder.Body.String())
 	}
 }
 
@@ -673,6 +781,15 @@ func compatibleAccountWithCipher(t *testing.T, cipher *credential.Cipher, id str
 		t.Fatal(err)
 	}
 	return domain.ProviderAccount{ID: id, Provider: domain.ProviderOpenAICompatible, CredentialType: domain.CredentialAPIKey, Status: domain.AccountActive, CredentialCiphertext: encrypted, CredentialVersion: 1}
+}
+func copilotAccountWithCipher(t *testing.T, cipher *credential.Cipher, id string) domain.ProviderAccount {
+	t.Helper()
+	raw, _ := json.Marshal(copilot.Credentials{GitHubToken: "github-token", Login: "octocat", UserID: 42})
+	encrypted, err := cipher.Encrypt(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return domain.ProviderAccount{ID: id, Provider: domain.ProviderCopilot, CredentialType: domain.CredentialSubscription, Status: domain.AccountActive, CredentialCiphertext: encrypted, CredentialVersion: 1}
 }
 func sseResponse(status int, body string) *http.Response {
 	return &http.Response{StatusCode: status, Header: http.Header{"Content-Type": []string{"text/event-stream"}, "Retry-After": []string{"1"}}, Body: io.NopCloser(strings.NewReader(body))}

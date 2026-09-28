@@ -2,11 +2,14 @@ import { useEffect, useRef, useState } from 'react'
 import { errorMessage, request } from '../api'
 import { copyText } from '../clipboard'
 
-export interface CodexDeviceLogin {
+export type DeviceProvider = 'codex' | 'copilot'
+
+export interface DeviceLogin {
   login_id: string
   user_code: string
   verification_url: string
   expires_at: string
+  provider: DeviceProvider
 }
 
 interface DeviceLoginStatus {
@@ -16,8 +19,8 @@ interface DeviceLoginStatus {
 
 const retryDelay = (failures: number) => Math.min(1500 * (2 ** Math.max(0, failures - 1)), 10_000)
 
-export function useCodexDeviceLogin(onCompleted: () => Promise<void>) {
-  const [login, setLogin] = useState<CodexDeviceLogin | null>(null)
+export function useDeviceLogin(onCompleted: () => Promise<void>) {
+  const [login, setLogin] = useState<DeviceLogin | null>(null)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [copyStatus, setCopyStatus] = useState('')
@@ -29,10 +32,11 @@ export function useCodexDeviceLogin(onCompleted: () => Promise<void>) {
     let stopped = false
     let failures = 0
     let timer: number | undefined
-    const cancel = () => request(`/api/v1/provider-accounts/codex/device-login/${encodeURIComponent(login.login_id)}`, { method: 'DELETE' }).catch(() => undefined)
+    const endpoint = `/api/v1/provider-accounts/${login.provider}/device-login/${encodeURIComponent(login.login_id)}`
+    const cancel = () => request(endpoint, { method: 'DELETE' }).catch(() => undefined)
     const poll = async () => {
       try {
-        const result = await request<DeviceLoginStatus>(`/api/v1/provider-accounts/codex/device-login/${encodeURIComponent(login.login_id)}`)
+        const result = await request<DeviceLoginStatus>(endpoint)
         if (stopped) return
         failures = 0
         setError('')
@@ -44,7 +48,7 @@ export function useCodexDeviceLogin(onCompleted: () => Promise<void>) {
         }
         if (result.status === 'failed') {
           setLogin(null)
-          setError(result.message || 'Codex authorization failed. Start again.')
+          setError(result.message || 'Device authorization failed. Start again.')
           return
         }
         timer = window.setTimeout(poll, 1500)
@@ -68,15 +72,17 @@ export function useCodexDeviceLogin(onCompleted: () => Promise<void>) {
     }
   }, [login])
 
-  async function start(displayName: string) {
+  async function start(displayName: string, provider: DeviceProvider) {
     setError('')
     setBusy(true)
     try {
-      const result = await request<CodexDeviceLogin>('/api/v1/provider-accounts/codex/device-login', { method: 'POST', body: JSON.stringify({ display_name: displayName }) })
+      const result = await request<Omit<DeviceLogin, 'provider'>>(`/api/v1/provider-accounts/${provider}/device-login`, {
+        method: 'POST', body: JSON.stringify({ display_name: displayName }),
+      })
       if (!result.login_id || !result.user_code || !result.verification_url || !Date.parse(result.expires_at)) {
         throw new Error('The server returned an invalid device authorization response.')
       }
-      setLogin(result)
+      setLogin({ ...result, provider })
     } catch (caught) {
       setError(errorMessage(caught))
     } finally {
@@ -85,14 +91,17 @@ export function useCodexDeviceLogin(onCompleted: () => Promise<void>) {
   }
 
   function cancel() {
-    const loginID = login?.login_id
+    const current = login
     setLogin(null)
     setError('')
     setCopyStatus('')
-    if (loginID) void request(`/api/v1/provider-accounts/codex/device-login/${encodeURIComponent(loginID)}`, { method: 'DELETE' }).catch(() => undefined)
+    if (current) {
+      const endpoint = `/api/v1/provider-accounts/${current.provider}/device-login/${encodeURIComponent(current.login_id)}`
+      void request(endpoint, { method: 'DELETE' }).catch(() => undefined)
+    }
   }
 
-  async function continueToOpenAI() {
+  async function continueToProvider() {
     if (!login) return
     window.open(login.verification_url, '_blank', 'noopener,noreferrer')
     try {
@@ -103,5 +112,5 @@ export function useCodexDeviceLogin(onCompleted: () => Promise<void>) {
     }
   }
 
-  return { login, error, busy, copyStatus, setError, start, cancel, continueToOpenAI }
+  return { login, error, busy, copyStatus, setError, start, cancel, continueToProvider }
 }

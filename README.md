@@ -59,11 +59,13 @@ Replace every `replace-with-*` value. Docker Compose pulls the latest published 
 
 ## Connect and use
 
-1. Open **Accounts** and connect a Codex or OpenAI-compatible account.
+1. Open **Accounts** and connect a Codex, GitHub Copilot, or OpenAI-compatible account.
 2. Create a pool and add the account.
 3. Create an employee API key for the pool.
 
 Codex subscriptions use [device-code authorization](https://developers.openai.com/codex/auth/). Copy the one-time code from Subpool, continue to OpenAI, and confirm it there. This works on remote and headless deployments without a localhost callback or an extra exposed port. Device-code login must be enabled in ChatGPT security or workspace settings.
+
+GitHub Copilot subscriptions use GitHub Device OAuth. Select **GitHub Copilot subscription**, generate a one-time code, open the displayed GitHub verification URL, and approve the device. Subpool verifies that the GitHub account has Copilot access before saving its encrypted credential. Copilot accounts currently serve `POST /v1/chat/completions` and participate in `GET /v1/models`; they do not serve `POST /v1/responses` or Responses WebSocket requests.
 
 Fast mode is controlled per Codex subscription account from the **Accounts** page. Subpool enforces the selected mode, so employees do not need to configure Fast mode in Codex.
 
@@ -102,6 +104,7 @@ Available endpoints include `GET/POST /v1/responses`, `POST /v1/chat/completions
 - Back up PostgreSQL together with `SUBPOOL_CREDENTIAL_KEY` and `SUBPOOL_API_KEY_HMAC_KEY`.
 - Use PostgreSQL for shared authentication, rate-limit, assignment, and health state across replicas.
 - HTTP and Responses WebSocket request bodies default to 256 MiB per request, a 1 GiB estimated buffer budget across the process, and a five-minute read timeout. Tune `SUBPOOL_MAX_REQUEST_BODY_BYTES`, `SUBPOOL_MAX_INFLIGHT_REQUEST_BODY_BYTES`, and `SUBPOOL_REQUEST_BODY_READ_TIMEOUT` together for the available memory and network.
+- GitHub Copilot uses the bundled public OAuth client ID by default. `SUBPOOL_COPILOT_CLIENT_ID`, `SUBPOOL_COPILOT_API_BASE`, and `SUBPOOL_COPILOT_TOKEN_EXCHANGE_URL` are optional upstream overrides; most deployments should leave them unchanged.
 
 See [.env.example](.env.example) for configuration options.
 

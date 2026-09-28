@@ -139,6 +139,8 @@ func responseWSRetryError(reason RetryReason) (string, string) {
 		return "subpool_rate_limited", "provider is rate limited"
 	case RetryInvalid:
 		return "invalid_request_error", "client_metadata must be an object"
+	case RetryUnsupported:
+		return "unsupported_provider_endpoint", "GitHub Copilot accounts support /v1/chat/completions, not /v1/responses"
 	default:
 		return "provider_error", "provider is unavailable"
 	}
@@ -146,7 +148,7 @@ func responseWSRetryError(reason RetryReason) (string, string) {
 
 func bridgeRetrySafe(reason RetryReason) bool {
 	switch reason {
-	case RetryUnavailable, RetryAuth, RetryRefresh, RetryRateLimit, RetryProvider5xx:
+	case RetryUnavailable, RetryAuth, RetryRefresh, RetryRateLimit, RetryProvider5xx, RetryUnsupported:
 		return true
 	default:
 		return false

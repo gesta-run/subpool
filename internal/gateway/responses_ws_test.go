@@ -192,6 +192,29 @@ func TestResponsesWebSocketFirstBridgeTurnFailsOver(t *testing.T) {
 	}
 }
 
+func TestResponsesWebSocketSkipsCopilotAccount(t *testing.T) {
+	server, st, _, plain := newTestServer(t)
+	cipher := server.cipher.(*credential.Cipher)
+	first := copilotAccountWithCipher(t, cipher, "copilot-account")
+	second := compatibleAccountWithCipher(t, cipher, "compatible-account")
+	st.route.Account = first
+	st.route.Pool.Provider = domain.ProviderMixed
+	st.reassigned = second
+	provider := &responsesWSBridgeProvider{payload: make(chan []byte, 1)}
+	server.compatible = provider
+	server.WithResponsesWebSocket(true, false, "")
+
+	client, cleanup := dialResponsesWSTestServer(t, server, plain)
+	defer cleanup()
+	writeResponsesWSMessage(t, client, `{"type":"response.create","model":"gpt-test","input":"hello"}`)
+	if event := readResponsesWSMessage(t, client); event["type"] != "response.completed" {
+		t.Fatalf("event = %#v", event)
+	}
+	if len(st.reassignExcludes) != 1 || len(st.reassignExcludes[0]) != 1 || st.reassignExcludes[0][0] != first.ID {
+		t.Fatalf("reassignment exclusions = %#v", st.reassignExcludes)
+	}
+}
+
 func TestResponsesWebSocketRejectsDisabledPinnedAccount(t *testing.T) {
 	server, st, _, plain := newTestServer(t)
 	cipher := server.cipher.(*credential.Cipher)

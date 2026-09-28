@@ -24,6 +24,9 @@ type Config struct {
 	CodexClientID                 string
 	CodexTokenURL                 string
 	CodexUpstreamURL              string
+	CopilotClientID               string
+	CopilotAPIBase                string
+	CopilotTokenExchangeURL       string
 	ResponsesWSEnabled            bool
 	ResponsesWSForceHTTPBridge    bool
 	UpstreamResponseHeaderTimeout time.Duration
@@ -44,6 +47,9 @@ func Load() (Config, error) {
 		CodexClientID:                 envOr("SUBPOOL_CODEX_CLIENT_ID", "app_EMoamEEZ73f0CkXaXp7hrann"),
 		CodexTokenURL:                 envOr("SUBPOOL_CODEX_TOKEN_URL", "https://auth.openai.com/oauth/token"),
 		CodexUpstreamURL:              strings.TrimRight(envOr("SUBPOOL_CODEX_UPSTREAM_URL", "https://chatgpt.com/backend-api/codex"), "/"),
+		CopilotClientID:               envOr("SUBPOOL_COPILOT_CLIENT_ID", "Iv1.b507a08c87ecfe98"),
+		CopilotAPIBase:                strings.TrimRight(envOr("SUBPOOL_COPILOT_API_BASE", "https://api.githubcopilot.com"), "/"),
+		CopilotTokenExchangeURL:       envOr("SUBPOOL_COPILOT_TOKEN_EXCHANGE_URL", "https://api.github.com/copilot_internal/v2/token"),
 		UpstreamResponseHeaderTimeout: 3 * time.Minute,
 		MaxRequestBodyBytes:           256 << 20,
 		MaxInflightRequestBodyBytes:   1 << 30,

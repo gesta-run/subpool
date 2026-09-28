@@ -7,6 +7,7 @@ import (
 
 const (
 	ProviderCodex            = "codex"
+	ProviderCopilot          = "copilot"
 	ProviderOpenAICompatible = "openai_compatible"
 	ProviderMixed            = "mixed"
 	CredentialSubscription   = "subscription_oauth"
