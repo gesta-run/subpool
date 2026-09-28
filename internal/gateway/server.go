@@ -216,6 +216,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer resp.Body.Close()
+	accountID := resp.Header.Get(accountHeader)
 	format := resp.Header.Get(formatHeader)
 	resp.Header.Del(accountHeader)
 	resp.Header.Del(formatHeader)
@@ -225,7 +226,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	}
 	if meta.Stream {
 		if format == "chat_completions" {
-			s.proxyCompatibleChatStream(w, route.Key.ID, meta.Model, resp)
+			s.proxyCompatibleChatStream(w, route.Key.ID, accountID, meta.Model, resp)
 			return
 		}
 		s.proxyChatStream(w, r, route.Key.ID, meta.Model, resp)
@@ -523,6 +524,24 @@ func (s *Server) recordHealthFailure(ctx context.Context, accountID, code string
 	_ = s.store.RecordProviderHealthFailure(ctx, accountID, code, now, now.Add(5*time.Minute))
 }
 
+func (s *Server) recordProviderStreamLimit(accountID string, limit responseevent.LimitKind) {
+	if accountID == "" || limit == responseevent.LimitNone {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	var err error
+	if limit == responseevent.LimitQuota {
+		err = s.store.SetProviderUsageAllowed(ctx, accountID, false)
+	} else {
+		retryAt := s.now().Add(time.Minute)
+		err = s.store.UpdateProviderStatus(ctx, accountID, domain.AccountCoolingDown, &retryAt)
+	}
+	if err != nil {
+		slog.Error("provider stream limit update failed", "account_id", accountID, "limit_kind", limit, "error", err)
+	}
+}
+
 func isAuthenticationStatus(provider string, status int) bool {
 	if provider == domain.ProviderCopilot {
 		return status == http.StatusUnauthorized
@@ -540,6 +559,20 @@ func (s *Server) evaluateProviderError(ctx context.Context, accountID string, er
 	if copilot.IsDefinitiveAuthError(err) {
 		_ = s.store.UpdateProviderStatus(ctx, accountID, domain.AccountAuthFailed, nil)
 		return retryAuth, false
+	}
+	var copilotError *copilot.HTTPError
+	if errors.As(err, &copilotError) {
+		switch {
+		case copilotError.StatusCode == http.StatusTooManyRequests:
+			header := make(http.Header)
+			header.Set("Retry-After", copilotError.RetryAfter)
+			retryAt := retryAfter(header, s.now())
+			_ = s.store.UpdateProviderStatus(ctx, accountID, domain.AccountCoolingDown, &retryAt)
+			return retryRateLimit, false
+		case copilotError.StatusCode >= http.StatusInternalServerError:
+			s.recordHealthFailure(ctx, accountID, "provider_5xx")
+			return retryProvider5xx, false
+		}
 	}
 	retry, healthCode := classifyProviderError(err)
 	slog.Warn("provider request failed", "account_id", accountID, "reason", retry, "error", err)

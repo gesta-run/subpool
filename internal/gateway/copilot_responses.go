@@ -487,6 +487,7 @@ type copilotResponsesStreamState struct {
 	outputTokens int64
 	usage        map[string]any
 	customTools  map[string]struct{}
+	limit        responseevent.LimitKind
 }
 
 type copilotStreamMessage struct {
@@ -514,6 +515,7 @@ func (s *Server) proxyCopilotResponsesStream(w http.ResponseWriter, keyID, poolI
 	w.Header().Set("Cache-Control", "no-cache")
 	w.WriteHeader(http.StatusOK)
 	state, err := s.writeCopilotResponsesStream(w, model, customTools, resp.Body)
+	s.recordProviderStreamLimit(accountID, state.limit)
 	if err != nil || state.failed {
 		return
 	}
@@ -540,6 +542,9 @@ func (s *Server) writeCopilotResponsesStream(w http.ResponseWriter, model string
 		}
 		var chunk map[string]any
 		if json.Unmarshal(data, &chunk) == nil {
+			if state.limit == responseevent.LimitNone {
+				state.limit = responseevent.ClassifyLimit(data)
+			}
 			state.consume(w, chunk)
 			if state.failed {
 				break
@@ -721,17 +726,9 @@ func (s *copilotResponsesStreamState) writeToolDeltas(w http.ResponseWriter, cal
 		function, _ := call["function"].(map[string]any)
 		if name, _ := function["name"].(string); name != "" {
 			tool.name.WriteString(name)
-			_, tool.custom = s.customTools[tool.name.String()]
-		}
-		if !tool.added {
-			tool.added = true
-			item := responseFunctionCall(tool.id, tool.name.String(), "", "in_progress")
-			if tool.custom {
-				item = responseCustomToolCall(tool.id, tool.name.String(), "", "in_progress")
-			}
-			s.emit(w, map[string]any{"type": "response.output_item.added", "output_index": tool.outputIndex, "item": item})
 		}
 		if arguments, _ := function["arguments"].(string); arguments != "" {
+			s.addTool(w, tool)
 			tool.arguments.WriteString(arguments)
 			if !tool.custom {
 				s.emit(w, map[string]any{
@@ -741,6 +738,19 @@ func (s *copilotResponsesStreamState) writeToolDeltas(w http.ResponseWriter, cal
 			}
 		}
 	}
+}
+
+func (s *copilotResponsesStreamState) addTool(w http.ResponseWriter, tool *copilotStreamTool) {
+	if tool.added {
+		return
+	}
+	tool.added = true
+	_, tool.custom = s.customTools[tool.name.String()]
+	item := responseFunctionCall(tool.id, tool.name.String(), "", "in_progress")
+	if tool.custom {
+		item = responseCustomToolCall(tool.id, tool.name.String(), "", "in_progress")
+	}
+	s.emit(w, map[string]any{"type": "response.output_item.added", "output_index": tool.outputIndex, "item": item})
 }
 
 func (s *copilotResponsesStreamState) finish(w http.ResponseWriter) bool {
@@ -756,6 +766,7 @@ func (s *copilotResponsesStreamState) finish(w http.ResponseWriter) bool {
 			if tool.outputIndex != outputIndex {
 				continue
 			}
+			s.addTool(w, tool)
 			arguments := tool.arguments.String()
 			item := responseFunctionCall(tool.id, tool.name.String(), arguments, "completed")
 			if tool.custom {

@@ -18,6 +18,7 @@ type HTTPError struct {
 	StatusCode int
 	Operation  string
 	Detail     string
+	RetryAfter string
 }
 
 type authorizationError struct {
@@ -86,6 +87,7 @@ func exchangeToken(ctx context.Context, httpClient *http.Client, endpoint, githu
 			StatusCode: resp.StatusCode,
 			Operation:  "Copilot token exchange",
 			Detail:     safeHTTPErrorDetail(body, githubToken),
+			RetryAfter: resp.Header.Get("Retry-After"),
 		}
 	}
 	var payload struct {

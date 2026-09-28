@@ -198,6 +198,7 @@ func TestResponsesWebSocketBridgesCopilotAccount(t *testing.T) {
 	account := copilotAccountWithCipher(t, cipher, "copilot-account")
 	st.route.Account = account
 	st.route.Pool.Provider = domain.ProviderCopilot
+	st.sessionSavedSignal = make(chan struct{}, 1)
 	provider := &fakeCopilotProvider{response: sseResponse(http.StatusOK,
 		"data: {\"id\":\"chatcmpl-ws\",\"model\":\"gpt-test\",\"choices\":[{\"delta\":{\"content\":\"OK\"},\"finish_reason\":\"stop\"}]}\n\n"+
 			"data: {\"id\":\"chatcmpl-ws\",\"choices\":[],\"usage\":{\"prompt_tokens\":4,\"completion_tokens\":1}}\n\n"+
@@ -220,8 +221,35 @@ func TestResponsesWebSocketBridgesCopilotAccount(t *testing.T) {
 		!strings.Contains(string(provider.body), `"stream":true`) {
 		t.Fatalf("terminal=%#v upstream=%s", terminal, provider.body)
 	}
+	select {
+	case <-st.sessionSavedSignal:
+	case <-time.After(time.Second):
+		t.Fatal("session completion was not recorded")
+	}
 	if st.usageInput != 4 || st.usageOutput != 1 || !st.sessionSaved {
 		t.Fatalf("usage=%d/%d session=%v", st.usageInput, st.usageOutput, st.sessionSaved)
+	}
+}
+
+func TestResponsesWebSocketCopilotBridgeMarksQuotaExhausted(t *testing.T) {
+	server, st, _, plain := newTestServer(t)
+	cipher := server.cipher.(*credential.Cipher)
+	st.route.Account = copilotAccountWithCipher(t, cipher, "copilot-account")
+	st.route.Pool.Provider = domain.ProviderCopilot
+	provider := &fakeCopilotProvider{response: sseResponse(http.StatusOK,
+		"data: {\"error\":{\"message\":\"Copilot quota exhausted\",\"code\":\"copilot_quota_exhausted\"}}\n\n")}
+	server.WithCopilot(provider)
+	server.WithResponsesWebSocket(true, false, "")
+
+	client, cleanup := dialResponsesWSTestServer(t, server, plain)
+	defer cleanup()
+	writeResponsesWSMessage(t, client, `{"type":"response.create","model":"gpt-test","input":"hello"}`)
+	event := readResponsesWSMessage(t, client)
+	if event["type"] != "error" {
+		t.Fatalf("event = %#v", event)
+	}
+	if len(st.availabilityUpdates) != 1 || st.availabilityUpdates[0].accountID != "copilot-account" || st.availabilityUpdates[0].allowed {
+		t.Fatalf("availability updates = %#v", st.availabilityUpdates)
 	}
 }
 

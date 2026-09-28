@@ -238,16 +238,21 @@ func (s *Server) proxyCompatibleChatJSON(w http.ResponseWriter, keyID, model str
 	writeJSON(w, resp.StatusCode, value)
 }
 
-func (s *Server) proxyCompatibleChatStream(w http.ResponseWriter, keyID, model string, resp *http.Response) {
+func (s *Server) proxyCompatibleChatStream(w http.ResponseWriter, keyID, accountID, model string, resp *http.Response) {
 	copyResponseHeaders(w.Header(), resp.Header)
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.WriteHeader(resp.StatusCode)
 	responseID := ""
+	limit := responseevent.LimitNone
 	input, output, err := copySSE(w, resp.Body, func(data []byte) {
 		if id := responseevent.ResponseID(data); id != "" {
 			responseID = id
 		}
+		if limit == responseevent.LimitNone {
+			limit = responseevent.ClassifyLimit(data)
+		}
 	})
+	s.recordProviderStreamLimit(accountID, limit)
 	if err == nil && (input > 0 || output > 0) {
 		s.addUsage(keyID, s.usageEventHash(responseID, s.randomUsageEventHash()), model, input, output)
 	}
