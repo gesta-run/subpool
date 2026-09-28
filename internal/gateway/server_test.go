@@ -464,7 +464,7 @@ func TestCopilotResponsesConvertsNamespacedToolStream(t *testing.T) {
 		`data: {"id":"chatcmpl-tool","model":"gpt-test","choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-1","type":"function","function":{"name":"workspace__read_file","arguments":"{\"path\":\"README.md\"}"}}]},"finish_reason":"tool_calls"}]}`+"\n\n"+
 			`data: {"id":"chatcmpl-tool","choices":[],"usage":{"prompt_tokens":8,"completion_tokens":3}}`+"\n\n"+
 			"data: [DONE]\n\n")}
-	request := `{"model":"gpt-test","stream":true,"input":"read it","tools":[{"type":"namespace","name":"workspace","description":"Workspace tools","tools":[{"type":"function","name":"read_file","description":"Read a file","defer_loading":true,"parameters":{"type":"object"}}]},{"type":"tool_search"}]}`
+	request := `{"model":"gpt-test","stream":true,"input":"read it","tools":[{"type":"tool_search","execution":"client"},{"type":"namespace","name":"workspace","description":"Workspace tools","tools":[{"type":"function","name":"read_file","description":"Read a file","defer_loading":true,"parameters":{"type":"object"}}]}]}`
 	recorder := serveGateway(t, server.WithCopilot(provider), plain, "/v1/responses", request)
 	body := recorder.Body.String()
 	if recorder.Code != http.StatusOK || !strings.Contains(body, `"type":"function_call"`) ||
@@ -496,7 +496,7 @@ func TestCopilotResponsesRejectsClientToolSearch(t *testing.T) {
 	st.route.Pool.Provider = domain.ProviderCopilot
 	provider := &fakeCopilotProvider{}
 	recorder := serveGateway(t, server.WithCopilot(provider), plain, "/v1/responses", `{"model":"gpt-test","input":"hello","tools":[{"type":"tool_search","execution":"client"}]}`)
-	if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), `tool_search execution \"client\" is not supported`) {
+	if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), `client tool_search requires declared namespace or deferred function tools`) {
 		t.Fatalf("status = %d, body=%s", recorder.Code, recorder.Body.String())
 	}
 	if provider.body != nil {
