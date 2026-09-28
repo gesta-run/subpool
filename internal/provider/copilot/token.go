@@ -9,15 +9,51 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode"
 )
+
+const maxHTTPErrorDetailLength = 512
 
 type HTTPError struct {
 	StatusCode int
 	Operation  string
+	Detail     string
+}
+
+type authorizationError struct {
+	operation string
+	detail    string
 }
 
 func (e *HTTPError) Error() string {
-	return fmt.Sprintf("%s returned status %d", e.Operation, e.StatusCode)
+	message := fmt.Sprintf("%s returned status %d", e.Operation, e.StatusCode)
+	if e.Detail != "" {
+		message += ": " + e.Detail
+	}
+	return message
+}
+
+func (e *HTTPError) safeErrorDetail() string {
+	if detail := normalizeErrorDetail(e.Detail); detail != "" {
+		return detail
+	}
+	return fmt.Sprintf("%s returned status %d.", e.Operation, e.StatusCode)
+}
+
+func (e *authorizationError) Error() string {
+	return e.operation + ": " + e.detail
+}
+
+func (e *authorizationError) safeErrorDetail() string {
+	return e.detail
+}
+
+func SafeErrorDetail(err error) string {
+	var detailed interface{ safeErrorDetail() string }
+	if !errors.As(err, &detailed) {
+		return ""
+	}
+	return detailed.safeErrorDetail()
 }
 
 func IsDefinitiveAuthError(err error) bool {
@@ -46,7 +82,11 @@ func exchangeToken(ctx context.Context, httpClient *http.Client, endpoint, githu
 		return accessToken{}, fmt.Errorf("read Copilot token response: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return accessToken{}, &HTTPError{StatusCode: resp.StatusCode, Operation: "Copilot token exchange"}
+		return accessToken{}, &HTTPError{
+			StatusCode: resp.StatusCode,
+			Operation:  "Copilot token exchange",
+			Detail:     safeHTTPErrorDetail(body, githubToken),
+		}
 	}
 	var payload struct {
 		Token     string `json:"token"`
@@ -81,4 +121,41 @@ func exchangeToken(ctx context.Context, httpClient *http.Client, endpoint, githu
 		value: payload.Token, apiBase: strings.TrimRight(strings.TrimSpace(payload.Endpoints.API), "/"),
 		expiresAt: expiresAt, refreshAt: refreshAt,
 	}, nil
+}
+
+func safeHTTPErrorDetail(body []byte, secrets ...string) string {
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return ""
+	}
+	for _, field := range []string{"error_description", "message", "error"} {
+		var detail string
+		if err := json.Unmarshal(payload[field], &detail); err != nil {
+			continue
+		}
+		if detail = normalizeErrorDetail(detail, secrets...); detail != "" {
+			return detail
+		}
+	}
+	return ""
+}
+
+func normalizeErrorDetail(detail string, secrets ...string) string {
+	for _, secret := range secrets {
+		if secret != "" {
+			detail = strings.ReplaceAll(detail, secret, "[REDACTED]")
+		}
+	}
+	detail = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return ' '
+		}
+		return r
+	}, detail)
+	detail = strings.Join(strings.Fields(detail), " ")
+	runes := []rune(detail)
+	if len(runes) > maxHTTPErrorDetailLength {
+		detail = string(runes[:maxHTTPErrorDetailLength-3]) + "..."
+	}
+	return detail
 }
