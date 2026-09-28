@@ -68,19 +68,49 @@ type responsesWSStream struct {
 }
 
 type responsesWSTurn struct {
-	streamID     string
-	accountID    string
-	model        string
-	payload      []byte
-	raw          []byte
-	response     string
-	input        int64
-	output       int64
-	terminal     string
-	continuation bool
-	forwarded    bool
-	finished     bool
-	releaseBody  func()
+	streamID      string
+	accountID     string
+	model         string
+	payload       []byte
+	raw           []byte
+	response      string
+	input         int64
+	output        int64
+	terminal      string
+	continuation  bool
+	forwarded     bool
+	finished      bool
+	limitRecorded bool
+	releaseBody   func()
+}
+
+func (s *responsesWSSession) recordBridgeLimit(turn *responsesWSTurn, limit responseevent.LimitKind) {
+	if limit == responseevent.LimitNone {
+		return
+	}
+	s.mu.Lock()
+	if turn == nil || turn.limitRecorded {
+		s.mu.Unlock()
+		return
+	}
+	turn.limitRecorded = true
+	accountID := turn.accountID
+	s.mu.Unlock()
+	if accountID == "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	var err error
+	if limit == responseevent.LimitQuota {
+		err = s.hub.backend.RoutingStore().SetProviderUsageAllowed(ctx, accountID, false)
+	} else {
+		retryAt := s.hub.backend.Now().Add(time.Minute)
+		err = s.hub.backend.RoutingStore().UpdateProviderStatus(ctx, accountID, domain.AccountCoolingDown, &retryAt)
+	}
+	if err != nil {
+		slog.Error("provider stream limit update failed", "account_id", accountID, "limit_kind", limit, "error", err)
+	}
 }
 
 type responsesWSRequest struct {

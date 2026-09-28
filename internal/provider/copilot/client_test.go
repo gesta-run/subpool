@@ -3,6 +3,7 @@ package copilot
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -223,6 +224,20 @@ func TestExchangeTokenDoesNotExposeResponseBody(t *testing.T) {
 	_, err := exchangeToken(context.Background(), server.Client(), server.URL, "github-token", time.Now())
 	if err == nil || strings.Contains(err.Error(), "sensitive-value") {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestExchangeTokenPreservesRetryAfter(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Retry-After", "120")
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer server.Close()
+
+	_, err := exchangeToken(context.Background(), server.Client(), server.URL, "github-token", time.Now())
+	var httpError *HTTPError
+	if !errors.As(err, &httpError) || httpError.RetryAfter != "120" {
+		t.Fatalf("error = %#v", err)
 	}
 }
 

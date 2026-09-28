@@ -35,6 +35,7 @@ type fakeStore struct {
 	sessionSaved            bool
 	savedAccount            string
 	status                  []string
+	cooldownUntil           *time.Time
 	usageFailures           int
 	sessionFailures         int
 	usageCalls              int
@@ -44,6 +45,7 @@ type fakeStore struct {
 	usageEvents             map[string]struct{}
 	healthFailureCodes      []string
 	availabilityUpdates     []providerAvailabilityUpdate
+	sessionSavedSignal      chan struct{}
 }
 
 type providerAvailabilityUpdate struct {
@@ -74,6 +76,12 @@ func (f *fakeStore) SaveSessionBinding(_ context.Context, _, _ string, _ []byte,
 	}
 	f.sessionSaved = true
 	f.savedAccount = account
+	if f.sessionSavedSignal != nil {
+		select {
+		case f.sessionSavedSignal <- struct{}{}:
+		default:
+		}
+	}
 	return nil
 }
 func (f *fakeStore) ReassignAPIKey(_ context.Context, _, _ string, excludeIDs []string) (domain.ProviderAccount, error) {
@@ -117,8 +125,12 @@ func (f *fakeStore) AddUsage(_ context.Context, _ string, eventHash []byte, _ st
 	}
 	return nil
 }
-func (f *fakeStore) UpdateProviderStatus(_ context.Context, _ string, status string, _ *time.Time) error {
+func (f *fakeStore) UpdateProviderStatus(_ context.Context, _ string, status string, cooldown *time.Time) error {
 	f.status = append(f.status, status)
+	if cooldown != nil {
+		value := *cooldown
+		f.cooldownUntil = &value
+	}
 	return nil
 }
 func (f *fakeStore) SetProviderUsageAllowed(_ context.Context, accountID string, allowed bool) error {
@@ -418,6 +430,9 @@ func TestCopilotResponsesStreamForwardsUpstreamError(t *testing.T) {
 	}
 	if strings.Contains(body, `"type":"response.completed"`) || st.sessionSaved || st.usageCalls != 0 {
 		t.Fatalf("failed stream persisted state: body=%s session=%v usage calls=%d", body, st.sessionSaved, st.usageCalls)
+	}
+	if len(st.availabilityUpdates) != 1 || st.availabilityUpdates[0].accountID != "copilot-account" || st.availabilityUpdates[0].allowed {
+		t.Fatalf("availability updates = %#v", st.availabilityUpdates)
 	}
 }
 
