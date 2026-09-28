@@ -132,6 +132,12 @@ type deviceCodeResponse struct {
 	Interval        int    `json:"interval"`
 }
 
+type deviceTokenResponse struct {
+	AccessToken      string `json:"access_token"`
+	Error            string `json:"error"`
+	ErrorDescription string `json:"error_description"`
+}
+
 func (d *DeviceAuth) requestCode(ctx context.Context) (deviceCodeResponse, error) {
 	values := url.Values{"client_id": {d.config.ClientID}, "scope": {"read:user"}}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, d.config.DeviceCodeURL, strings.NewReader(values.Encode()))
@@ -145,12 +151,19 @@ func (d *DeviceAuth) requestCode(ctx context.Context) (deviceCodeResponse, error
 		return deviceCodeResponse{}, fmt.Errorf("request GitHub device code: %w", err)
 	}
 	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return deviceCodeResponse{}, fmt.Errorf("read GitHub device code response: %w", err)
+	}
 	var code deviceCodeResponse
 	if resp.StatusCode != http.StatusOK {
-		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
-		return code, &HTTPError{StatusCode: resp.StatusCode, Operation: "GitHub device authorization"}
+		return code, &HTTPError{
+			StatusCode: resp.StatusCode,
+			Operation:  "GitHub device authorization",
+			Detail:     safeHTTPErrorDetail(body),
+		}
 	}
-	if err = json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&code); err != nil {
+	if err = json.Unmarshal(body, &code); err != nil {
 		return code, fmt.Errorf("decode GitHub device code: %w", err)
 	}
 	if code.DeviceCode == "" || code.UserCode == "" || code.VerificationURI == "" || code.ExpiresIn <= 0 {
@@ -174,21 +187,25 @@ func (d *DeviceAuth) poll(ctx context.Context, loginID string, code deviceCodeRe
 			result.Err = err
 			break
 		}
-		token, status, err := d.pollToken(ctx, code.DeviceCode)
+		token, err := d.pollToken(ctx, code.DeviceCode)
 		if err != nil {
 			result.Err = err
 			break
 		}
-		switch status {
+		switch token.Error {
 		case "authorization_pending":
 			continue
 		case "slow_down":
 			interval += 5 * time.Second
 			continue
 		case "":
-			result.Credentials, result.Err = d.credentials(ctx, token)
+			result.Credentials, result.Err = d.credentials(ctx, token.AccessToken)
 		default:
-			result.Err = fmt.Errorf("GitHub device authorization failed: %s", status)
+			detail := token.ErrorDescription
+			if detail == "" {
+				detail = token.Error
+			}
+			result.Err = &authorizationError{operation: "GitHub device authorization failed", detail: detail}
 		}
 		break
 	}
@@ -205,36 +222,43 @@ func (d *DeviceAuth) poll(ctx context.Context, loginID string, code deviceCodeRe
 	pending.cancel()
 }
 
-func (d *DeviceAuth) pollToken(ctx context.Context, deviceCode string) (string, string, error) {
+func (d *DeviceAuth) pollToken(ctx context.Context, deviceCode string) (deviceTokenResponse, error) {
 	values := url.Values{
 		"client_id": {d.config.ClientID}, "device_code": {deviceCode},
 		"grant_type": {"urn:ietf:params:oauth:grant-type:device_code"},
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, d.config.AccessTokenURL, strings.NewReader(values.Encode()))
 	if err != nil {
-		return "", "", err
+		return deviceTokenResponse{}, err
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
 	resp, err := d.config.HTTPClient.Do(req)
 	if err != nil {
-		return "", "", fmt.Errorf("poll GitHub device authorization: %w", err)
+		return deviceTokenResponse{}, fmt.Errorf("poll GitHub device authorization: %w", err)
 	}
 	defer resp.Body.Close()
-	var payload struct {
-		AccessToken string `json:"access_token"`
-		Error       string `json:"error"`
-	}
-	if err = json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&payload); err != nil {
-		return "", "", fmt.Errorf("decode GitHub device authorization: %w", err)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return deviceTokenResponse{}, fmt.Errorf("read GitHub device authorization response: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return "", "", &HTTPError{StatusCode: resp.StatusCode, Operation: "GitHub device authorization"}
+		return deviceTokenResponse{}, &HTTPError{
+			StatusCode: resp.StatusCode,
+			Operation:  "GitHub device authorization",
+			Detail:     safeHTTPErrorDetail(body, deviceCode),
+		}
+	}
+	var payload deviceTokenResponse
+	if err = json.Unmarshal(body, &payload); err != nil {
+		return deviceTokenResponse{}, fmt.Errorf("decode GitHub device authorization: %w", err)
 	}
 	if payload.Error == "" && payload.AccessToken == "" {
-		return "", "", errors.New("GitHub device authorization returned no access token")
+		return deviceTokenResponse{}, errors.New("GitHub device authorization returned no access token")
 	}
-	return payload.AccessToken, payload.Error, nil
+	payload.Error = normalizeErrorDetail(payload.Error, deviceCode)
+	payload.ErrorDescription = normalizeErrorDetail(payload.ErrorDescription, deviceCode)
+	return payload, nil
 }
 
 func (d *DeviceAuth) credentials(ctx context.Context, githubToken string) (Credentials, error) {
@@ -252,16 +276,23 @@ func (d *DeviceAuth) credentials(ctx context.Context, githubToken string) (Crede
 		return Credentials{}, fmt.Errorf("read GitHub user: %w", err)
 	}
 	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return Credentials{}, fmt.Errorf("read GitHub user response: %w", err)
+	}
 	if resp.StatusCode != http.StatusOK {
-		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
-		return Credentials{}, &HTTPError{StatusCode: resp.StatusCode, Operation: "GitHub user lookup"}
+		return Credentials{}, &HTTPError{
+			StatusCode: resp.StatusCode,
+			Operation:  "GitHub user lookup",
+			Detail:     safeHTTPErrorDetail(body, githubToken),
+		}
 	}
 	var user struct {
 		Login string `json:"login"`
 		ID    int64  `json:"id"`
 		Email string `json:"email"`
 	}
-	if err = json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&user); err != nil {
+	if err = json.Unmarshal(body, &user); err != nil {
 		return Credentials{}, fmt.Errorf("decode GitHub user: %w", err)
 	}
 	if user.ID <= 0 || strings.TrimSpace(user.Login) == "" {

@@ -306,6 +306,55 @@ describe('Subpool console', () => {
     expect(fetch).toHaveBeenCalledWith('/api/v1/provider-accounts/copilot/device-login', expect.objectContaining({ method: 'POST' }))
   })
 
+  it('shows GitHub Copilot authorization failure details', async () => {
+    const failure = 'GitHub Copilot authorization failed: Copilot subscription is not enabled.'
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const path = String(input)
+      if (path === '/api/v1/provider-accounts') return json({ data: [] })
+      if (path === '/api/v1/provider-accounts/copilot/device-login' && init?.method === 'POST') return json({
+        login_id: 'copilot-login', user_code: 'GHCP-CODE', verification_url: 'https://github.com/login/device', expires_at: '2099-09-02T12:00:00Z',
+      }, 201)
+      if (path === '/api/v1/provider-accounts/copilot/device-login/copilot-login') {
+        return json({ status: 'failed', message: failure })
+      }
+      throw new Error(`Unexpected request: ${path}`)
+    })
+
+    render(<AccountsPage />)
+    const user = userEvent.setup()
+    await user.click(await screen.findByRole('button', { name: /connect account/i }))
+    await user.click(screen.getByRole('button', { name: 'Provider' }))
+    await user.click(screen.getByRole('option', { name: 'GitHub Copilot subscription' }))
+    await user.type(screen.getByLabelText(/display name/i), 'Primary Copilot')
+    await user.click(screen.getByRole('button', { name: /generate code/i }))
+
+    expect(await screen.findByTestId('device-code')).toHaveTextContent('GHCP-CODE')
+    expect(await screen.findByText(failure, {}, { timeout: 2_500 })).toBeInTheDocument()
+    expect(screen.queryByTestId('device-code')).not.toBeInTheDocument()
+  })
+
+  it('shows GitHub Copilot device-code start errors', async () => {
+    const failure = 'Failed to start GitHub Copilot authorization: Device authorization is disabled.'
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const path = String(input)
+      if (path === '/api/v1/provider-accounts') return json({ data: [] })
+      if (path === '/api/v1/provider-accounts/copilot/device-login' && init?.method === 'POST') {
+        return json({ error: { message: failure } }, 502)
+      }
+      throw new Error(`Unexpected request: ${path}`)
+    })
+
+    render(<AccountsPage />)
+    const user = userEvent.setup()
+    await user.click(await screen.findByRole('button', { name: /connect account/i }))
+    await user.click(screen.getByRole('button', { name: 'Provider' }))
+    await user.click(screen.getByRole('option', { name: 'GitHub Copilot subscription' }))
+    await user.type(screen.getByLabelText(/display name/i), 'Primary Copilot')
+    await user.click(screen.getByRole('button', { name: /generate code/i }))
+
+    expect(await screen.findByText(failure)).toBeInTheDocument()
+  })
+
   it('recovers Codex authorization after a transient polling failure', async () => {
     let polls = 0
     vi.mocked(fetch).mockImplementation(async (input, init) => {

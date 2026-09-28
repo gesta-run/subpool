@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -120,6 +121,47 @@ func TestDeviceAuthSendsExpectedRequest(t *testing.T) {
 	_, _, err := auth.Start(context.Background())
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestDeviceAuthExposesSafeDeviceCodeError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = fmt.Fprint(w, `{"message":"Device authorization is disabled.","token":"private-value"}`)
+	}))
+	defer server.Close()
+	auth := newTestDeviceAuth(server)
+	defer auth.Close()
+
+	_, _, err := auth.Start(context.Background())
+	if err == nil || SafeErrorDetail(err) != "Device authorization is disabled." || strings.Contains(err.Error(), "private-value") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestDeviceAuthExposesDeniedAuthorization(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/device":
+			_, _ = fmt.Fprint(w, `{"device_code":"secret","user_code":"CODE","verification_uri":"https://github.com/login/device","expires_in":900,"interval":1}`)
+		case "/access":
+			_, _ = fmt.Fprint(w, `{"error":"access_denied","error_description":"The authorization request was denied."}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	auth := newTestDeviceAuth(server)
+	auth.wait = func(context.Context, time.Duration) error { return nil }
+	defer auth.Close()
+
+	_, results, err := auth.Start(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := <-results
+	if result.Err == nil || SafeErrorDetail(result.Err) != "The authorization request was denied." {
+		t.Fatalf("error = %v", result.Err)
 	}
 }
 

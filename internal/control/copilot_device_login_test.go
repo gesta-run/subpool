@@ -19,14 +19,37 @@ type fakeCopilotDeviceAuth struct {
 	mu       sync.Mutex
 	result   chan copilot.DeviceAuthorizationResult
 	canceled string
+	startErr error
 }
 
 func (f *fakeCopilotDeviceAuth) Start(context.Context) (copilot.DeviceAuthorization, <-chan copilot.DeviceAuthorizationResult, error) {
+	if f.startErr != nil {
+		return copilot.DeviceAuthorization{}, nil, f.startErr
+	}
 	f.result = make(chan copilot.DeviceAuthorizationResult)
 	return copilot.DeviceAuthorization{
 		LoginID: "copilot-login", UserCode: "ABCD-EFGH",
 		VerificationURL: "https://github.com/login/device", ExpiresAt: time.Now().Add(time.Minute),
 	}, f.result, nil
+}
+
+func TestCopilotDeviceLoginReportsSafeStartFailureDetail(t *testing.T) {
+	auth := &fakeCopilotDeviceAuth{startErr: &copilot.HTTPError{
+		StatusCode: http.StatusForbidden,
+		Operation:  "GitHub device authorization",
+		Detail:     "Device authorization is disabled.",
+	}}
+	server := &Server{copilotDeviceAuth: auth, logins: make(map[string]*deviceLoginAttempt)}
+	response := httptest.NewRecorder()
+	server.startCopilotDeviceLogin(response, httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/provider-accounts/copilot/device-login",
+		strings.NewReader(`{"display_name":"Primary Copilot"}`),
+	))
+	if response.Code != http.StatusBadGateway ||
+		!strings.Contains(response.Body.String(), "Failed to start GitHub Copilot authorization: Device authorization is disabled.") {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
 }
 
 func (f *fakeCopilotDeviceAuth) Cancel(loginID string) {
@@ -50,6 +73,36 @@ func TestCopilotDeviceLoginCanStartAndCancel(t *testing.T) {
 	server.cancelDeviceLogin(cancel, request)
 	if cancel.Code != http.StatusNoContent || auth.canceled != "copilot-login" {
 		t.Fatalf("status/canceled = %d/%q", cancel.Code, auth.canceled)
+	}
+}
+
+func TestCopilotDeviceLoginReportsSafeFailureDetail(t *testing.T) {
+	server := &Server{logins: make(map[string]*deviceLoginAttempt)}
+	ctx, cancel := context.WithCancel(context.Background())
+	attempt := &deviceLoginAttempt{
+		status: "pending", expiresAt: time.Now().Add(time.Minute), context: ctx, cancel: cancel,
+	}
+	server.logins["copilot-login"] = attempt
+	results := make(chan copilot.DeviceAuthorizationResult, 1)
+	results <- copilot.DeviceAuthorizationResult{Err: &copilot.HTTPError{
+		StatusCode: http.StatusForbidden,
+		Operation:  "Copilot token exchange",
+		Detail:     "Copilot subscription is not enabled.",
+	}}
+	close(results)
+
+	server.finishCopilotDeviceLogin("copilot-login", "Primary Copilot", attempt, results)
+	if attempt.timer != nil {
+		defer attempt.timer.Stop()
+	}
+
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/provider-accounts/copilot/device-login/copilot-login", nil)
+	request.SetPathValue("id", "copilot-login")
+	server.getDeviceLogin(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"status":"failed"`) ||
+		!strings.Contains(response.Body.String(), "GitHub Copilot authorization failed: Copilot subscription is not enabled.") {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 	}
 }
 

@@ -109,7 +109,11 @@ func (s *Server) startCopilotDeviceLogin(w http.ResponseWriter, r *http.Request)
 	authorization, result, err := s.copilotDeviceAuth.Start(r.Context())
 	if err != nil {
 		slog.Warn("failed to start Copilot device authorization", "error", err)
-		writeError(w, http.StatusBadGateway, "failed to start Copilot device authorization")
+		message := "failed to start Copilot device authorization"
+		if detail := copilot.SafeErrorDetail(err); detail != "" {
+			message = "Failed to start GitHub Copilot authorization: " + detail
+		}
+		writeError(w, http.StatusBadGateway, message)
 		return
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -163,7 +167,7 @@ func (s *Server) finishCopilotDeviceLogin(loginID, displayName string, attempt *
 	if result.Err != nil {
 		slog.Warn("Copilot device authorization failed", "error", result.Err)
 		status = "failed"
-		message = "GitHub Copilot authorization failed. Start again and confirm the code before it expires."
+		message = copilotAuthorizationFailureMessage(result.Err)
 	} else {
 		ctx, cancel := context.WithTimeout(attempt.context, 15*time.Second)
 		_, result.Err = s.saveCopilotAccount(ctx, result.Credentials, displayName)
@@ -185,6 +189,15 @@ func (s *Server) finishCopilotDeviceLogin(loginID, displayName string, attempt *
 		}
 	}
 	s.completeDeviceLogin(loginID, attempt, status, message)
+}
+
+func copilotAuthorizationFailureMessage(err error) string {
+	const fallback = "GitHub Copilot authorization failed. Start again and confirm the code before it expires."
+	detail := copilot.SafeErrorDetail(err)
+	if detail == "" {
+		return fallback
+	}
+	return "GitHub Copilot authorization failed: " + detail
 }
 
 func (s *Server) beginDeviceLoginFinalization(loginID string, attempt *deviceLoginAttempt) bool {

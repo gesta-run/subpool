@@ -169,3 +169,33 @@ func TestExchangeTokenDoesNotExposeResponseBody(t *testing.T) {
 		t.Fatalf("error = %v", err)
 	}
 }
+
+func TestExchangeTokenExposesSafeErrorDescription(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = io.WriteString(w, `{"error_description":"  Copilot subscription\n is not enabled.  ","diagnostic":"private detail"}`)
+	}))
+	defer server.Close()
+
+	_, err := exchangeToken(context.Background(), server.Client(), server.URL, "github-token", time.Now())
+	if err == nil || err.Error() != "Copilot token exchange returned status 403: Copilot subscription is not enabled." {
+		t.Fatalf("error = %v", err)
+	}
+	if strings.Contains(err.Error(), "private detail") {
+		t.Fatalf("unrecognized response field was exposed: %v", err)
+	}
+}
+
+func TestExchangeTokenRedactsGitHubTokenFromErrorDetail(t *testing.T) {
+	const githubToken = "github-secret-token"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = fmt.Fprintf(w, `{"message":"GitHub token %s was rejected"}`, githubToken)
+	}))
+	defer server.Close()
+
+	_, err := exchangeToken(context.Background(), server.Client(), server.URL, githubToken, time.Now())
+	if err == nil || strings.Contains(err.Error(), githubToken) || !strings.Contains(err.Error(), "GitHub token [REDACTED] was rejected") {
+		t.Fatalf("error = %v", err)
+	}
+}
