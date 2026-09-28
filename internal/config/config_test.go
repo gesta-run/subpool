@@ -29,6 +29,9 @@ func TestLoad(t *testing.T) {
 	if cfg.CodexUpstreamURL != "https://chatgpt.com/backend-api/codex" {
 		t.Fatalf("upstream = %s", cfg.CodexUpstreamURL)
 	}
+	if cfg.CopilotClientID == "" || cfg.CopilotAPIBase != "https://api.githubcopilot.com" || cfg.CopilotTokenExchangeURL == "" {
+		t.Fatalf("Copilot defaults = %#v", cfg)
+	}
 	if !cfg.ResponsesWSEnabled {
 		t.Fatal("Responses WebSocket should be enabled by default")
 	}

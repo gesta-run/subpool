@@ -23,7 +23,7 @@ interface NavigationItem {
 
 export const navigation: NavigationItem[] = [
   { id: 'overview', label: 'Overview', description: 'Capacity and usage', icon: OverviewIcon },
-  { id: 'accounts', label: 'Accounts', description: 'Codex subscriptions', icon: AccountIcon },
+  { id: 'accounts', label: 'Accounts', description: 'Provider subscriptions', icon: AccountIcon },
   { id: 'pools', label: 'Pools', description: 'Routing groups', icon: PoolIcon },
   { id: 'api-keys', label: 'API Keys', description: 'Employee access', icon: KeyIcon },
   { id: 'usage', label: 'Usage', description: 'Token totals', icon: UsageIcon },

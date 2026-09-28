@@ -34,6 +34,12 @@ function healthLabel(status: ProviderAccount['health_status']) {
   return !status || status === 'unknown' ? 'unchecked' : status
 }
 
+function accountProviderLabel(account: ProviderAccount) {
+  if (account.credential_type === 'api_key') return 'OpenAI-compatible · API key'
+  if (account.provider === 'copilot') return `${account.email || 'GitHub identity connected'} · GitHub Copilot subscription`
+  return `${account.email || 'Email unavailable'} · Codex subscription`
+}
+
 function lastCheckedLabel(value: string) {
   const checkedAt = new Date(value)
   const now = new Date()
@@ -71,7 +77,7 @@ export function AccountTable({ accounts, busyID, resetBusyID, resetStates, onMod
       const availabilityLabel = unavailable ? statusLabel(effectiveStatus) : degraded ? 'degraded' : healthLabel(health)
       const routingLabel = usageBlocked ? 'Routing suspended' : unavailable ? `${healthLabel(health)} health` : health === 'unhealthy' ? 'Routing suspended' : degraded ? 'Routing enabled while retrying' : 'Routing enabled'
       return <tr key={account.id}>
-        <td data-label="Account"><button className="account-detail-button" type="button" aria-label={`View supported models for ${account.display_name}`} onClick={() => onModels(account)}><span className="account-detail-button__title"><strong>{account.display_name}</strong><ChevronIcon /></span><small>{account.credential_type === 'api_key' ? 'OpenAI-compatible · API key' : `${account.email || 'Email unavailable'} · Codex subscription`}</small></button></td>
+        <td data-label="Account"><button className="account-detail-button" type="button" aria-label={`View supported models for ${account.display_name}`} onClick={() => onModels(account)}><span className="account-detail-button__title"><strong>{account.display_name}</strong><ChevronIcon /></span><small>{accountProviderLabel(account)}</small></button></td>
         <td data-label="Availability"><div className="account-availability"><span className={`status ${unavailable ? `status--${effectiveStatus}` : `status--health-${healthStatus}`}`}><i />{availabilityLabel}</span><small>{routingLabel}</small>{account.last_health_error_code ? <small className="health-error">{account.last_health_error_code.replaceAll('_', ' ')}</small> : null}</div></td>
         <td data-label="Subscription"><div className="subscription-summary">{fiveHour || weekly ? <div className="subscription-capacities">{fiveHour ? <CapacityMeter accountName={account.display_name} label="5-hour" window={fiveHour} usageBlocked={usageBlocked} quotaIsLastKnown={quotaIsLastKnown} /> : null}{weekly ? <CapacityMeter accountName={account.display_name} label="weekly" window={weekly} usageBlocked={usageBlocked} quotaIsLastKnown={quotaIsLastKnown} /> : null}</div> : <div className="subscription-summary__empty"><strong>{account.credential_type === 'api_key' ? 'External API' : 'Usage unavailable'}</strong><small>{account.credential_type === 'api_key' ? 'Quota is managed upstream' : 'No subscription quota reported'}</small></div>}{account.provider === 'codex' && account.credential_type !== 'api_key' ? <ResetCreditControl state={resetStates[account.id]} busy={busy} onRetry={() => onResetLoad(account)} onReset={(creditID) => onReset(account, creditID)} /> : null}</div></td>
         <td data-label="Last checked"><div className="last-checked" title={account.last_checked_at ? new Date(account.last_checked_at).toLocaleString() : undefined}><strong>{account.last_checked_at ? lastCheckedLabel(account.last_checked_at) : 'Never'}</strong><small>Health probe</small></div></td>

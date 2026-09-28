@@ -277,6 +277,35 @@ describe('Subpool console', () => {
     expect(JSON.parse(String(start?.[1]?.body))).toEqual({ display_name: 'Primary Codex' })
   })
 
+  it('starts GitHub Copilot device authorization', async () => {
+    const open = vi.spyOn(window, 'open').mockImplementation(() => null)
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const path = String(input)
+      if (path === '/api/v1/provider-accounts') return json({ data: [] })
+      if (path === '/api/v1/provider-accounts/copilot/device-login' && init?.method === 'POST') return json({
+        login_id: 'copilot-login', user_code: 'GHCP-CODE', verification_url: 'https://github.com/login/device', expires_at: '2099-09-02T12:00:00Z',
+      }, 201)
+      if (path === '/api/v1/provider-accounts/copilot/device-login/copilot-login') return json({ status: 'pending' })
+      throw new Error(`Unexpected request: ${path}`)
+    })
+
+    render(<AccountsPage />)
+    const user = userEvent.setup()
+    await user.click(await screen.findByRole('button', { name: /connect account/i }))
+    await user.click(screen.getByRole('button', { name: 'Provider' }))
+    await user.click(screen.getByRole('option', { name: 'GitHub Copilot subscription' }))
+    const displayName = screen.getByLabelText(/display name/i)
+    await user.type(displayName, 'Primary Copilot')
+    expect(displayName).toHaveValue('Primary Copilot')
+    await user.click(screen.getByRole('button', { name: /generate code/i }))
+
+    expect(await screen.findByTestId('device-code')).toHaveTextContent('GHCP-CODE')
+    expect(screen.getByText(/Copilot subscription is required/i)).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /copy code and continue/i }))
+    expect(open).toHaveBeenCalledWith('https://github.com/login/device', '_blank', 'noopener,noreferrer')
+    expect(fetch).toHaveBeenCalledWith('/api/v1/provider-accounts/copilot/device-login', expect.objectContaining({ method: 'POST' }))
+  })
+
   it('recovers Codex authorization after a transient polling failure', async () => {
     let polls = 0
     vi.mocked(fetch).mockImplementation(async (input, init) => {

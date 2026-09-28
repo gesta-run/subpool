@@ -1,9 +1,9 @@
 import { useState } from 'react'
 import { errorMessage, request } from '../api'
-import { useCodexDeviceLogin } from './useCodexDeviceLogin'
-export type { CodexDeviceLogin } from './useCodexDeviceLogin'
+import { useDeviceLogin } from './useDeviceLogin'
+export type { DeviceLogin } from './useDeviceLogin'
 
-export type ConnectProvider = 'codex' | 'openai_compatible'
+export type ConnectProvider = 'codex' | 'copilot' | 'openai_compatible'
 
 function endpointErrors(displayName: string, baseURL: string, apiKey: string) {
   const errors: Record<string, string> = {}
@@ -30,7 +30,7 @@ export function useConnectAccount(reload: () => Promise<void>) {
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({})
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
-  const codex = useCodexDeviceLogin(async () => {
+  const device = useDeviceLogin(async () => {
     setOpen(false)
     setDisplayName('')
     await reload()
@@ -44,7 +44,7 @@ export function useConnectAccount(reload: () => Promise<void>) {
     setAPIKey('')
     setFieldErrors({})
     setError('')
-    codex.cancel()
+    device.cancel()
   }
 
   async function submit() {
@@ -58,10 +58,10 @@ export function useConnectAccount(reload: () => Promise<void>) {
       if (Object.keys(errors).length > 0) return
     }
     setError('')
-    codex.setError('')
+    device.setError('')
     try {
-      if (provider === 'codex') {
-        await codex.start(displayName.trim())
+      if (provider !== 'openai_compatible') {
+        await device.start(displayName.trim(), provider)
         return
       }
       setBusy(true)
@@ -79,8 +79,8 @@ export function useConnectAccount(reload: () => Promise<void>) {
     setProvider(value)
     setFieldErrors({})
     setError('')
-    codex.setError('')
+    device.setError('')
   }
 
-  return { open, setOpen, displayName, setDisplayName, provider, changeProvider, baseURL, setBaseURL, apiKey, setAPIKey, fieldErrors, setFieldErrors, error: codex.error || error, busy: codex.busy || busy, deviceLogin: codex.login, copyStatus: codex.copyStatus, continueToOpenAI: codex.continueToOpenAI, close, submit }
+  return { open, setOpen, displayName, setDisplayName, provider, changeProvider, baseURL, setBaseURL, apiKey, setAPIKey, fieldErrors, setFieldErrors, error: device.error || error, busy: device.busy || busy, deviceLogin: device.login, copyStatus: device.copyStatus, continueToProvider: device.continueToProvider, close, submit }
 }

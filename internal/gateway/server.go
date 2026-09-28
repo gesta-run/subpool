@@ -23,6 +23,7 @@ import (
 	"github.com/gesta-run/subpool/internal/gateway/responsesws"
 	"github.com/gesta-run/subpool/internal/jsonobject"
 	"github.com/gesta-run/subpool/internal/provider/codex"
+	"github.com/gesta-run/subpool/internal/provider/copilot"
 	"github.com/gesta-run/subpool/internal/provider/openaicompat"
 	"github.com/gesta-run/subpool/internal/store"
 )
@@ -48,6 +49,7 @@ const (
 	retryTimeout     retryReason = "timeout"
 	retryCanceled    retryReason = "canceled"
 	retryProvider5xx retryReason = "provider_5xx"
+	retryUnsupported retryReason = "unsupported"
 )
 
 type Cipher interface {
@@ -64,12 +66,17 @@ type OpenAICompatibleClient interface {
 	ChatCompletions(context.Context, []byte, http.Header, openaicompat.Credentials) (*http.Response, error)
 }
 
+type CopilotClient interface {
+	ChatCompletions(context.Context, []byte, http.Header, copilot.Credentials) (*http.Response, error)
+}
+
 type Server struct {
 	store               store.Store
 	keys                *auth.APIKeys
 	cipher              Cipher
 	codex               CodexClient
 	compatible          OpenAICompatibleClient
+	copilot             CopilotClient
 	refresher           credential.AccountRefresher
 	activity            *requestActivityThrottle
 	catalog             *catalog.Service
@@ -94,6 +101,11 @@ func New(st store.Store, keys *auth.APIKeys, cipher Cipher, client CodexClient, 
 	return server
 }
 
+func (s *Server) WithCopilot(client CopilotClient) *Server {
+	s.copilot = client
+	return s
+}
+
 func (s *Server) WithRequestBodyLimits(maxRequestBodyBytes, maxInflightRequestBodyBytes int64, readTimeout time.Duration) *Server {
 	minimumBudget, valid := requestBodyCost(maxRequestBodyBytes, maxHTTPRequestBodyCopies)
 	if maxRequestBodyBytes <= 0 || !valid || maxInflightRequestBodyBytes < minimumBudget || readTimeout <= 0 {
@@ -105,8 +117,8 @@ func (s *Server) WithRequestBodyLimits(maxRequestBodyBytes, maxInflightRequestBo
 	return s
 }
 
-func (s *Server) WithModelProviders(codexModels catalog.CodexModels, compatibleModels catalog.CompatibleModels) *Server {
-	s.catalog = catalog.New(s.cipher, s.refresher, codexModels, compatibleModels)
+func (s *Server) WithModelProviders(codexModels catalog.CodexModels, compatibleModels catalog.CompatibleModels, copilotModels ...catalog.CopilotModels) *Server {
+	s.catalog = catalog.New(s.cipher, s.refresher, codexModels, compatibleModels, copilotModels...)
 	return s
 }
 
@@ -399,6 +411,9 @@ func (s *Server) call(w http.ResponseWriter, r *http.Request, route domain.KeyRo
 }
 
 func (s *Server) attemptAccount(r *http.Request, route domain.KeyRoute, request upstreamRequest, account domain.ProviderAccount) (*http.Response, retryReason, bool) {
+	if account.Provider == domain.ProviderCopilot && request.kind != "chat_completions" {
+		return nil, retryUnsupported, false
+	}
 	credentials, err := s.credentials(account)
 	if err != nil {
 		s.recordHealthFailure(r.Context(), account.ID, "credential_unavailable")
@@ -409,7 +424,7 @@ func (s *Server) attemptAccount(r *http.Request, route domain.KeyRoute, request 
 		retry, complete := s.evaluateProviderError(r.Context(), account.ID, err)
 		return nil, retry, complete
 	}
-	if !isAuthenticationStatus(resp.StatusCode) {
+	if !isAuthenticationStatus(account.Provider, resp.StatusCode) {
 		return s.evaluateResponse(r.Context(), route.Key.ID, account.ID, resp)
 	}
 	drainAndClose(resp)
@@ -438,7 +453,7 @@ func (s *Server) retryRefreshedAccount(r *http.Request, route domain.KeyRoute, r
 		retry, complete := s.evaluateProviderError(r.Context(), refreshed.ID, err)
 		return nil, retry, complete
 	}
-	if isAuthenticationStatus(resp.StatusCode) {
+	if isAuthenticationStatus(refreshed.Provider, resp.StatusCode) {
 		drainAndClose(resp)
 		_ = s.store.UpdateProviderStatus(r.Context(), refreshed.ID, domain.AccountAuthFailed, nil)
 		return nil, retryAuth, false
@@ -484,7 +499,10 @@ func (s *Server) recordHealthFailure(ctx context.Context, accountID, code string
 	_ = s.store.RecordProviderHealthFailure(ctx, accountID, code, now, now.Add(5*time.Minute))
 }
 
-func isAuthenticationStatus(status int) bool {
+func isAuthenticationStatus(provider string, status int) bool {
+	if provider == domain.ProviderCopilot {
+		return status == http.StatusUnauthorized
+	}
 	return status == http.StatusUnauthorized || status == http.StatusForbidden
 }
 
@@ -494,6 +512,10 @@ func (s *Server) evaluateProviderError(ctx context.Context, accountID string, er
 	}
 	if errors.Is(err, codex.ErrInvalidClientMetadata) {
 		return retryInvalid, false
+	}
+	if copilot.IsDefinitiveAuthError(err) {
+		_ = s.store.UpdateProviderStatus(ctx, accountID, domain.AccountAuthFailed, nil)
+		return retryAuth, false
 	}
 	retry, healthCode := classifyProviderError(err)
 	slog.Warn("provider request failed", "account_id", accountID, "reason", retry, "error", err)
@@ -521,6 +543,8 @@ func writeRetryFailure(w http.ResponseWriter, reason retryReason) {
 		writeOpenAIError(w, http.StatusTooManyRequests, "all eligible accounts are rate limited", "subpool_rate_limited")
 	case retryTimeout:
 		writeOpenAIError(w, http.StatusGatewayTimeout, "provider response timed out", "provider_timeout")
+	case retryUnsupported:
+		writeOpenAIError(w, http.StatusBadRequest, "GitHub Copilot accounts support /v1/chat/completions, not /v1/responses", "unsupported_provider_endpoint")
 	default:
 		writeOpenAIError(w, http.StatusServiceUnavailable, "no eligible account", "subpool_no_eligible_account")
 	}
@@ -528,6 +552,7 @@ func writeRetryFailure(w http.ResponseWriter, reason retryReason) {
 
 type providerCredentials struct {
 	codex      codex.Credentials
+	copilot    copilot.Credentials
 	compatible openaicompat.Credentials
 }
 
@@ -542,6 +567,8 @@ func (s *Server) credentials(account domain.ProviderAccount) (providerCredential
 		err = json.Unmarshal(plaintext, &credentials.codex)
 	case domain.ProviderOpenAICompatible:
 		err = json.Unmarshal(plaintext, &credentials.compatible)
+	case domain.ProviderCopilot:
+		err = json.Unmarshal(plaintext, &credentials.copilot)
 	default:
 		err = fmt.Errorf("unsupported provider %q", account.Provider)
 	}
@@ -555,7 +582,8 @@ func (s *Server) refresh(ctx context.Context, account domain.ProviderAccount) (d
 }
 
 func refreshableCredentials(account domain.ProviderAccount) bool {
-	return account.CredentialType == "" || account.CredentialType == domain.CredentialSubscription
+	return (account.Provider == "" || account.Provider == domain.ProviderCodex) &&
+		(account.CredentialType == "" || account.CredentialType == domain.CredentialSubscription)
 }
 
 func accountHealthy(account domain.ProviderAccount, now time.Time) bool {
@@ -628,6 +656,13 @@ func (s *Server) providerAccountResponse(ctx context.Context, request upstreamRe
 		} else {
 			resp, err = s.compatible.Responses(ctx, forceProviderStream(request.body), header, credentials.compatible)
 		}
+	case domain.ProviderCopilot:
+		if s.copilot == nil {
+			err = errors.New("Copilot provider client is unavailable")
+			break
+		}
+		resp, err = s.copilot.ChatCompletions(ctx, request.body, header, credentials.copilot)
+		responseFormat = "chat_completions"
 	default:
 		err = fmt.Errorf("unsupported provider %q", account.Provider)
 	}

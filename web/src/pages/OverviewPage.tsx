@@ -142,7 +142,7 @@ export function OverviewPage() {
       <header className="page-heading">
         <div>
           <h2 id="overview-heading">Overview</h2>
-          <p>Account health, assignments, and token usage across connected Codex subscriptions.</p>
+          <p>Account health, assignments, and token usage across connected provider subscriptions.</p>
         </div>
       </header>
 

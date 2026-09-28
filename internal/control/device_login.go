@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/gesta-run/subpool/internal/provider/codex"
+	"github.com/gesta-run/subpool/internal/provider/copilot"
 	"github.com/gesta-run/subpool/internal/store"
 )
 
@@ -16,6 +17,11 @@ const deviceLoginRetention = 5 * time.Minute
 
 type DeviceAuth interface {
 	Start(context.Context) (codex.DeviceAuthorization, <-chan codex.DeviceAuthorizationResult, error)
+	Cancel(string)
+}
+
+type CopilotDeviceAuth interface {
+	Start(context.Context) (copilot.DeviceAuthorization, <-chan copilot.DeviceAuthorizationResult, error)
 	Cancel(string)
 }
 
@@ -27,6 +33,7 @@ type deviceLoginAttempt struct {
 	context    context.Context
 	cancel     context.CancelFunc
 	timer      *time.Timer
+	cancelAuth func(string)
 }
 
 func (s *Server) startDeviceLogin(w http.ResponseWriter, r *http.Request) {
@@ -48,7 +55,7 @@ func (s *Server) startDeviceLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	attempt := &deviceLoginAttempt{status: "pending", expiresAt: authorization.ExpiresAt, context: ctx, cancel: cancel}
+	attempt := &deviceLoginAttempt{status: "pending", expiresAt: authorization.ExpiresAt, context: ctx, cancel: cancel, cancelAuth: s.deviceAuth.Cancel}
 	s.loginMu.Lock()
 	s.logins[authorization.LoginID] = attempt
 	attempt.timer = time.AfterFunc(until(authorization.ExpiresAt), func() {
@@ -83,6 +90,43 @@ func (s *Server) getDeviceLogin(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"status": status, "message": message})
 }
 
+func (s *Server) startCopilotDeviceLogin(w http.ResponseWriter, r *http.Request) {
+	var request struct {
+		DisplayName string `json:"display_name"`
+	}
+	if !decode(w, r, &request) {
+		return
+	}
+	request.DisplayName = strings.TrimSpace(request.DisplayName)
+	if request.DisplayName == "" {
+		writeError(w, http.StatusBadRequest, "display_name is required")
+		return
+	}
+	if s.copilotDeviceAuth == nil {
+		writeError(w, http.StatusServiceUnavailable, "Copilot device authorization is unavailable")
+		return
+	}
+	authorization, result, err := s.copilotDeviceAuth.Start(r.Context())
+	if err != nil {
+		slog.Warn("failed to start Copilot device authorization", "error", err)
+		writeError(w, http.StatusBadGateway, "failed to start Copilot device authorization")
+		return
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	attempt := &deviceLoginAttempt{
+		status: "pending", expiresAt: authorization.ExpiresAt, context: ctx, cancel: cancel,
+		cancelAuth: s.copilotDeviceAuth.Cancel,
+	}
+	s.loginMu.Lock()
+	s.logins[authorization.LoginID] = attempt
+	attempt.timer = time.AfterFunc(until(authorization.ExpiresAt), func() {
+		s.expireDeviceLogin(authorization.LoginID, attempt)
+	})
+	s.loginMu.Unlock()
+	go s.finishCopilotDeviceLogin(authorization.LoginID, request.DisplayName, attempt, result)
+	writeJSON(w, http.StatusCreated, authorization)
+}
+
 func (s *Server) cancelDeviceLogin(w http.ResponseWriter, r *http.Request) {
 	loginID := r.PathValue("id")
 	s.loginMu.Lock()
@@ -100,8 +144,81 @@ func (s *Server) cancelDeviceLogin(w http.ResponseWriter, r *http.Request) {
 	if cancel != nil {
 		cancel()
 	}
-	s.deviceAuth.Cancel(loginID)
+	if ok && attempt.cancelAuth != nil {
+		attempt.cancelAuth(loginID)
+	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) finishCopilotDeviceLogin(loginID, displayName string, attempt *deviceLoginAttempt, results <-chan copilot.DeviceAuthorizationResult) {
+	result, ok := <-results
+	if !ok {
+		result.Err = errors.New("Copilot device authorization ended without a result")
+	}
+	if !s.beginDeviceLoginFinalization(loginID, attempt) {
+		return
+	}
+	status := "completed"
+	message := "GitHub Copilot account connected."
+	if result.Err != nil {
+		slog.Warn("Copilot device authorization failed", "error", result.Err)
+		status = "failed"
+		message = "GitHub Copilot authorization failed. Start again and confirm the code before it expires."
+	} else {
+		ctx, cancel := context.WithTimeout(attempt.context, 15*time.Second)
+		_, result.Err = s.saveCopilotAccount(ctx, result.Credentials, displayName)
+		cancel()
+		if result.Err != nil {
+			if errors.Is(result.Err, context.Canceled) && attempt.context.Err() != nil {
+				return
+			}
+			slog.Error("authorized Copilot account could not be saved", "error", result.Err)
+			status = "failed"
+			switch {
+			case errors.Is(result.Err, store.ErrConflict):
+				message = "This GitHub Copilot account is already connected."
+			case errors.Is(result.Err, errProviderCredentialsRejected):
+				message = "GitHub Copilot rejected the authorized credentials."
+			default:
+				message = "The account was authorized but could not be saved. Start again."
+			}
+		}
+	}
+	s.completeDeviceLogin(loginID, attempt, status, message)
+}
+
+func (s *Server) beginDeviceLoginFinalization(loginID string, attempt *deviceLoginAttempt) bool {
+	s.loginMu.Lock()
+	defer s.loginMu.Unlock()
+	current, exists := s.logins[loginID]
+	if !exists || current != attempt || attempt.status != "pending" {
+		return false
+	}
+	attempt.finalizing = true
+	if attempt.timer != nil {
+		attempt.timer.Stop()
+	}
+	return true
+}
+
+func (s *Server) completeDeviceLogin(loginID string, attempt *deviceLoginAttempt, status, message string) {
+	s.loginMu.Lock()
+	current, exists := s.logins[loginID]
+	if !exists || current != attempt {
+		s.loginMu.Unlock()
+		return
+	}
+	attempt.status = status
+	attempt.message = message
+	attempt.finalizing = false
+	attempt.expiresAt = time.Now().Add(deviceLoginRetention)
+	cancel := attempt.cancel
+	attempt.cancel = nil
+	s.scheduleDeviceLoginRemovalLocked(loginID, attempt)
+	s.loginMu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
 }
 
 func (s *Server) finishDeviceLogin(loginID, displayName string, attempt *deviceLoginAttempt, results <-chan codex.DeviceAuthorizationResult) {
@@ -184,7 +301,9 @@ func (s *Server) expireDeviceLogin(loginID string, attempt *deviceLoginAttempt) 
 	if cancel != nil {
 		cancel()
 	}
-	s.deviceAuth.Cancel(loginID)
+	if attempt.cancelAuth != nil {
+		attempt.cancelAuth(loginID)
+	}
 }
 
 func (s *Server) scheduleDeviceLoginRemovalLocked(loginID string, attempt *deviceLoginAttempt) {

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -18,6 +19,7 @@ import (
 	providerhealth "github.com/gesta-run/subpool/internal/health"
 	"github.com/gesta-run/subpool/internal/id"
 	"github.com/gesta-run/subpool/internal/provider/codex"
+	"github.com/gesta-run/subpool/internal/provider/copilot"
 	"github.com/gesta-run/subpool/internal/store"
 )
 
@@ -37,6 +39,7 @@ type Server struct {
 	keys                   *auth.APIKeys
 	cipher                 Cipher
 	deviceAuth             DeviceAuth
+	copilotDeviceAuth      CopilotDeviceAuth
 	resets                 ResetCredits
 	catalog                *catalog.Service
 	refresher              credential.AccountRefresher
@@ -60,8 +63,13 @@ func (s *Server) WithResetCredits(resets ResetCredits) *Server {
 	return s
 }
 
-func (s *Server) WithModelProviders(codexModels catalog.CodexModels, compatibleModels catalog.CompatibleModels) *Server {
-	s.catalog = catalog.New(s.cipher, s.refresher, codexModels, compatibleModels)
+func (s *Server) WithModelProviders(codexModels catalog.CodexModels, compatibleModels catalog.CompatibleModels, copilotModels ...catalog.CopilotModels) *Server {
+	s.catalog = catalog.New(s.cipher, s.refresher, codexModels, compatibleModels, copilotModels...)
+	return s
+}
+
+func (s *Server) WithCopilotDeviceAuth(deviceAuth CopilotDeviceAuth) *Server {
+	s.copilotDeviceAuth = deviceAuth
 	return s
 }
 
@@ -77,6 +85,9 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/provider-accounts/codex/device-login", s.admin(s.startDeviceLogin))
 	mux.HandleFunc("GET /api/v1/provider-accounts/codex/device-login/{id}", s.admin(s.getDeviceLogin))
 	mux.HandleFunc("DELETE /api/v1/provider-accounts/codex/device-login/{id}", s.admin(s.cancelDeviceLogin))
+	mux.HandleFunc("POST /api/v1/provider-accounts/copilot/device-login", s.admin(s.startCopilotDeviceLogin))
+	mux.HandleFunc("GET /api/v1/provider-accounts/copilot/device-login/{id}", s.admin(s.getDeviceLogin))
+	mux.HandleFunc("DELETE /api/v1/provider-accounts/copilot/device-login/{id}", s.admin(s.cancelDeviceLogin))
 	mux.HandleFunc("GET /api/v1/provider-accounts", s.admin(s.listProviderAccounts))
 	mux.HandleFunc("GET /api/v1/provider-accounts/{id}/models", s.admin(s.listProviderModels))
 	mux.HandleFunc("POST /api/v1/provider-accounts", s.admin(s.createProviderAccount))
@@ -176,6 +187,44 @@ func (s *Server) saveCodexAccount(ctx context.Context, credentials codex.Credent
 		return "", err
 	}
 	account := domain.ProviderAccount{ID: accountID, Provider: domain.ProviderCodex, CredentialType: domain.CredentialSubscription, DisplayName: display, SubjectHMAC: s.keys.Digest("provider-subject:" + domain.ProviderCodex + ":" + credentials.AccountID), CredentialCiphertext: ciphertext, CredentialVersion: 1, Status: domain.AccountActive}
+	if err = s.validateNewAccount(ctx, &account); err != nil {
+		return "", err
+	}
+	if err = s.store.CreateProviderAccount(ctx, account); err != nil {
+		return "", err
+	}
+	s.audit(ctx, "provider_account.create", "provider_account", accountID, "success")
+	return accountID, nil
+}
+
+func (s *Server) saveCopilotAccount(ctx context.Context, credentials copilot.Credentials, display string) (string, error) {
+	if credentials.UserID <= 0 || strings.TrimSpace(credentials.Login) == "" {
+		return "", errors.New("provider identity is missing GitHub user information")
+	}
+	if display == "" {
+		display = credentials.Login
+	}
+	if display == "" {
+		display = "GitHub Copilot account"
+	}
+	raw, err := json.Marshal(credentials)
+	if err != nil {
+		return "", err
+	}
+	ciphertext, err := s.cipher.Encrypt(raw)
+	if err != nil {
+		return "", err
+	}
+	accountID, err := id.New()
+	if err != nil {
+		return "", err
+	}
+	account := domain.ProviderAccount{
+		ID: accountID, Provider: domain.ProviderCopilot, CredentialType: domain.CredentialSubscription,
+		DisplayName: display, Email: credentials.Email,
+		SubjectHMAC:          s.keys.Digest("provider-subject:" + domain.ProviderCopilot + ":" + strconv.FormatInt(credentials.UserID, 10)),
+		CredentialCiphertext: ciphertext, CredentialVersion: 1, Status: domain.AccountActive,
+	}
 	if err = s.validateNewAccount(ctx, &account); err != nil {
 		return "", err
 	}
@@ -391,8 +440,8 @@ func (s *Server) refreshProviderAccount(w http.ResponseWriter, r *http.Request) 
 		writeStoreError(w, err)
 		return
 	}
-	if account.CredentialType != "" && account.CredentialType != domain.CredentialSubscription {
-		writeError(w, http.StatusBadRequest, "static API key accounts do not support credential refresh")
+	if account.Provider != domain.ProviderCodex || (account.CredentialType != "" && account.CredentialType != domain.CredentialSubscription) {
+		writeError(w, http.StatusBadRequest, "this provider account does not support explicit credential refresh")
 		return
 	}
 	refreshed, err := s.refresher.RefreshAccount(r.Context(), account.ID, account.CredentialVersion)

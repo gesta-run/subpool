@@ -90,8 +90,11 @@ export function SelectMenu({ id, value, options, onChange, disabled = false }: S
   }
 
   function closeMenu(returnFocus = false) {
+    const focusWasInMenu = menuRef.current?.contains(document.activeElement)
     setOpen(false)
-    if (returnFocus) requestAnimationFrame(() => document.getElementById(id)?.focus())
+    if (returnFocus) requestAnimationFrame(() => {
+      if (focusWasInMenu && document.activeElement === document.body) document.getElementById(id)?.focus()
+    })
   }
 
   function choose(option: SelectMenuOption) {

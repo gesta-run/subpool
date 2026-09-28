@@ -23,6 +23,7 @@ import (
 	"github.com/gesta-run/subpool/internal/gateway"
 	providerhealth "github.com/gesta-run/subpool/internal/health"
 	"github.com/gesta-run/subpool/internal/provider/codex"
+	"github.com/gesta-run/subpool/internal/provider/copilot"
 	providerhttp "github.com/gesta-run/subpool/internal/provider/httpclient"
 	"github.com/gesta-run/subpool/internal/provider/openaicompat"
 	"github.com/gesta-run/subpool/internal/store"
@@ -54,11 +55,18 @@ func main() {
 	deviceAuth := codex.NewDeviceAuth()
 	defer deviceAuth.Close()
 	providerHTTPClient := providerhttp.NewWithResponseHeaderTimeout(cfg.UpstreamResponseHeaderTimeout)
+	copilotClient := copilot.NewClient(copilot.ClientConfig{
+		APIBase: cfg.CopilotAPIBase, TokenExchangeURL: cfg.CopilotTokenExchangeURL, HTTPClient: providerHTTPClient,
+	})
+	copilotDeviceAuth := copilot.NewDeviceAuth(copilot.DeviceAuthConfig{
+		ClientID: cfg.CopilotClientID, TokenExchangeURL: cfg.CopilotTokenExchangeURL, HTTPClient: providerHTTPClient,
+	})
+	defer copilotDeviceAuth.Close()
 	provider := codex.NewClient(cfg.CodexUpstreamURL, providerHTTPClient)
 	resetCredits := codex.NewAppServer()
 	compatibleProvider := openaicompat.NewClient(providerHTTPClient)
 	refreshManager := credential.NewRefreshManager(database, cipher, tokenRefresher)
-	healthChecker := providerhealth.NewChecker(database, cipher, resetCredits, compatibleProvider)
+	healthChecker := providerhealth.NewChecker(database, cipher, resetCredits, compatibleProvider, copilotClient)
 	sources, err := auth.NewSourceResolver(cfg.TrustedProxyCIDRs)
 	if err != nil {
 		slog.Error("trusted proxy configuration failed", "error", err)
@@ -66,12 +74,14 @@ func main() {
 	}
 	mux := http.NewServeMux()
 	gatewayServer := gateway.New(database, keys, cipher, provider, refreshManager, compatibleProvider).
+		WithCopilot(copilotClient).
 		WithRequestBodyLimits(cfg.MaxRequestBodyBytes, cfg.MaxInflightRequestBodyBytes, cfg.RequestBodyReadTimeout).
-		WithModelProviders(resetCredits, compatibleProvider).
+		WithModelProviders(resetCredits, compatibleProvider, copilotClient).
 		WithResponsesWebSocket(cfg.ResponsesWSEnabled, cfg.ResponsesWSForceHTTPBridge, cfg.CodexUpstreamURL)
 	control.New(database, sessions, keys, cipher, deviceAuth, refreshManager, sources, healthChecker).
+		WithCopilotDeviceAuth(copilotDeviceAuth).
 		WithResetCredits(resetCredits).
-		WithModelProviders(resetCredits, compatibleProvider).
+		WithModelProviders(resetCredits, compatibleProvider, copilotClient).
 		WithAccountRoutingChange(gatewayServer.CloseResponsesWebSocketsForAccount).
 		Register(mux)
 	gatewayServer.Register(mux)

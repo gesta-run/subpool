@@ -327,7 +327,7 @@ func (s *responsesWSSession) pinNativeAccount(route domain.KeyRoute, first domai
 	attempted := make([]string, 0, maxProviderAttempts)
 	for attempt := 0; attempt < maxProviderAttempts; attempt++ {
 		attempted = append(attempted, account.ID)
-		if account.Provider == domain.ProviderOpenAICompatible {
+		if account.Provider != "" && account.Provider != domain.ProviderCodex {
 			if !s.pinAccount(account, nil, false, "") {
 				return false, &RequestError{http.StatusServiceUnavailable, "WebSocket session is closing", "server_error"}
 			}
@@ -621,7 +621,7 @@ func (s *responsesWSSession) retryNativeLimitedTurn(turn *responsesWSTurn, faile
 
 	for len(attempted) < maxProviderAttempts {
 		attempted = append(attempted, next.ID)
-		if next.Provider == domain.ProviderOpenAICompatible {
+		if next.Provider != "" && next.Provider != domain.ProviderCodex {
 			break
 		}
 		conn, account, retry, requestErr := s.dialCodex(next, turn.model)

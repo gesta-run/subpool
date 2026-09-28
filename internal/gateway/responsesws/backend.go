@@ -41,6 +41,7 @@ const (
 	RetryInvalid     RetryReason = "invalid_request"
 	RetryTransport   RetryReason = "transport"
 	RetryProvider5xx RetryReason = "provider_5xx"
+	RetryUnsupported RetryReason = "unsupported"
 )
 
 type Backend interface {
@@ -83,5 +84,6 @@ func scopeAllowed(scopes []string, required string) bool {
 }
 
 func refreshableCredentials(account domain.ProviderAccount) bool {
-	return account.CredentialType == "" || account.CredentialType == domain.CredentialSubscription
+	return (account.Provider == "" || account.Provider == domain.ProviderCodex) &&
+		(account.CredentialType == "" || account.CredentialType == domain.CredentialSubscription)
 }

@@ -12,6 +12,7 @@ import (
 
 	"github.com/gesta-run/subpool/internal/domain"
 	"github.com/gesta-run/subpool/internal/provider/codex"
+	"github.com/gesta-run/subpool/internal/provider/copilot"
 	"github.com/gesta-run/subpool/internal/provider/openaicompat"
 )
 
@@ -31,15 +32,24 @@ type CompatibleModels interface {
 	Models(context.Context, openaicompat.Credentials) (*http.Response, error)
 }
 
+type CopilotModels interface {
+	Models(context.Context, copilot.Credentials) (*http.Response, error)
+}
+
 type Service struct {
 	cipher     Cipher
 	refresher  Refresher
 	codex      CodexModels
 	compatible CompatibleModels
+	copilot    CopilotModels
 }
 
-func New(cipher Cipher, refresher Refresher, codexModels CodexModels, compatibleModels CompatibleModels) *Service {
-	return &Service{cipher: cipher, refresher: refresher, codex: codexModels, compatible: compatibleModels}
+func New(cipher Cipher, refresher Refresher, codexModels CodexModels, compatibleModels CompatibleModels, copilotModels ...CopilotModels) *Service {
+	service := &Service{cipher: cipher, refresher: refresher, codex: codexModels, compatible: compatibleModels}
+	if len(copilotModels) > 0 {
+		service.copilot = copilotModels[0]
+	}
+	return service
 }
 
 func (s *Service) ListAccount(ctx context.Context, account domain.ProviderAccount) ([]domain.ProviderModel, error) {
@@ -52,6 +62,8 @@ func (s *Service) ListAccount(ctx context.Context, account domain.ProviderAccoun
 		models, err = s.listCodex(ctx, account)
 	case domain.ProviderOpenAICompatible:
 		models, err = s.listCompatible(ctx, account)
+	case domain.ProviderCopilot:
+		models, err = s.listCopilot(ctx, account)
 	default:
 		err = errors.New("provider does not support model discovery")
 	}
@@ -64,6 +76,41 @@ func (s *Service) ListAccount(ctx context.Context, account domain.ProviderAccoun
 		}
 		return strings.ToLower(models[i].ID) < strings.ToLower(models[j].ID)
 	})
+	return models, nil
+}
+
+func (s *Service) listCopilot(ctx context.Context, account domain.ProviderAccount) ([]domain.ProviderModel, error) {
+	if s.copilot == nil {
+		return nil, errors.New("Copilot model discovery is unavailable")
+	}
+	credentials, err := decrypt[copilot.Credentials](s.cipher, account)
+	if err != nil {
+		return nil, err
+	}
+	response, err := s.copilot.Models(ctx, credentials)
+	if err != nil {
+		return nil, err
+	}
+	upstream, err := copilot.DecodeModels(response)
+	if err != nil {
+		return nil, err
+	}
+	models := make([]domain.ProviderModel, 0, len(upstream))
+	seen := make(map[string]struct{}, len(upstream))
+	for _, model := range upstream {
+		modelID := strings.TrimSpace(model.ID)
+		if modelID == "" {
+			modelID = strings.TrimSpace(model.Name)
+		}
+		if modelID == "" || model.Disabled || model.Hidden {
+			continue
+		}
+		if _, exists := seen[modelID]; exists {
+			continue
+		}
+		seen[modelID] = struct{}{}
+		models = append(models, domain.ProviderModel{ID: modelID, DisplayName: model.DisplayName})
+	}
 	return models, nil
 }
 
