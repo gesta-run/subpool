@@ -45,8 +45,8 @@ function AssignmentsPanel({ accounts, error, onReload }: { accounts: ProviderAcc
 
 function UsagePanel({ items, error, onReload }: { items: UsageKeySummary[]; error: string; onReload: () => void }) {
   return <section className="overview-panel" aria-labelledby="usage-heading-overview">
-    <header><div><h3 id="usage-heading-overview">Token usage</h3><p>Input and output totals by API key</p></div><a href="#/usage">View usage</a></header>
-    {error ? <StatePanel kind="error" title="Usage unavailable" description={error} actionLabel="Try again" onAction={onReload} /> : items.length === 0 ? <StatePanel kind="empty" title="No token usage yet" description="Usage appears after an employee key completes its first request." /> : <div className="usage-bars">
+    <header><div><h3 id="usage-heading-overview">Token telemetry</h3><p>Provider-reported input and output totals by API key</p></div><a href="#/usage">View telemetry</a></header>
+    {error ? <StatePanel kind="error" title="Telemetry unavailable" description={error} actionLabel="Try again" onAction={onReload} /> : items.length === 0 ? <StatePanel kind="empty" title="No token telemetry yet" description="Telemetry appears after an employee key completes its first request." /> : <div className="usage-bars">
       {items.map((item) => {
         const total = item.input_tokens + item.output_tokens
         const peak = items[0].input_tokens + items[0].output_tokens

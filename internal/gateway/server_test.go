@@ -156,6 +156,7 @@ type fakeCopilotProvider struct {
 	credentials copilot.Credentials
 	err         error
 	status      int
+	response    *http.Response
 }
 
 func (f *fakeCopilotProvider) ChatCompletions(_ context.Context, body []byte, _ http.Header, credentials copilot.Credentials) (*http.Response, error) {
@@ -166,6 +167,9 @@ func (f *fakeCopilotProvider) ChatCompletions(_ context.Context, body []byte, _ 
 	}
 	if f.status != 0 {
 		return &http.Response{StatusCode: f.status, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"error":{"message":"model is not available"}}`))}, nil
+	}
+	if f.response != nil {
+		return f.response, nil
 	}
 	return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"id":"copilot-chat","choices":[{"message":{"role":"assistant","content":"OK"},"finish_reason":"stop"}],"usage":{"prompt_tokens":7,"completion_tokens":3,"total_tokens":10}}`))}, nil
 }
@@ -330,14 +334,119 @@ func TestCopilotChatPassesThroughAndMetersUsage(t *testing.T) {
 	}
 }
 
-func TestCopilotResponsesReturnsEndpointError(t *testing.T) {
+func TestCopilotResponsesConvertsRequestAndResponse(t *testing.T) {
 	server, st, _, plain := newTestServer(t)
 	raw, _ := json.Marshal(copilot.Credentials{GitHubToken: "github-token", Login: "octocat", UserID: 42})
 	encrypted, _ := server.cipher.Encrypt(raw)
 	st.route.Account = domain.ProviderAccount{ID: "account-1", Provider: domain.ProviderCopilot, CredentialType: domain.CredentialSubscription, Status: domain.AccountActive, CredentialCiphertext: encrypted, CredentialVersion: 1}
 	st.route.Pool.Provider = domain.ProviderCopilot
-	recorder := serveGateway(t, server.WithCopilot(&fakeCopilotProvider{}), plain, "/v1/responses", `{"model":"gpt-test","input":"hello"}`)
-	if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), "support /v1/chat/completions") {
+	provider := &fakeCopilotProvider{}
+	recorder := serveGateway(t, server.WithCopilot(provider), plain, "/v1/responses", `{"model":"gpt-test","input":"hello"}`)
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"object":"response"`) ||
+		!strings.Contains(recorder.Body.String(), `"text":"OK"`) {
+		t.Fatalf("status = %d, body=%s", recorder.Code, recorder.Body.String())
+	}
+	var upstream map[string]any
+	if json.Unmarshal(provider.body, &upstream) != nil {
+		t.Fatalf("upstream request = %s", provider.body)
+	}
+	messages, _ := upstream["messages"].([]any)
+	if len(messages) != 1 || messages[0].(map[string]any)["content"] != "hello" || st.usageInput != 7 || st.usageOutput != 3 || !st.sessionSaved {
+		t.Fatalf("upstream=%s usage=%d/%d session=%v", provider.body, st.usageInput, st.usageOutput, st.sessionSaved)
+	}
+}
+
+func TestCopilotResponsesConvertsStream(t *testing.T) {
+	server, st, _, plain := newTestServer(t)
+	cipher := server.cipher.(*credential.Cipher)
+	st.route.Account = copilotAccountWithCipher(t, cipher, "copilot-account")
+	st.route.Pool.Provider = domain.ProviderCopilot
+	provider := &fakeCopilotProvider{response: sseResponse(http.StatusOK,
+		"data: {\"id\":\"chatcmpl-stream\",\"created\":42,\"model\":\"gpt-test\",\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":\"O\"},\"finish_reason\":null}]}\n\n"+
+			"data: {\"id\":\"chatcmpl-stream\",\"choices\":[{\"delta\":{\"content\":\"K\"},\"finish_reason\":\"stop\"}]}\n\n"+
+			"data: {\"id\":\"chatcmpl-stream\",\"choices\":[],\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":2,\"total_tokens\":7}}\n\n"+
+			"data: [DONE]\n\n")}
+	recorder := serveGateway(t, server.WithCopilot(provider), plain, "/v1/responses", `{"model":"gpt-test","stream":true,"input":"hello"}`)
+	body := recorder.Body.String()
+	if recorder.Code != http.StatusOK || !strings.Contains(body, `"type":"response.output_text.delta"`) ||
+		!strings.Contains(body, `"type":"response.completed"`) || !strings.Contains(body, `"text":"OK"`) {
+		t.Fatalf("status = %d, body=%s", recorder.Code, body)
+	}
+	if st.usageInput != 5 || st.usageOutput != 2 || !st.sessionSaved || !strings.Contains(string(provider.body), `"include_usage":true`) {
+		t.Fatalf("upstream=%s usage=%d/%d session=%v", provider.body, st.usageInput, st.usageOutput, st.sessionSaved)
+	}
+}
+
+func TestCopilotResponsesConvertsStreamRefusal(t *testing.T) {
+	server, st, _, plain := newTestServer(t)
+	cipher := server.cipher.(*credential.Cipher)
+	st.route.Account = copilotAccountWithCipher(t, cipher, "copilot-account")
+	st.route.Pool.Provider = domain.ProviderCopilot
+	provider := &fakeCopilotProvider{response: sseResponse(http.StatusOK,
+		`data: {"id":"chatcmpl-refusal","model":"gpt-test","choices":[{"delta":{"refusal":"Cannot "},"finish_reason":null}]}`+"\n\n"+
+			`data: {"id":"chatcmpl-refusal","choices":[{"delta":{"refusal":"assist"},"finish_reason":"stop"}]}`+"\n\n"+
+			`data: {"id":"chatcmpl-refusal","choices":[],"usage":{"prompt_tokens":5,"completion_tokens":2}}`+"\n\n"+
+			"data: [DONE]\n\n")}
+	recorder := serveGateway(t, server.WithCopilot(provider), plain, "/v1/responses", `{"model":"gpt-test","stream":true,"input":"hello"}`)
+	body := recorder.Body.String()
+	for _, expected := range []string{
+		`"type":"response.output_item.added"`, `"type":"response.content_part.added"`,
+		`"type":"response.refusal.delta"`, `"type":"response.refusal.done"`,
+		`"type":"response.content_part.done"`, `"refusal":"Cannot assist"`, `"type":"response.completed"`,
+	} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("missing %s in response: %s", expected, body)
+		}
+	}
+}
+
+func TestCopilotResponsesStreamForwardsUpstreamError(t *testing.T) {
+	server, st, _, plain := newTestServer(t)
+	cipher := server.cipher.(*credential.Cipher)
+	st.route.Account = copilotAccountWithCipher(t, cipher, "copilot-account")
+	st.route.Pool.Provider = domain.ProviderCopilot
+	provider := &fakeCopilotProvider{response: sseResponse(http.StatusOK,
+		`data: {"id":"chatcmpl-error","model":"gpt-test","choices":[{"delta":{"content":"partial"},"finish_reason":null}]}`+"\n\n"+
+			`data: {"error":{"message":"Copilot quota exhausted","type":"insufficient_quota","code":"copilot_quota_exhausted","param":null}}`+"\n\n"+
+			"data: [DONE]\n\n")}
+	recorder := serveGateway(t, server.WithCopilot(provider), plain, "/v1/responses", `{"model":"gpt-test","stream":true,"input":"hello"}`)
+	body := recorder.Body.String()
+	if recorder.Code != http.StatusOK || !strings.Contains(body, `"type":"error"`) ||
+		!strings.Contains(body, `"code":"copilot_quota_exhausted"`) ||
+		!strings.Contains(body, `"message":"Copilot quota exhausted"`) {
+		t.Fatalf("status = %d, body=%s", recorder.Code, body)
+	}
+	if strings.Contains(body, `"type":"response.completed"`) || st.sessionSaved || st.usageCalls != 0 {
+		t.Fatalf("failed stream persisted state: body=%s session=%v usage calls=%d", body, st.sessionSaved, st.usageCalls)
+	}
+}
+
+func TestCopilotResponsesConvertsCustomToolStream(t *testing.T) {
+	server, st, _, plain := newTestServer(t)
+	cipher := server.cipher.(*credential.Cipher)
+	st.route.Account = copilotAccountWithCipher(t, cipher, "copilot-account")
+	st.route.Pool.Provider = domain.ProviderCopilot
+	provider := &fakeCopilotProvider{response: sseResponse(http.StatusOK,
+		`data: {"id":"chatcmpl-tool","model":"gpt-test","choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-1","type":"function","function":{"name":"apply_patch","arguments":"{\"input\":\"patch\"}"}}]},"finish_reason":"tool_calls"}]}`+"\n\n"+
+			`data: {"id":"chatcmpl-tool","choices":[],"usage":{"prompt_tokens":8,"completion_tokens":3}}`+"\n\n"+
+			"data: [DONE]\n\n")}
+	request := `{"model":"gpt-test","stream":true,"input":"update it","tools":[{"type":"custom","name":"apply_patch","description":"Apply a patch"}]}`
+	recorder := serveGateway(t, server.WithCopilot(provider), plain, "/v1/responses", request)
+	body := recorder.Body.String()
+	if recorder.Code != http.StatusOK || !strings.Contains(body, `"type":"response.custom_tool_call_input.done"`) ||
+		!strings.Contains(body, `"type":"custom_tool_call"`) || !strings.Contains(body, `"input":"patch"`) ||
+		strings.Contains(body, `"type":"response.function_call_arguments.done"`) {
+		t.Fatalf("status = %d, body=%s", recorder.Code, body)
+	}
+}
+
+func TestCopilotResponsesRejectsUnsupportedTool(t *testing.T) {
+	server, st, _, plain := newTestServer(t)
+	cipher := server.cipher.(*credential.Cipher)
+	st.route.Account = copilotAccountWithCipher(t, cipher, "copilot-account")
+	st.route.Pool.Provider = domain.ProviderCopilot
+	recorder := serveGateway(t, server.WithCopilot(&fakeCopilotProvider{}), plain, "/v1/responses", `{"model":"gpt-test","input":"hello","tools":[{"type":"web_search_preview"}]}`)
+	if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), `tool type \"web_search_preview\" is not supported`) {
 		t.Fatalf("status = %d, body=%s", recorder.Code, recorder.Body.String())
 	}
 }
@@ -352,7 +461,7 @@ func TestCopilotResponsesFailsOverToCompatibleAccount(t *testing.T) {
 	st.reassigned = second
 	compatible := &fakeCompatibleProvider{}
 	server.compatible = compatible
-	recorder := serveGateway(t, server.WithCopilot(&fakeCopilotProvider{}), plain, "/v1/responses", `{"model":"gpt-test","input":"hello"}`)
+	recorder := serveGateway(t, server.WithCopilot(&fakeCopilotProvider{}), plain, "/v1/responses", `{"model":"gpt-test","input":"hello","tools":[{"type":"web_search_preview"}]}`)
 	if recorder.Code != http.StatusOK || len(compatible.responsesBody) == 0 {
 		t.Fatalf("status = %d, compatible body = %s, response=%s", recorder.Code, compatible.responsesBody, recorder.Body.String())
 	}

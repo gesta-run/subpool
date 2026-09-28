@@ -1,7 +1,7 @@
 import { ChevronIcon, FastIcon, PowerIcon, RefreshIcon, TrashIcon } from '../Icons'
 import { Spinner } from '../Spinner'
 import type { ResetCreditState } from '../../hooks/useResetCredits'
-import type { CodexResetCredits, ProviderAccount, QuotaWindow } from '../../types'
+import type { CodexResetCredits, CreditsQuota, ProviderAccount, QuotaWindow } from '../../types'
 
 function compactDate(value: Date) {
   return value.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
@@ -58,6 +58,22 @@ function CapacityMeter({ accountName, label, window, usageBlocked, quotaIsLastKn
   </div>
 }
 
+function creditCount(value: number) {
+  return new Intl.NumberFormat([], { maximumFractionDigits: 2 }).format(value)
+}
+
+function CreditsMeter({ accountName, credits, quotaIsLastKnown }: { accountName: string; credits: CreditsQuota; quotaIsLastKnown: boolean }) {
+  const remaining = Math.round(Math.max(0, Math.min(100, credits.remaining_percent)))
+  const prefix = quotaIsLastKnown ? 'Last known · ' : ''
+  if (credits.unlimited) return <div className="capacity"><span><strong>Unlimited</strong> AI credits</span><small>{prefix}No included credit limit reported</small></div>
+  return <div className="capacity">
+    <span><strong>{creditCount(credits.used)} / {creditCount(credits.entitlement)}</strong> AI credits</span>
+    <div role="progressbar" aria-label={`${accountName} AI credits remaining`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={remaining}><i style={{ width: `${remaining}%` }} /></div>
+    <small>{prefix}{credits.reset_at ? `Resets ${compactDate(new Date(credits.reset_at * 1000))}` : `${creditCount(credits.remaining)} included credits remaining`}</small>
+    <small>{credits.overage_permitted ? `${creditCount(credits.overage_count)} additional credits used` : 'Additional usage disabled'}</small>
+  </div>
+}
+
 export function AccountTable({ accounts, busyID, resetBusyID, resetStates, onModels, onRefresh, onResetLoad, onReset, onFastMode, onToggle, onRemove }: { accounts: ProviderAccount[]; busyID: string; resetBusyID: string; resetStates: Record<string, ResetCreditState>; onModels: (account: ProviderAccount) => void; onRefresh: (account: ProviderAccount) => void; onResetLoad: (account: ProviderAccount) => void; onReset: (account: ProviderAccount, creditID?: string) => void; onFastMode: (account: ProviderAccount) => void; onToggle: (account: ProviderAccount) => void; onRemove: (account: ProviderAccount) => void }) {
   return <div className="table-frame account-table-frame"><table className="account-table">
     <caption className="sr-only">Connected provider accounts, routing availability, subscription capacity, and actions</caption>
@@ -66,6 +82,7 @@ export function AccountTable({ accounts, busyID, resetBusyID, resetStates, onMod
     <tbody>{accounts.map((account) => {
       const fiveHour = account.quota_snapshot?.five_hour
       const weekly = account.quota_snapshot?.weekly
+      const credits = account.provider === 'copilot' ? account.quota_snapshot?.credits : undefined
       const usageBlocked = account.status === 'exhausted' || account.quota_snapshot?.usage_allowed === false
       const busy = busyID === account.id || resetBusyID === account.id
       const health = account.health_status ?? 'unknown'
@@ -79,9 +96,9 @@ export function AccountTable({ accounts, busyID, resetBusyID, resetStates, onMod
       return <tr key={account.id}>
         <td data-label="Account"><button className="account-detail-button" type="button" aria-label={`View supported models for ${account.display_name}`} onClick={() => onModels(account)}><span className="account-detail-button__title"><strong>{account.display_name}</strong><ChevronIcon /></span><small>{accountProviderLabel(account)}</small></button></td>
         <td data-label="Availability"><div className="account-availability"><span className={`status ${unavailable ? `status--${effectiveStatus}` : `status--health-${healthStatus}`}`}><i />{availabilityLabel}</span><small>{routingLabel}</small>{account.last_health_error_code ? <small className="health-error">{account.last_health_error_code.replaceAll('_', ' ')}</small> : null}</div></td>
-        <td data-label="Subscription"><div className="subscription-summary">{fiveHour || weekly ? <div className="subscription-capacities">{fiveHour ? <CapacityMeter accountName={account.display_name} label="5-hour" window={fiveHour} usageBlocked={usageBlocked} quotaIsLastKnown={quotaIsLastKnown} /> : null}{weekly ? <CapacityMeter accountName={account.display_name} label="weekly" window={weekly} usageBlocked={usageBlocked} quotaIsLastKnown={quotaIsLastKnown} /> : null}</div> : <div className="subscription-summary__empty"><strong>{account.credential_type === 'api_key' ? 'External API' : 'Usage unavailable'}</strong><small>{account.credential_type === 'api_key' ? 'Quota is managed upstream' : 'No subscription quota reported'}</small></div>}{account.provider === 'codex' && account.credential_type !== 'api_key' ? <ResetCreditControl state={resetStates[account.id]} busy={busy} onRetry={() => onResetLoad(account)} onReset={(creditID) => onReset(account, creditID)} /> : null}</div></td>
+        <td data-label="Subscription"><div className="subscription-summary">{credits ? <CreditsMeter accountName={account.display_name} credits={credits} quotaIsLastKnown={quotaIsLastKnown} /> : fiveHour || weekly ? <div className="subscription-capacities">{fiveHour ? <CapacityMeter accountName={account.display_name} label="5-hour" window={fiveHour} usageBlocked={usageBlocked} quotaIsLastKnown={quotaIsLastKnown} /> : null}{weekly ? <CapacityMeter accountName={account.display_name} label="weekly" window={weekly} usageBlocked={usageBlocked} quotaIsLastKnown={quotaIsLastKnown} /> : null}</div> : <div className="subscription-summary__empty"><strong>{account.credential_type === 'api_key' ? 'External API' : account.provider === 'copilot' ? 'Credits unavailable' : 'Usage unavailable'}</strong><small>{account.credential_type === 'api_key' ? 'Quota is managed upstream' : account.provider === 'copilot' ? 'No AI credit quota reported' : 'No subscription quota reported'}</small></div>}{account.provider === 'codex' && account.credential_type !== 'api_key' ? <ResetCreditControl state={resetStates[account.id]} busy={busy} onRetry={() => onResetLoad(account)} onReset={(creditID) => onReset(account, creditID)} /> : null}</div></td>
         <td data-label="Last checked"><div className="last-checked" title={account.last_checked_at ? new Date(account.last_checked_at).toLocaleString() : undefined}><strong>{account.last_checked_at ? lastCheckedLabel(account.last_checked_at) : 'Never'}</strong><small>Health probe</small></div></td>
-        <td><div className="row-actions">{account.provider === 'codex' && account.credential_type !== 'api_key' ? <button className={`row-action-button ${account.fast_mode_enabled ? 'row-action-button--active' : ''}`} type="button" aria-label={`${account.fast_mode_enabled ? 'Disable' : 'Enable'} Fast mode for ${account.display_name}`} aria-pressed={Boolean(account.fast_mode_enabled)} title={account.fast_mode_enabled ? 'Disable Fast mode' : 'Enable Fast mode'} onClick={() => onFastMode(account)} disabled={busy}><FastIcon /></button> : null}<button className="row-action-button" type="button" aria-label={`${account.provider === 'codex' && account.credential_type !== 'api_key' ? 'Refresh credentials and quota' : 'Check health'} for ${account.display_name}`} title={account.provider === 'codex' && account.credential_type !== 'api_key' ? 'Refresh credentials and quota' : 'Check health'} onClick={() => onRefresh(account)} disabled={busy}>{busyID === account.id ? <Spinner /> : <RefreshIcon />}</button><button className="row-action-button" type="button" aria-label={`${account.status === 'disabled' ? 'Enable' : 'Disable'} ${account.display_name}`} title={account.status === 'disabled' ? 'Enable account' : 'Disable account'} onClick={() => onToggle(account)} disabled={busy}><PowerIcon /></button><button className="row-action-button row-action-button--danger" type="button" aria-label={`Remove ${account.display_name}`} title="Remove account" onClick={() => onRemove(account)} disabled={busy}><TrashIcon /></button></div></td>
+        <td><div className="row-actions">{account.provider === 'codex' && account.credential_type !== 'api_key' ? <button className={`row-action-button ${account.fast_mode_enabled ? 'row-action-button--active' : ''}`} type="button" aria-label={`${account.fast_mode_enabled ? 'Disable' : 'Enable'} Fast mode for ${account.display_name}`} aria-pressed={Boolean(account.fast_mode_enabled)} title={account.fast_mode_enabled ? 'Disable Fast mode' : 'Enable Fast mode'} onClick={() => onFastMode(account)} disabled={busy}><FastIcon /></button> : null}<button className="row-action-button" type="button" aria-label={`${account.provider === 'codex' && account.credential_type !== 'api_key' ? 'Refresh credentials and quota' : account.provider === 'copilot' ? 'Refresh AI credits' : 'Check health'} for ${account.display_name}`} title={account.provider === 'codex' && account.credential_type !== 'api_key' ? 'Refresh credentials and quota' : account.provider === 'copilot' ? 'Refresh AI credits' : 'Check health'} onClick={() => onRefresh(account)} disabled={busy}>{busyID === account.id ? <Spinner /> : <RefreshIcon />}</button><button className="row-action-button" type="button" aria-label={`${account.status === 'disabled' ? 'Enable' : 'Disable'} ${account.display_name}`} title={account.status === 'disabled' ? 'Enable account' : 'Disable account'} onClick={() => onToggle(account)} disabled={busy}><PowerIcon /></button><button className="row-action-button row-action-button--danger" type="button" aria-label={`Remove ${account.display_name}`} title="Remove account" onClick={() => onRemove(account)} disabled={busy}><TrashIcon /></button></div></td>
       </tr>
     })}</tbody>
   </table></div>

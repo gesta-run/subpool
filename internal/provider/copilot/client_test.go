@@ -158,6 +158,62 @@ func TestDecodeModels(t *testing.T) {
 	}
 }
 
+func TestClientReadsAICreditsUsage(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/token" {
+			_, _ = fmt.Fprintf(w, `{"token":"copilot-token","expires_at":%d}`, time.Now().Add(time.Hour).Unix())
+			return
+		}
+		if r.URL.Path != "/copilot_internal/user" {
+			http.NotFound(w, r)
+			return
+		}
+		if r.Header.Get("Authorization") != "token github-token" {
+			t.Errorf("Authorization = %q", r.Header.Get("Authorization"))
+		}
+		_, _ = io.WriteString(w, `{
+			"copilot_plan":"pro_plus",
+			"quota_reset_date":"2026-10-01",
+			"quota_snapshots":{"premium_interactions":{
+				"entitlement":1500,"credits_used":375,"remaining":1125,"percent_remaining":75,
+				"overage_permitted":false,"overage_count":0
+			}}
+		}`)
+	}))
+	defer server.Close()
+	client := NewClient(ClientConfig{TokenExchangeURL: server.URL + "/token", EntitlementsURL: server.URL + "/copilot_internal/user", HTTPClient: server.Client()})
+	snapshot, err := client.Credits(context.Background(), Credentials{GitHubToken: "github-token"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.PlanType != "pro_plus" || snapshot.Credits == nil || snapshot.UsageAllowed == nil || !*snapshot.UsageAllowed {
+		t.Fatalf("snapshot = %#v", snapshot)
+	}
+	credits := snapshot.Credits
+	if credits.Used != 375 || credits.Entitlement != 1500 || credits.Remaining != 1125 || credits.RemainingPercent != 75 || credits.ResetAt != 1790812800 {
+		t.Fatalf("credits = %#v", credits)
+	}
+}
+
+func TestClientMarksExhaustedAICreditsUnavailable(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/token" {
+			_, _ = fmt.Fprintf(w, `{"token":"copilot-token","expires_at":%d}`, time.Now().Add(time.Hour).Unix())
+			return
+		}
+		_, _ = io.WriteString(w, `{"quota_snapshots":{"premium_interactions":{"entitlement":1500,"percent_remaining":0,"overage_permitted":false}}}`)
+	}))
+	defer server.Close()
+	client := NewClient(ClientConfig{TokenExchangeURL: server.URL + "/token", EntitlementsURL: server.URL, HTTPClient: server.Client()})
+	snapshot, err := client.Credits(context.Background(), Credentials{GitHubToken: "github-token"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Credits == nil || snapshot.UsageAllowed == nil || *snapshot.UsageAllowed || snapshot.Credits.Used != 1500 || snapshot.Credits.Remaining != 0 {
+		t.Fatalf("snapshot = %#v", snapshot)
+	}
+}
+
 func TestExchangeTokenDoesNotExposeResponseBody(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)

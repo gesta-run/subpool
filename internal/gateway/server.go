@@ -32,6 +32,7 @@ const (
 	maxProviderAttempts = 8
 	accountHeader       = "X-Subpool-Internal-Account-Id"
 	formatHeader        = "X-Subpool-Internal-Response-Format"
+	customToolHeader    = "X-Subpool-Internal-Copilot-Custom-Tool"
 	// Retry-After can point at the next quota window, days away, while quota may
 	// return sooner (manual reset, top-up); static keys have no quota probe.
 	maxRateLimitCooldown = 15 * time.Minute
@@ -143,10 +144,11 @@ type requestMeta struct {
 }
 
 type upstreamRequest struct {
-	kind      string
-	model     string
-	body      []byte
-	codexBody []byte
+	kind               string
+	model              string
+	body               []byte
+	codexBody          []byte
+	copilotCustomTools map[string]struct{}
 }
 
 func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
@@ -166,14 +168,28 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
 	}
 	defer resp.Body.Close()
 	accountID := resp.Header.Get(accountHeader)
+	format := resp.Header.Get(formatHeader)
+	customTools := make(map[string]struct{})
+	for _, name := range resp.Header.Values(customToolHeader) {
+		customTools[name] = struct{}{}
+	}
 	resp.Header.Del(accountHeader)
 	resp.Header.Del(formatHeader)
+	resp.Header.Del(customToolHeader)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		s.proxyUpstreamError(w, resp)
 		return
 	}
 	if meta.Stream {
+		if format == "chat_completions" {
+			s.proxyCopilotResponsesStream(w, route.Key.ID, route.Pool.ID, accountID, meta.Model, customTools, resp)
+			return
+		}
 		s.proxyResponsesStream(w, r, route.Key.ID, route.Pool.ID, accountID, meta.Model, resp)
+		return
+	}
+	if format == "chat_completions" {
+		s.proxyCopilotResponsesJSON(w, route.Key.ID, route.Pool.ID, accountID, meta.Model, customTools, resp)
 		return
 	}
 	s.proxyResponsesJSON(w, r, route.Key.ID, route.Pool.ID, accountID, meta.Model, resp)
@@ -411,8 +427,16 @@ func (s *Server) call(w http.ResponseWriter, r *http.Request, route domain.KeyRo
 }
 
 func (s *Server) attemptAccount(r *http.Request, route domain.KeyRoute, request upstreamRequest, account domain.ProviderAccount) (*http.Response, retryReason, bool) {
-	if account.Provider == domain.ProviderCopilot && request.kind != "chat_completions" {
-		return nil, retryUnsupported, false
+	if account.Provider == domain.ProviderCopilot && request.kind == "responses" {
+		body, customTools, err := responsesToChat(request.body)
+		if err != nil {
+			if route.Pool.Provider == domain.ProviderMixed {
+				return nil, retryUnsupported, false
+			}
+			return openAIErrorResponse(http.StatusBadRequest, err.Error(), "unsupported_request"), "", true
+		}
+		request.body = body
+		request.copilotCustomTools = customTools
 	}
 	credentials, err := s.credentials(account)
 	if err != nil {
@@ -544,7 +568,7 @@ func writeRetryFailure(w http.ResponseWriter, reason retryReason) {
 	case retryTimeout:
 		writeOpenAIError(w, http.StatusGatewayTimeout, "provider response timed out", "provider_timeout")
 	case retryUnsupported:
-		writeOpenAIError(w, http.StatusBadRequest, "GitHub Copilot accounts support /v1/chat/completions, not /v1/responses", "unsupported_provider_endpoint")
+		writeOpenAIError(w, http.StatusBadRequest, "no eligible account supports this Responses API request", "unsupported_provider_endpoint")
 	default:
 		writeOpenAIError(w, http.StatusServiceUnavailable, "no eligible account", "subpool_no_eligible_account")
 	}
@@ -673,11 +697,24 @@ func (s *Server) providerAccountResponse(ctx context.Context, request upstreamRe
 		return nil, errors.New("provider returned an empty response")
 	}
 	resp.Header.Set(formatHeader, responseFormat)
+	resp.Header.Del(customToolHeader)
+	for name := range request.copilotCustomTools {
+		resp.Header.Add(customToolHeader, name)
+	}
 	return resp, nil
 }
 
 func writeOpenAIError(w http.ResponseWriter, status int, message, code string) {
 	writeJSON(w, status, map[string]any{"error": map[string]any{"message": message, "type": code, "code": code}})
+}
+
+func openAIErrorResponse(status int, message, code string) *http.Response {
+	body, _ := json.Marshal(map[string]any{"error": map[string]any{"message": message, "type": code, "code": code}})
+	return &http.Response{
+		StatusCode: status,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(bytes.NewReader(body)),
+	}
 }
 func writeJSON(w http.ResponseWriter, status int, value any) {
 	w.Header().Set("Content-Type", "application/json")

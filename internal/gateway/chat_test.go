@@ -79,3 +79,89 @@ func TestChatTranslationRejectsMissingFunction(t *testing.T) {
 		t.Fatal("provider was called")
 	}
 }
+
+func TestResponsesTranslationMapsMessagesAndTools(t *testing.T) {
+	raw, customTools, err := responsesToChat([]byte(`{
+		"model":"gpt-test","stream":true,"instructions":"Be concise","max_output_tokens":99,
+		"reasoning":{"effort":"high"},
+		"input":[
+			{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]},
+			{"type":"function_call","call_id":"call-1","name":"lookup","arguments":"{\"id\":1}"},
+			{"type":"function_call_output","call_id":"call-1","output":"result"}
+		],
+		"tools":[
+			{"type":"function","name":"lookup","description":"Look up a record","parameters":{"type":"object"},"strict":true},
+			{"type":"custom","name":"apply_patch","description":"Apply a patch","format":{"type":"text"}}
+		],
+		"tool_choice":{"type":"function","name":"lookup"}
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var value map[string]any
+	if json.Unmarshal(raw, &value) != nil {
+		t.Fatalf("translated request = %s", raw)
+	}
+	if value["max_tokens"] != float64(99) || value["reasoning_effort"] != "high" {
+		t.Fatalf("translated request = %#v", value)
+	}
+	messages := value["messages"].([]any)
+	if len(messages) != 4 || messages[0].(map[string]any)["role"] != "system" ||
+		messages[2].(map[string]any)["tool_calls"] == nil || messages[3].(map[string]any)["tool_call_id"] != "call-1" {
+		t.Fatalf("messages = %#v", messages)
+	}
+	tools := value["tools"].([]any)
+	function := tools[0].(map[string]any)["function"].(map[string]any)
+	if function["name"] != "lookup" || function["strict"] != true || len(customTools) != 1 {
+		t.Fatalf("tools = %#v", tools)
+	}
+	customFunction := tools[1].(map[string]any)["function"].(map[string]any)
+	if customFunction["name"] != "apply_patch" || customFunction["parameters"] == nil {
+		t.Fatalf("custom tool = %#v", customFunction)
+	}
+}
+
+func TestChatCompletionTranslationMapsToolCalls(t *testing.T) {
+	completion := map[string]any{
+		"id": "chatcmpl-test", "model": "gpt-test", "created": float64(42),
+		"choices": []any{map[string]any{
+			"finish_reason": "tool_calls",
+			"message": map[string]any{"role": "assistant", "content": nil, "tool_calls": []any{map[string]any{
+				"id": "call-1", "function": map[string]any{"name": "lookup", "arguments": `{"id":1}`},
+			}}},
+		}},
+		"usage": map[string]any{"prompt_tokens": float64(8), "completion_tokens": float64(3)},
+	}
+	response, input, output, err := chatCompletionToResponse(completion, "fallback", "fallback-id", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	items := response["output"].([]any)
+	if response["id"] != "resp_test" || response["status"] != "completed" || input != 8 || output != 3 || len(items) != 1 {
+		t.Fatalf("response = %#v usage=%d/%d", response, input, output)
+	}
+	call := items[0].(map[string]any)
+	if call["type"] != "function_call" || call["call_id"] != "call-1" || call["name"] != "lookup" {
+		t.Fatalf("function call = %#v", call)
+	}
+}
+
+func TestChatCompletionTranslationRestoresCustomToolCall(t *testing.T) {
+	completion := map[string]any{
+		"id": "chatcmpl-custom",
+		"choices": []any{map[string]any{
+			"finish_reason": "tool_calls",
+			"message": map[string]any{"tool_calls": []any{map[string]any{
+				"id": "call-1", "type": "function", "function": map[string]any{"name": "apply_patch", "arguments": `{"input":"*** Begin Patch"}`},
+			}}},
+		}},
+	}
+	response, _, _, err := chatCompletionToResponse(completion, "gpt-test", "fallback-id", map[string]struct{}{"apply_patch": {}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	call := response["output"].([]any)[0].(map[string]any)
+	if call["type"] != "custom_tool_call" || call["input"] != "*** Begin Patch" {
+		t.Fatalf("custom call = %#v", call)
+	}
+}

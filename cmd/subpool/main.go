@@ -56,7 +56,7 @@ func main() {
 	defer deviceAuth.Close()
 	providerHTTPClient := providerhttp.NewWithResponseHeaderTimeout(cfg.UpstreamResponseHeaderTimeout)
 	copilotClient := copilot.NewClient(copilot.ClientConfig{
-		APIBase: cfg.CopilotAPIBase, TokenExchangeURL: cfg.CopilotTokenExchangeURL, HTTPClient: providerHTTPClient,
+		APIBase: cfg.CopilotAPIBase, TokenExchangeURL: cfg.CopilotTokenExchangeURL, EntitlementsURL: cfg.CopilotEntitlementsURL, HTTPClient: providerHTTPClient,
 	})
 	copilotDeviceAuth := copilot.NewDeviceAuth(copilot.DeviceAuthConfig{
 		ClientID: cfg.CopilotClientID, TokenExchangeURL: cfg.CopilotTokenExchangeURL, HTTPClient: providerHTTPClient,

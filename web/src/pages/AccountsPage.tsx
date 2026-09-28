@@ -22,7 +22,7 @@ type PendingAction =
 const quotaFreshnessMs = 5 * 60 * 1000
 
 function needsQuotaRefresh(account: ProviderAccount) {
-  if (account.provider !== 'codex' || account.credential_type !== 'subscription_oauth') return false
+  if ((account.provider !== 'codex' && account.provider !== 'copilot') || account.credential_type === 'api_key') return false
   if (account.status !== 'active' && account.status !== 'exhausted') return false
   const checkedAt = Date.parse(account.quota_checked_at ?? '')
   return !Number.isFinite(checkedAt) || checkedAt <= Date.now() - quotaFreshnessMs

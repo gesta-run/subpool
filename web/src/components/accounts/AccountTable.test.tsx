@@ -77,6 +77,35 @@ describe('AccountTable health states', () => {
     expect(screen.queryByText('Usage unavailable')).not.toBeInTheDocument()
   })
 
+  it('shows GitHub Copilot subscription capacity in AI credits', () => {
+    renderTable({
+      ...baseAccount,
+      provider: 'copilot',
+      credential_type: 'subscription_oauth',
+      quota_snapshot: {
+        plan_type: 'pro_plus',
+        usage_allowed: true,
+        credits: {
+          used: 375,
+          entitlement: 1500,
+          remaining: 1125,
+          remaining_percent: 75,
+          unlimited: false,
+          overage_permitted: false,
+          overage_count: 0,
+          reset_at: 1790812800,
+        },
+      },
+    })
+
+    expect(screen.getByText('375 / 1,500')).toBeInTheDocument()
+    expect(screen.getByText('AI credits')).toBeInTheDocument()
+    expect(screen.getByText('Additional usage disabled')).toBeInTheDocument()
+    expect(screen.getByRole('progressbar', { name: /AI credits remaining/i })).toHaveAttribute('aria-valuenow', '75')
+    expect(screen.getByRole('button', { name: 'Refresh AI credits for Team account' })).toBeInTheDocument()
+    expect(screen.queryByText('Usage unavailable')).not.toBeInTheDocument()
+  })
+
   it('shows the account-level Fast mode state', () => {
     renderTable({ ...baseAccount, fast_mode_enabled: true })
     expect(screen.getByRole('button', { name: 'Disable Fast mode for Team account' })).toHaveAttribute('aria-pressed', 'true')
