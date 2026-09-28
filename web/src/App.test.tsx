@@ -209,6 +209,29 @@ describe('Subpool console', () => {
     expect(checks).toHaveLength(1)
   })
 
+  it('refreshes stale GitHub Copilot AI credits once when the page loads', async () => {
+    let used = 0
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const path = String(input)
+      if (path === '/api/v1/provider-accounts') return json({ data: [{
+        id: 'account-1', display_name: 'Primary Copilot', provider: 'copilot', credential_type: 'subscription_oauth', status: 'active',
+        health_status: 'healthy', quota_checked_at: '2000-01-01T00:00:00Z', assigned_api_keys: 1,
+        quota_snapshot: { usage_allowed: true, credits: { used, entitlement: 1500, remaining: 1500 - used, remaining_percent: (1500 - used) / 15, unlimited: false, overage_permitted: false, overage_count: 0 } },
+      }] })
+      if (path === '/api/v1/provider-accounts/account-1/check' && init?.method === 'POST') {
+        used = 100
+        return json({ status: 'active' })
+      }
+      throw new Error(`Unexpected request: ${path}`)
+    })
+
+    render(<AccountsPage />)
+
+    await waitFor(() => expect(screen.getByText('100 / 1,500')).toBeInTheDocument())
+    const checks = vi.mocked(fetch).mock.calls.filter(([path, init]) => String(path).endsWith('/check') && init?.method === 'POST')
+    expect(checks).toHaveLength(1)
+  })
+
   it('updates Fast mode without overwriting a cooling-down account status', async () => {
     let fastModeEnabled = false
     vi.mocked(fetch).mockImplementation(async (input, init) => {

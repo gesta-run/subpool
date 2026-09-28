@@ -13,6 +13,7 @@ import (
 
 	"github.com/gesta-run/subpool/internal/domain"
 	"github.com/gesta-run/subpool/internal/provider/codex"
+	"github.com/gesta-run/subpool/internal/provider/copilot"
 	"github.com/gesta-run/subpool/internal/provider/openaicompat"
 	"github.com/gesta-run/subpool/internal/store"
 )
@@ -30,6 +31,15 @@ func (c testCompatible) Models(context.Context, openaicompat.Credentials) (*http
 type testCodexUsage struct {
 	snapshot codex.UsageSnapshot
 	err      error
+}
+
+type testCopilotCredits struct {
+	snapshot copilot.CreditsSnapshot
+	err      error
+}
+
+func (c testCopilotCredits) Credits(context.Context, copilot.Credentials) (copilot.CreditsSnapshot, error) {
+	return c.snapshot, c.err
 }
 
 func (c testCodexUsage) Usage(context.Context, codex.Credentials) (codex.UsageSnapshot, error) {
@@ -65,6 +75,45 @@ func TestCodexHealthCheckTracksQuotaProbeFailure(t *testing.T) {
 	checker.ApplyNewAccount(&account, result)
 	if account.LastQuotaErrorCode != "connection_failed" || account.QuotaCheckedAt != nil || account.LastCheckedAt != nil || account.ConsecutiveFailures != 0 {
 		t.Fatalf("quota freshness = %#v", account)
+	}
+}
+
+func TestCopilotHealthCheckStoresAICreditsAndExhaustsRouting(t *testing.T) {
+	credentials, _ := json.Marshal(copilot.Credentials{GitHubToken: "github-token", Email: "octocat@example.com"})
+	allowed := false
+	account := domain.ProviderAccount{Provider: domain.ProviderCopilot, Status: domain.AccountActive, CredentialCiphertext: []byte("encrypted")}
+	snapshot := copilot.CreditsSnapshot{
+		PlanType: "pro_plus", UsageAllowed: &allowed,
+		Credits: &copilot.CreditsQuota{Used: 1500, Entitlement: 1500, RemainingPercent: 0},
+	}
+	checker := NewChecker(nil, testCipher{plaintext: credentials}, nil, nil, testCopilotCredits{snapshot: snapshot})
+	result := checker.Check(context.Background(), account)
+	if result.HealthStatus != domain.HealthHealthy || result.UsageAllowed == nil || *result.UsageAllowed || !strings.Contains(string(result.QuotaSnapshot), `"credits"`) {
+		t.Fatalf("result = %#v", result)
+	}
+	checker.ApplyNewAccount(&account, result)
+	if account.Status != domain.AccountExhausted || account.QuotaCheckedAt == nil || account.Email != "octocat@example.com" {
+		t.Fatalf("account = %#v", account)
+	}
+}
+
+func TestCopilotQuotaProbeFailurePreservesRoutingHealth(t *testing.T) {
+	credentials, _ := json.Marshal(copilot.Credentials{GitHubToken: "github-token"})
+	account := domain.ProviderAccount{Provider: domain.ProviderCopilot, CredentialCiphertext: []byte("encrypted")}
+	checker := NewChecker(nil, testCipher{plaintext: credentials}, nil, nil, testCopilotCredits{err: context.DeadlineExceeded})
+	result := checker.Check(context.Background(), account)
+	if result.HealthStatus != domain.HealthUnknown || result.ErrorCode != "" || result.QuotaErrorCode != "timeout" || !result.QuotaProbeFailed || result.Failure {
+		t.Fatalf("result = %#v", result)
+	}
+}
+
+func TestCopilotIncompleteCredentialsRemainAHealthFailure(t *testing.T) {
+	credentials, _ := json.Marshal(copilot.Credentials{})
+	account := domain.ProviderAccount{Provider: domain.ProviderCopilot, CredentialCiphertext: []byte("encrypted")}
+	checker := NewChecker(nil, testCipher{plaintext: credentials}, nil, nil, testCopilotCredits{err: copilot.ErrCredentialsIncomplete})
+	result := checker.Check(context.Background(), account)
+	if result.HealthStatus != domain.HealthUnhealthy || result.ErrorCode != "credential_unavailable" || !result.Failure || result.QuotaProbeFailed {
+		t.Fatalf("result = %#v", result)
 	}
 }
 

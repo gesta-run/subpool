@@ -80,7 +80,7 @@ export function UsagePage() {
   return (
     <section className="usage-page" aria-labelledby="usage-heading" aria-busy={loading}>
       <header className="page-heading">
-        <div><h2 id="usage-heading">Token usage</h2><p>Aggregated token totals only. Prompts, responses, and individual request records are never stored.</p></div>
+        <div><h2 id="usage-heading">Token telemetry</h2><p>Provider-reported token totals for diagnostics, not provider billing. GitHub Copilot billing uses AI credits shown on Accounts.</p></div>
         <div className="usage-range" role="group" aria-label="Usage time range">
           {ranges.map(([value, label]) => <button key={value} type="button" className={range === value ? 'active' : ''} aria-pressed={range === value} disabled={loading} onClick={() => selectRange(value)}>{label}</button>)}
         </div>
@@ -96,7 +96,7 @@ export function UsagePage() {
         </div>
 
         {error ? <div className="usage-feedback" role="alert"><span>{error}</span><button type="button" onClick={() => void reload()}>Try again</button></div> : null}
-        {data.items.length === 0 && pageIndex === 0 ? <StatePanel kind="empty" title="No token usage yet" description="Usage will appear after an employee API key completes its first request." /> : (
+        {data.items.length === 0 && pageIndex === 0 ? <StatePanel kind="empty" title="No token telemetry yet" description="Telemetry will appear after an employee API key completes its first request." /> : (
           <div className="table-frame usage-table-frame">
             <header className="usage-table-heading">
               <div><h3>Usage by employee</h3><p>Expand an employee to inspect model totals.</p></div>

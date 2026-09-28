@@ -22,6 +22,7 @@ import (
 type ClientConfig struct {
 	APIBase          string
 	TokenExchangeURL string
+	EntitlementsURL  string
 	HTTPClient       *http.Client
 }
 
@@ -33,6 +34,7 @@ type tokenEntry struct {
 type Client struct {
 	apiBase          string
 	tokenExchangeURL string
+	entitlementsURL  string
 	httpClient       *http.Client
 	now              func() time.Time
 	mu               sync.Mutex
@@ -46,11 +48,14 @@ func NewClient(config ClientConfig) *Client {
 	if strings.TrimSpace(config.TokenExchangeURL) == "" {
 		config.TokenExchangeURL = DefaultTokenExchangeURL
 	}
+	if strings.TrimSpace(config.EntitlementsURL) == "" {
+		config.EntitlementsURL = DefaultEntitlementsURL
+	}
 	if config.HTTPClient == nil {
 		config.HTTPClient = providerhttp.New()
 	}
 	return &Client{
-		apiBase: strings.TrimRight(config.APIBase, "/"), tokenExchangeURL: config.TokenExchangeURL,
+		apiBase: strings.TrimRight(config.APIBase, "/"), tokenExchangeURL: config.TokenExchangeURL, entitlementsURL: config.EntitlementsURL,
 		httpClient: config.HTTPClient, now: time.Now, tokens: make(map[string]*tokenEntry),
 	}
 }
@@ -122,7 +127,7 @@ func (c *Client) doRequest(ctx context.Context, method, path string, body []byte
 
 func (c *Client) token(ctx context.Context, credentials Credentials) (accessToken, error) {
 	if strings.TrimSpace(credentials.GitHubToken) == "" {
-		return accessToken{}, errors.New("Copilot credentials are incomplete")
+		return accessToken{}, ErrCredentialsIncomplete
 	}
 	key := tokenKey(credentials.GitHubToken)
 	for {

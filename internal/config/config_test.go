@@ -29,7 +29,7 @@ func TestLoad(t *testing.T) {
 	if cfg.CodexUpstreamURL != "https://chatgpt.com/backend-api/codex" {
 		t.Fatalf("upstream = %s", cfg.CodexUpstreamURL)
 	}
-	if cfg.CopilotClientID == "" || cfg.CopilotAPIBase != "https://api.githubcopilot.com" || cfg.CopilotTokenExchangeURL == "" {
+	if cfg.CopilotClientID == "" || cfg.CopilotAPIBase != "https://api.githubcopilot.com" || cfg.CopilotTokenExchangeURL == "" || cfg.CopilotEntitlementsURL != "https://api.github.com/copilot_internal/user" {
 		t.Fatalf("Copilot defaults = %#v", cfg)
 	}
 	if !cfg.ResponsesWSEnabled {

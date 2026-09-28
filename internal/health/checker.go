@@ -36,8 +36,8 @@ type CompatibleModels interface {
 	Models(context.Context, openaicompat.Credentials) (*http.Response, error)
 }
 
-type CopilotValidator interface {
-	Validate(context.Context, copilot.Credentials) error
+type CopilotCredits interface {
+	Credits(context.Context, copilot.Credentials) (copilot.CreditsSnapshot, error)
 }
 
 type Result struct {
@@ -57,14 +57,14 @@ type Checker struct {
 	cipher     Cipher
 	codex      CodexUsage
 	compatible CompatibleModels
-	copilot    CopilotValidator
+	copilot    CopilotCredits
 	now        func() time.Time
 }
 
-func NewChecker(st store.Store, cipher Cipher, codexUsage CodexUsage, compatible CompatibleModels, copilotValidator ...CopilotValidator) *Checker {
+func NewChecker(st store.Store, cipher Cipher, codexUsage CodexUsage, compatible CompatibleModels, copilotCredits ...CopilotCredits) *Checker {
 	checker := &Checker{store: st, cipher: cipher, codex: codexUsage, compatible: compatible, now: time.Now}
-	if len(copilotValidator) > 0 {
-		checker.copilot = copilotValidator[0]
+	if len(copilotCredits) > 0 {
+		checker.copilot = copilotCredits[0]
 	}
 	return checker
 }
@@ -124,10 +124,17 @@ func (c *Checker) Check(ctx context.Context, account domain.ProviderAccount) Res
 		if json.Unmarshal(plaintext, &credentials) != nil || c.copilot == nil {
 			return Result{HealthStatus: domain.HealthUnhealthy, ErrorCode: "credential_unavailable", Failure: true}
 		}
-		if err = c.copilot.Validate(ctx, credentials); err != nil {
-			return classifyError(err)
+		snapshot, creditsErr := c.copilot.Credits(ctx, credentials)
+		if creditsErr != nil {
+			return classifyCopilotQuotaError(creditsErr)
 		}
-		return Result{HealthStatus: domain.HealthHealthy, Email: credentials.Email}
+		raw, marshalErr := json.Marshal(snapshot)
+		if marshalErr != nil {
+			return Result{HealthStatus: domain.HealthUnknown, ErrorCode: "invalid_usage_response", QuotaErrorCode: "invalid_usage_response", Failure: true}
+		}
+		return Result{
+			HealthStatus: domain.HealthHealthy, Email: credentials.Email, QuotaSnapshot: raw, UsageAllowed: snapshot.UsageAllowed,
+		}
 	default:
 		return Result{HealthStatus: domain.HealthUnknown, ErrorCode: "probe_unsupported"}
 	}
@@ -295,6 +302,21 @@ func classifyError(err error) Result {
 }
 
 func classifyCodexQuotaError(err error) Result {
+	result := classifyError(err)
+	result.QuotaErrorCode = result.ErrorCode
+	if result.AuthFailed {
+		return result
+	}
+	result.ErrorCode = ""
+	result.Failure = false
+	result.QuotaProbeFailed = true
+	return result
+}
+
+func classifyCopilotQuotaError(err error) Result {
+	if errors.Is(err, copilot.ErrCredentialsIncomplete) {
+		return Result{HealthStatus: domain.HealthUnhealthy, ErrorCode: "credential_unavailable", Failure: true}
+	}
 	result := classifyError(err)
 	result.QuotaErrorCode = result.ErrorCode
 	if result.AuthFailed {

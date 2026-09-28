@@ -332,7 +332,7 @@ td small { color: var(--ink-muted); }
 .status--auth_failed i,
 .status--disabled i { background: var(--red); }
 
-.capacity { width: 150px; }
+.capacity { width: 170px; display: grid; gap: 6px; }
 .capacity > span { color: var(--ink-soft); font-size: 11px; }
 .capacity > div { height: 5px; border-radius: 999px; background: var(--panel-nested); }
 .capacity > div i { border-radius: 999px; background: var(--acid-deep); }

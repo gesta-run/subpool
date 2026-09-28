@@ -140,7 +140,7 @@ func responseWSRetryError(reason RetryReason) (string, string) {
 	case RetryInvalid:
 		return "invalid_request_error", "client_metadata must be an object"
 	case RetryUnsupported:
-		return "unsupported_provider_endpoint", "GitHub Copilot accounts support /v1/chat/completions, not /v1/responses"
+		return "unsupported_provider_endpoint", "no eligible account supports this Responses API request"
 	default:
 		return "provider_error", "provider is unavailable"
 	}

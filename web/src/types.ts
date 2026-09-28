@@ -26,6 +26,7 @@ export interface ProviderAccount {
     resets_at?: string
     five_hour?: QuotaWindow
     weekly?: QuotaWindow
+    credits?: CreditsQuota
   } | null
   quota_checked_at?: string | null
   last_quota_error_code?: string | null
@@ -47,6 +48,17 @@ export interface QuotaWindow {
   remaining_percent: number
   window_seconds: number
   reset_at: number
+}
+
+export interface CreditsQuota {
+  used: number
+  entitlement: number
+  remaining: number
+  remaining_percent: number
+  unlimited: boolean
+  overage_permitted: boolean
+  overage_count: number
+  reset_at?: number
 }
 
 export interface CodexResetCredit {

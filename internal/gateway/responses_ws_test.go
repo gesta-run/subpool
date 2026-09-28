@@ -192,26 +192,36 @@ func TestResponsesWebSocketFirstBridgeTurnFailsOver(t *testing.T) {
 	}
 }
 
-func TestResponsesWebSocketSkipsCopilotAccount(t *testing.T) {
+func TestResponsesWebSocketBridgesCopilotAccount(t *testing.T) {
 	server, st, _, plain := newTestServer(t)
 	cipher := server.cipher.(*credential.Cipher)
-	first := copilotAccountWithCipher(t, cipher, "copilot-account")
-	second := compatibleAccountWithCipher(t, cipher, "compatible-account")
-	st.route.Account = first
-	st.route.Pool.Provider = domain.ProviderMixed
-	st.reassigned = second
-	provider := &responsesWSBridgeProvider{payload: make(chan []byte, 1)}
-	server.compatible = provider
+	account := copilotAccountWithCipher(t, cipher, "copilot-account")
+	st.route.Account = account
+	st.route.Pool.Provider = domain.ProviderCopilot
+	provider := &fakeCopilotProvider{response: sseResponse(http.StatusOK,
+		"data: {\"id\":\"chatcmpl-ws\",\"model\":\"gpt-test\",\"choices\":[{\"delta\":{\"content\":\"OK\"},\"finish_reason\":\"stop\"}]}\n\n"+
+			"data: {\"id\":\"chatcmpl-ws\",\"choices\":[],\"usage\":{\"prompt_tokens\":4,\"completion_tokens\":1}}\n\n"+
+			"data: [DONE]\n\n")}
+	server.WithCopilot(provider)
 	server.WithResponsesWebSocket(true, false, "")
 
 	client, cleanup := dialResponsesWSTestServer(t, server, plain)
 	defer cleanup()
 	writeResponsesWSMessage(t, client, `{"type":"response.create","model":"gpt-test","input":"hello"}`)
-	if event := readResponsesWSMessage(t, client); event["type"] != "response.completed" {
-		t.Fatalf("event = %#v", event)
+	var terminal map[string]any
+	for range 12 {
+		event := readResponsesWSMessage(t, client)
+		if event["type"] == "response.completed" {
+			terminal = event
+			break
+		}
 	}
-	if len(st.reassignExcludes) != 1 || len(st.reassignExcludes[0]) != 1 || st.reassignExcludes[0][0] != first.ID {
-		t.Fatalf("reassignment exclusions = %#v", st.reassignExcludes)
+	if terminal == nil || !strings.Contains(string(provider.body), `"messages":[{"content":"hello","role":"user"}]`) ||
+		!strings.Contains(string(provider.body), `"stream":true`) {
+		t.Fatalf("terminal=%#v upstream=%s", terminal, provider.body)
+	}
+	if st.usageInput != 4 || st.usageOutput != 1 || !st.sessionSaved {
+		t.Fatalf("usage=%d/%d session=%v", st.usageInput, st.usageOutput, st.sessionSaved)
 	}
 }
 

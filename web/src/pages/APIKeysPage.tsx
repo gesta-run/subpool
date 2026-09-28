@@ -157,7 +157,7 @@ export function APIKeysPage() {
       {createdKey ? <CreatedKeyDialog copied={copied} copyError={copyError} secret={createdKey} onClose={closeSecret} onCopy={() => void copyCreatedKey()} /> : null}
       {pendingRemove ? <ConfirmDialog
         title={`Remove ${pendingRemove.employee_name}'s API key?`}
-        description="This key will stop working immediately. Historical token usage will be retained."
+        description="This key will stop working immediately. Historical token telemetry will be retained."
         confirmLabel="Remove API key"
         onCancel={() => setPendingRemove(null)}
         onConfirm={() => { const key = pendingRemove; setPendingRemove(null); void revokeKey(key) }}

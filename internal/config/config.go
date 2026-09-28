@@ -27,6 +27,7 @@ type Config struct {
 	CopilotClientID               string
 	CopilotAPIBase                string
 	CopilotTokenExchangeURL       string
+	CopilotEntitlementsURL        string
 	ResponsesWSEnabled            bool
 	ResponsesWSForceHTTPBridge    bool
 	UpstreamResponseHeaderTimeout time.Duration
@@ -50,6 +51,7 @@ func Load() (Config, error) {
 		CopilotClientID:               envOr("SUBPOOL_COPILOT_CLIENT_ID", "Iv1.b507a08c87ecfe98"),
 		CopilotAPIBase:                strings.TrimRight(envOr("SUBPOOL_COPILOT_API_BASE", "https://api.githubcopilot.com"), "/"),
 		CopilotTokenExchangeURL:       envOr("SUBPOOL_COPILOT_TOKEN_EXCHANGE_URL", "https://api.github.com/copilot_internal/v2/token"),
+		CopilotEntitlementsURL:        envOr("SUBPOOL_COPILOT_ENTITLEMENTS_URL", "https://api.github.com/copilot_internal/user"),
 		UpstreamResponseHeaderTimeout: 3 * time.Minute,
 		MaxRequestBodyBytes:           256 << 20,
 		MaxInflightRequestBodyBytes:   1 << 30,

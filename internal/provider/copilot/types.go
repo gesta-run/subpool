@@ -1,10 +1,16 @@
 package copilot
 
-import "time"
+import (
+	"errors"
+	"time"
+)
+
+var ErrCredentialsIncomplete = errors.New("Copilot credentials are incomplete")
 
 const (
 	DefaultAPIBase          = "https://api.githubcopilot.com"
 	DefaultTokenExchangeURL = "https://api.github.com/copilot_internal/v2/token"
+	DefaultEntitlementsURL  = "https://api.github.com/copilot_internal/user"
 	DefaultDeviceCodeURL    = "https://github.com/login/device/code"
 	DefaultAccessTokenURL   = "https://github.com/login/oauth/access_token"
 	DefaultUserURL          = "https://api.github.com/user"
@@ -37,6 +43,23 @@ type Model struct {
 	Preview     bool   `json:"preview"`
 	Disabled    bool   `json:"disabled"`
 	Hidden      bool   `json:"hidden"`
+}
+
+type CreditsQuota struct {
+	Used             float64 `json:"used"`
+	Entitlement      float64 `json:"entitlement"`
+	Remaining        float64 `json:"remaining"`
+	RemainingPercent float64 `json:"remaining_percent"`
+	Unlimited        bool    `json:"unlimited"`
+	OveragePermitted bool    `json:"overage_permitted"`
+	OverageCount     float64 `json:"overage_count"`
+	ResetAt          int64   `json:"reset_at,omitempty"`
+}
+
+type CreditsSnapshot struct {
+	PlanType     string        `json:"plan_type,omitempty"`
+	UsageAllowed *bool         `json:"usage_allowed,omitempty"`
+	Credits      *CreditsQuota `json:"credits,omitempty"`
 }
 
 type accessToken struct {
