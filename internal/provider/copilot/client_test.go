@@ -2,6 +2,7 @@ package copilot
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -78,6 +79,68 @@ func TestClientDoesNotRefreshForbiddenResponse(t *testing.T) {
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusForbidden || exchanges.Load() != 1 || requests.Load() != 1 {
 		t.Fatalf("status/exchanges/requests = %d/%d/%d", response.StatusCode, exchanges.Load(), requests.Load())
+	}
+}
+
+func TestClientDoesNotForwardCodexIdentity(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/token":
+			_, _ = fmt.Fprintf(w, `{"token":"copilot-token","expires_at":%d,"refresh_in":3600,"endpoints":{"api":%q}}`, time.Now().Add(time.Hour).Unix(), "http://"+r.Host)
+		case "/chat/completions":
+			for _, name := range []string{
+				"X-Codex-Installation-Id", "X-Codex-Turn-Metadata", "X-Codex-Window-Id",
+				"X-Client-Request-Id", "Session-Id", "Thread-Id", "Chatgpt-Account-Id", "Originator",
+			} {
+				if value := r.Header.Get(name); value != "" {
+					t.Errorf("%s leaked to Copilot: %q", name, value)
+				}
+			}
+			if userAgent := r.Header.Get("User-Agent"); userAgent != "GitHubCopilotChat/0.26.7" {
+				t.Errorf("User-Agent = %q", userAgent)
+			}
+			var payload map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Errorf("decode Copilot request body: %v", err)
+				http.Error(w, "invalid request body", http.StatusBadRequest)
+				return
+			}
+			for _, field := range []string{"client_metadata", "x-codex-installation-id", "x-codex-turn-metadata"} {
+				if _, exists := payload[field]; exists {
+					t.Errorf("body field %q leaked to Copilot", field)
+				}
+			}
+			if payload["model"] != "gpt-test" || payload["stream"] != true {
+				t.Errorf("payload = %#v", payload)
+			}
+			_, _ = io.WriteString(w, `{"id":"chat-1"}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client := NewClient(ClientConfig{APIBase: server.URL, TokenExchangeURL: server.URL + "/token", HTTPClient: server.Client()})
+	body := []byte(`{"model":"gpt-test","stream":true,"client_metadata":{"session_id":"session-1","x-codex-installation-id":"installation-1"},"x-codex-installation-id":"installation-1","x-codex-turn-metadata":"turn-1"}`)
+	headers := http.Header{
+		"Accept":                  {"text/event-stream"},
+		"User-Agent":              {"codex-tui/0.146.0"},
+		"Originator":              {"codex_cli_rs"},
+		"Chatgpt-Account-Id":      {"chatgpt-account"},
+		"X-Codex-Installation-Id": {"installation-1"},
+		"X-Codex-Turn-Metadata":   {"turn-1"},
+		"X-Codex-Window-Id":       {"window-1"},
+		"X-Client-Request-Id":     {"request-1"},
+		"Session-Id":              {"session-1"},
+		"Thread-Id":               {"thread-1"},
+	}
+	response, err := client.ChatCompletions(context.Background(), body, headers, Credentials{GitHubToken: "github-token"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", response.StatusCode)
 	}
 }
 

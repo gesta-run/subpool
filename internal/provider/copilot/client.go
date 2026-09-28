@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gesta-run/subpool/internal/jsonobject"
 	providerhttp "github.com/gesta-run/subpool/internal/provider/httpclient"
 )
 
@@ -55,7 +56,7 @@ func NewClient(config ClientConfig) *Client {
 }
 
 func (c *Client) ChatCompletions(ctx context.Context, body []byte, source http.Header, credentials Credentials) (*http.Response, error) {
-	return c.request(ctx, http.MethodPost, "/chat/completions", body, source, credentials)
+	return c.request(ctx, http.MethodPost, "/chat/completions", sanitizeChatCompletionsBody(body), source, credentials)
 }
 
 func (c *Client) Models(ctx context.Context, credentials Credentials) (*http.Response, error) {
@@ -189,6 +190,17 @@ func setEditorHeaders(header http.Header) {
 	header.Set("User-Agent", "GitHubCopilotChat/0.26.7")
 	header.Set("x-github-api-version", "2025-04-01")
 	header.Set("x-vscode-user-agent-library-version", "electron-fetch")
+}
+
+func sanitizeChatCompletionsBody(body []byte) []byte {
+	value, err := jsonobject.Parse(body)
+	if err != nil {
+		return body
+	}
+	for _, field := range []string{"client_metadata", "x-codex-installation-id", "x-codex-turn-metadata"} {
+		value.Delete(field)
+	}
+	return value.Bytes()
 }
 
 func tokenKey(value string) string {
