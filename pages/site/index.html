@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#0a0a0a" />
+    <meta name="description" content="Subpool release versions, container images, and release notes." />
+    <title>Subpool Releases</title>
+    <link rel="icon" href="./assets/subpool-favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="./styles.css" />
+    <script type="module" src="./app.js"></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main-content">Skip to release information</a>
+    <header class="masthead">
+      <div class="brand-lockup">
+        <img src="./assets/subpool-wordmark-inverse.svg" alt="Subpool" />
+        <span>Releases</span>
+      </div>
+    </header>
+
+    <main id="main-content">
+      <section class="latest-release" data-state="loading" aria-labelledby="latest-heading" aria-busy="true">
+        <div class="latest-release__copy">
+          <p class="eyebrow"><span class="signal-dot" aria-hidden="true"></span> <span data-latest-label>Release status</span></p>
+          <h1 id="latest-heading"><span data-latest-version>Loading release</span></h1>
+          <p class="latest-release__summary">A pinned Subpool build with source history, container coordinates, and release notes in one place.</p>
+
+          <dl class="version-facts" aria-label="Current release information">
+            <div><dt>Published</dt><dd data-latest-date>Checking&hellip;</dd></div>
+            <div><dt>Source</dt><dd><span data-latest-commit>Checking&hellip;</span></dd></div>
+            <div><dt>Channel</dt><dd data-latest-channel>Checking&hellip;</dd></div>
+          </dl>
+
+          <div class="install-command" aria-label="Container image command">
+            <span>Container image</span>
+            <div>
+              <code data-install-command>Checking for a published image&hellip;</code>
+              <button class="copy-button" type="button" data-copy-command aria-label="Copy container image command" disabled>
+                <svg aria-hidden="true" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M15 9V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h3"/></svg>
+                <span>Copy</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <aside class="artifact-panel" aria-label="Release artifact details">
+          <div class="artifact-panel__header">
+            <span>OCI artifact</span>
+            <span class="artifact-status" data-artifact-status><i aria-hidden="true"></i><span data-artifact-status-label>Checking</span></span>
+          </div>
+          <div class="artifact-panel__body">
+            <div class="artifact-mark" aria-hidden="true">
+              <span></span><span></span><span></span>
+            </div>
+            <p>public.ecr.aws</p>
+            <strong>cloudpilotai/subpool</strong>
+            <code data-artifact-tag>:loading</code>
+          </div>
+          <dl class="artifact-specs">
+            <div><dt>Platforms</dt><dd>linux/amd64<br />linux/arm64</dd></div>
+            <div><dt>Registry</dt><dd>Amazon ECR Public</dd></div>
+          </dl>
+        </aside>
+      </section>
+
+      <section class="release-history" aria-labelledby="history-heading">
+        <header class="section-heading">
+          <div>
+            <p class="eyebrow">Version archive</p>
+            <h2 id="history-heading">Release history</h2>
+            <p>Stable release notes and immutable image tags, newest first.</p>
+          </div>
+        </header>
+
+        <div class="release-list" data-release-list aria-live="polite" aria-busy="true">
+          <article class="release-skeleton" aria-label="Loading release notes">
+            <span></span><span></span><span></span>
+          </article>
+          <article class="release-skeleton" aria-hidden="true">
+            <span></span><span></span><span></span>
+          </article>
+        </div>
+
+        <div class="release-state" data-release-none hidden>
+          <strong>No releases published yet</strong>
+          <p>Publish the first Subpool release to populate this page.</p>
+        </div>
+
+        <div class="release-state release-state--error" data-release-error hidden role="alert">
+          <strong>Release information is unavailable</strong>
+          <p data-release-error-message>The release manifest could not be loaded.</p>
+          <button type="button" class="state-action" data-retry>Try again</button>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <span>Subpool release manifest</span>
+      <span data-generated-at>Waiting for release data</span>
+    </footer>
+
+    <noscript><p class="noscript-notice">JavaScript is required to load the release manifest.</p></noscript>
+  </body>
+</html>

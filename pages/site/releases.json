@@ -1,0 +1,16 @@
+{
+  "repository": {
+    "name": "Subpool",
+    "image": "public.ecr.aws/cloudpilotai/subpool"
+  },
+  "generated_at": "2026-09-29T05:30:00Z",
+  "releases": [
+    {
+      "tag": "v0.1.0",
+      "name": "Subpool v0.1.0",
+      "published_at": "2026-09-04T08:32:50Z",
+      "commit_sha": "7c18f52c40493504c6845444d25a01f50c4839f6",
+      "notes_html": "<h2>Highlights</h2><ul><li>Pool Codex subscription and OpenAI-compatible accounts behind employee API keys.</li><li>Route Responses API, Chat Completions, and Responses WebSocket traffic with account affinity and health-aware failover.</li><li>Keep a stable Codex device identity per account and optionally enforce Fast mode at the account level.</li><li>Manage accounts, pools, API keys, quota, reset credits, health, and usage from the web console.</li><li>Deploy with Docker Compose using published multi-architecture images from Amazon ECR Public.</li></ul><h2>Getting started</h2><p>Follow the installation and Codex configuration instructions in the README. Database migrations are applied automatically during startup.</p><h2>Compatibility</h2><p>This is the first public release. Configuration and database upgrades within the 0.1 series will preserve the documented deployment path.</p>"
+    }
+  ]
+}

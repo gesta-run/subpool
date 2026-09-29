@@ -79,6 +79,14 @@ jobs:
         working-directory: web
         run: npm run build
 
+      - name: Test release pages
+        working-directory: pages
+        run: npm test
+
+      - name: Build release pages offline
+        working-directory: pages
+        run: npm run build:offline
+
   build:
     name: Build Subpool image
     needs:
