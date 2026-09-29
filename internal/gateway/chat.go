@@ -3,6 +3,7 @@ package gateway
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -17,7 +18,7 @@ func chatToResponses(raw []byte) ([]byte, error) {
 		return nil, fmt.Errorf("invalid JSON request")
 	}
 	response := make(map[string]any)
-	for _, name := range []string{"model", "max_output_tokens", "reasoning", "tool_choice", "parallel_tool_calls"} {
+	for _, name := range []string{"model", "max_output_tokens", "reasoning", "parallel_tool_calls"} {
 		if value, ok := chat[name]; ok {
 			response[name] = value
 		}
@@ -31,6 +32,20 @@ func chatToResponses(raw []byte) ([]byte, error) {
 	if effort, ok := chat["reasoning_effort"].(string); ok && strings.TrimSpace(effort) != "" {
 		response["reasoning"] = map[string]any{"effort": effort}
 	}
+	if choice, exists := chat["tool_choice"]; exists {
+		converted, convertErr := chatToolChoiceToResponses(choice)
+		if convertErr != nil {
+			return nil, convertErr
+		}
+		response["tool_choice"] = converted
+	}
+	if format, exists := chat["response_format"]; exists {
+		converted, convertErr := chatResponseFormatToResponses(format)
+		if convertErr != nil {
+			return nil, convertErr
+		}
+		response["text"] = map[string]any{"format": converted}
+	}
 	response["stream"] = true
 	response["store"] = false
 	response["instructions"] = ""
@@ -38,27 +53,9 @@ func chatToResponses(raw []byte) ([]byte, error) {
 	if !ok {
 		return nil, fmt.Errorf("messages is required")
 	}
-	var input []any
-	for _, rawMessage := range messages {
-		message, ok := rawMessage.(map[string]any)
-		if !ok {
-			continue
-		}
-		role, _ := message["role"].(string)
-		if role == "tool" {
-			input = append(input, map[string]any{"type": "function_call_output", "call_id": message["tool_call_id"], "output": message["content"]})
-			continue
-		}
-		if toolCalls, ok := message["tool_calls"].([]any); ok {
-			for _, rawCall := range toolCalls {
-				call, _ := rawCall.(map[string]any)
-				function, _ := call["function"].(map[string]any)
-				input = append(input, map[string]any{"type": "function_call", "call_id": call["id"], "name": function["name"], "arguments": function["arguments"]})
-			}
-		}
-		if _, exists := message["content"]; exists {
-			input = append(input, map[string]any{"role": role, "content": message["content"]})
-		}
+	input, err := chatMessagesToResponses(messages)
+	if err != nil {
+		return nil, err
 	}
 	response["input"] = input
 	if tools, ok := chat["tools"].([]any); ok {
@@ -88,10 +85,156 @@ func chatToResponses(raw []byte) ([]byte, error) {
 	return json.Marshal(response)
 }
 
-func (s *Server) proxyChatJSON(w http.ResponseWriter, r *http.Request, keyID, model string, resp *http.Response) {
+func chatMessagesToResponses(messages []any) ([]any, error) {
+	var input []any
+	for _, rawMessage := range messages {
+		message, ok := rawMessage.(map[string]any)
+		if !ok {
+			continue
+		}
+		role, _ := message["role"].(string)
+		content, hasContent := message["content"]
+		if role == "tool" {
+			if !hasContent || content == nil {
+				return nil, fmt.Errorf("tool message requires content")
+			}
+			input = append(input, map[string]any{"type": "function_call_output", "call_id": message["tool_call_id"], "output": content})
+			continue
+		}
+		toolCalls, hasToolCalls := message["tool_calls"].([]any)
+		for _, rawCall := range toolCalls {
+			call, _ := rawCall.(map[string]any)
+			function, _ := call["function"].(map[string]any)
+			input = append(input, map[string]any{"type": "function_call", "call_id": call["id"], "name": function["name"], "arguments": function["arguments"]})
+		}
+		if !hasContent || content == nil {
+			if role == "assistant" && hasToolCalls && len(toolCalls) > 0 {
+				continue
+			}
+			return nil, fmt.Errorf("%s message requires content", role)
+		}
+		converted, err := chatContentToResponses(role, content)
+		if err != nil {
+			return nil, err
+		}
+		input = append(input, map[string]any{"role": role, "content": converted})
+	}
+	return input, nil
+}
+
+func chatContentToResponses(role string, content any) (any, error) {
+	if text, ok := content.(string); ok {
+		return text, nil
+	}
+	parts, ok := content.([]any)
+	if !ok {
+		return nil, fmt.Errorf("message content must be a string or an array")
+	}
+	converted := make([]any, 0, len(parts))
+	for _, rawPart := range parts {
+		part, valid := rawPart.(map[string]any)
+		if !valid {
+			return nil, fmt.Errorf("message content entries must be objects")
+		}
+		partType, _ := part["type"].(string)
+		switch partType {
+		case "text", "input_text", "output_text":
+			text, valid := part["text"].(string)
+			if !valid {
+				return nil, fmt.Errorf("%s content requires text", partType)
+			}
+			if role == "assistant" {
+				converted = append(converted, map[string]any{"type": "output_text", "text": text})
+			} else {
+				converted = append(converted, map[string]any{"type": "input_text", "text": text})
+			}
+		case "image_url":
+			image, err := chatImageToResponses(part["image_url"])
+			if err != nil {
+				return nil, err
+			}
+			converted = append(converted, image)
+		default:
+			return nil, fmt.Errorf("content type %q is not supported for Responses", partType)
+		}
+	}
+	return converted, nil
+}
+
+func chatImageToResponses(value any) (map[string]any, error) {
+	if url, ok := value.(string); ok && strings.TrimSpace(url) != "" {
+		return map[string]any{"type": "input_image", "image_url": url}, nil
+	}
+	image, ok := value.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("image_url content requires image_url.url")
+	}
+	url, _ := image["url"].(string)
+	if strings.TrimSpace(url) == "" {
+		return nil, fmt.Errorf("image_url content requires image_url.url")
+	}
+	converted := map[string]any{"type": "input_image", "image_url": url}
+	if detail, ok := image["detail"].(string); ok && detail != "" {
+		converted["detail"] = detail
+	}
+	return converted, nil
+}
+
+func chatToolChoiceToResponses(value any) (any, error) {
+	if _, ok := value.(string); ok {
+		return value, nil
+	}
+	choice, ok := value.(map[string]any)
+	if !ok || choice["type"] != "function" {
+		return nil, fmt.Errorf("tool_choice must be a string or a function choice")
+	}
+	function, ok := choice["function"].(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("function tool_choice requires function")
+	}
+	name, ok := function["name"].(string)
+	if !ok || strings.TrimSpace(name) == "" {
+		return nil, fmt.Errorf("function tool_choice requires function.name")
+	}
+	return map[string]any{"type": "function", "name": name}, nil
+}
+
+func chatResponseFormatToResponses(value any) (map[string]any, error) {
+	format, ok := value.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("response_format must be an object")
+	}
+	formatType, _ := format["type"].(string)
+	switch formatType {
+	case "text", "json_object":
+		return map[string]any{"type": formatType}, nil
+	case "json_schema":
+		schema, ok := format["json_schema"].(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("json_schema response_format requires json_schema")
+		}
+		converted := map[string]any{"type": "json_schema"}
+		for _, field := range []string{"name", "description", "schema", "strict"} {
+			if fieldValue, exists := schema[field]; exists {
+				converted[field] = fieldValue
+			}
+		}
+		return converted, nil
+	default:
+		return nil, fmt.Errorf("response_format type %q is not supported for Responses", formatType)
+	}
+}
+
+func (s *Server) proxyChatJSON(w http.ResponseWriter, keyID, accountID, model string, resp *http.Response) {
 	fallbackEventHash := s.randomUsageEventHash()
 	value, input, output, status, err := completedResponse(resp)
 	if err != nil {
+		var failure *responseEventError
+		if errors.As(err, &failure) {
+			s.recordProviderStreamLimit(accountID, failure.limit)
+			writeResponseEventError(w, failure)
+			return
+		}
 		writeOpenAIError(w, http.StatusBadGateway, "invalid provider response", "provider_error")
 		return
 	}
@@ -103,6 +246,7 @@ func (s *Server) proxyChatJSON(w http.ResponseWriter, r *http.Request, keyID, mo
 	}
 	message := map[string]any{"role": "assistant", "content": ""}
 	var text strings.Builder
+	var refusal strings.Builder
 	var toolCalls []any
 	if outputItems, ok := response["output"].([]any); ok {
 		for _, rawItem := range outputItems {
@@ -112,9 +256,14 @@ func (s *Server) proxyChatJSON(w http.ResponseWriter, r *http.Request, keyID, mo
 				if contents, ok := item["content"].([]any); ok {
 					for _, rawContent := range contents {
 						content, _ := rawContent.(map[string]any)
-						if content["type"] == "output_text" {
+						switch content["type"] {
+						case "output_text":
 							if part, ok := content["text"].(string); ok {
 								text.WriteString(part)
+							}
+						case "refusal":
+							if part, ok := content["refusal"].(string); ok {
+								refusal.WriteString(part)
 							}
 						}
 					}
@@ -125,6 +274,12 @@ func (s *Server) proxyChatJSON(w http.ResponseWriter, r *http.Request, keyID, mo
 		}
 	}
 	message["content"] = text.String()
+	if refusal.Len() > 0 {
+		message["refusal"] = refusal.String()
+		if text.Len() == 0 {
+			message["content"] = nil
+		}
+	}
 	if len(toolCalls) > 0 {
 		message["tool_calls"] = toolCalls
 	}
@@ -141,7 +296,7 @@ func (s *Server) proxyChatJSON(w http.ResponseWriter, r *http.Request, keyID, mo
 	writeJSON(w, http.StatusOK, result)
 }
 
-func (s *Server) proxyChatStream(w http.ResponseWriter, r *http.Request, keyID, model string, resp *http.Response) {
+func (s *Server) proxyChatStream(w http.ResponseWriter, keyID, accountID, model string, resp *http.Response) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.WriteHeader(http.StatusOK)
@@ -153,7 +308,9 @@ func (s *Server) proxyChatStream(w http.ResponseWriter, r *http.Request, keyID, 
 	var input, output int64
 	sentRole := false
 	terminal := false
+	failed := false
 	hasToolCalls := false
+	limit := responseevent.LimitNone
 	for scanner.Scan() {
 		data := responseevent.SSEData(scanner.Bytes())
 		if len(data) == 0 || string(data) == "[DONE]" {
@@ -162,6 +319,15 @@ func (s *Server) proxyChatStream(w http.ResponseWriter, r *http.Request, keyID, 
 		var event map[string]any
 		if json.Unmarshal(data, &event) != nil {
 			continue
+		}
+		if limit == responseevent.LimitNone {
+			limit = responseevent.ClassifyLimit(data)
+		}
+		if failure := responseFailure(data); failure != nil {
+			writeSSE(w, map[string]any{"error": failure.payload})
+			terminal = true
+			failed = true
+			break
 		}
 		eventType, _ := event["type"].(string)
 		if eventID := responseevent.ResponseID(data); eventID != "" {
@@ -186,6 +352,8 @@ func (s *Server) proxyChatStream(w http.ResponseWriter, r *http.Request, keyID, 
 			hasToolCalls = true
 		case "response.output_text.delta":
 			delta["content"] = event["delta"]
+		case "response.refusal.delta":
+			delta["refusal"] = event["delta"]
 		case "response.function_call_arguments.delta":
 			delta["tool_calls"] = []any{map[string]any{"index": event["output_index"], "function": map[string]any{"arguments": event["delta"]}}}
 		case "response.completed":
@@ -207,6 +375,7 @@ func (s *Server) proxyChatStream(w http.ResponseWriter, r *http.Request, keyID, 
 		chunk := map[string]any{"id": id, "object": "chat.completion.chunk", "created": created, "model": model, "choices": []any{map[string]any{"index": 0, "delta": delta, "finish_reason": finish}}}
 		writeSSE(w, chunk)
 	}
+	s.recordProviderStreamLimit(accountID, limit)
 	if scanner.Err() != nil || !terminal {
 		return
 	}
@@ -214,7 +383,7 @@ func (s *Server) proxyChatStream(w http.ResponseWriter, r *http.Request, keyID, 
 	if flusher, ok := w.(http.Flusher); ok {
 		flusher.Flush()
 	}
-	if input > 0 || output > 0 {
+	if !failed && (input > 0 || output > 0) {
 		s.addUsage(keyID, s.usageEventHash(id, fallbackEventHash), model, input, output)
 	}
 }

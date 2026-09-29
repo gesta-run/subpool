@@ -151,7 +151,9 @@ func (c *Client) fetchModels(ctx context.Context, credentials Credentials) (map[
 	}
 	byID := make(map[string]Model, len(models))
 	for _, model := range models {
-		byID[model.ID] = model
+		if identifier := model.Identifier(); identifier != "" {
+			byID[identifier] = model
+		}
 	}
 	return byID, nil
 }

@@ -2,6 +2,7 @@ package copilot
 
 import (
 	"errors"
+	"strings"
 	"time"
 )
 
@@ -48,13 +49,35 @@ type Model struct {
 	SupportedEndpoints []string `json:"supported_endpoints"`
 }
 
+func (m Model) Identifier() string {
+	if id := strings.TrimSpace(m.ID); id != "" {
+		return id
+	}
+	return strings.TrimSpace(m.Name)
+}
+
 func (m Model) SupportsEndpoint(endpoint string) bool {
+	if len(m.SupportedEndpoints) == 0 {
+		return endpoint == EndpointChatCompletions
+	}
 	for _, supported := range m.SupportedEndpoints {
-		if supported == endpoint {
+		if normalizeEndpoint(supported) == normalizeEndpoint(endpoint) {
 			return true
 		}
 	}
 	return false
+}
+
+func (m Model) SupportsGatewayEndpoint() bool {
+	return m.SupportsEndpoint(EndpointChatCompletions) || m.SupportsEndpoint(EndpointResponses)
+}
+
+func normalizeEndpoint(endpoint string) string {
+	endpoint = strings.TrimSpace(strings.ToLower(endpoint))
+	if strings.HasPrefix(endpoint, "/v1/") {
+		return strings.TrimPrefix(endpoint, "/v1")
+	}
+	return endpoint
 }
 
 type CreditsQuota struct {
