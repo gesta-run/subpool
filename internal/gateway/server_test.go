@@ -436,20 +436,20 @@ func TestCopilotResponsesStreamForwardsUpstreamError(t *testing.T) {
 	}
 }
 
-func TestCopilotResponsesConvertsCustomToolStream(t *testing.T) {
+func TestCopilotResponsesConvertsNamespacedCustomToolStream(t *testing.T) {
 	server, st, _, plain := newTestServer(t)
 	cipher := server.cipher.(*credential.Cipher)
 	st.route.Account = copilotAccountWithCipher(t, cipher, "copilot-account")
 	st.route.Pool.Provider = domain.ProviderCopilot
 	provider := &fakeCopilotProvider{response: sseResponse(http.StatusOK,
-		`data: {"id":"chatcmpl-tool","model":"gpt-test","choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-1","type":"function","function":{"name":"apply_patch","arguments":"{\"input\":\"patch\"}"}}]},"finish_reason":"tool_calls"}]}`+"\n\n"+
+		`data: {"id":"chatcmpl-tool","model":"gpt-test","choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-1","type":"function","function":{"name":"workspace__apply_patch","arguments":"{\"input\":\"patch\"}"}}]},"finish_reason":"tool_calls"}]}`+"\n\n"+
 			`data: {"id":"chatcmpl-tool","choices":[],"usage":{"prompt_tokens":8,"completion_tokens":3}}`+"\n\n"+
 			"data: [DONE]\n\n")}
-	request := `{"model":"gpt-test","stream":true,"input":"update it","tools":[{"type":"custom","name":"apply_patch","description":"Apply a patch"}]}`
+	request := `{"model":"gpt-test","stream":true,"input":"update it","tools":[{"type":"namespace","name":"workspace","tools":[{"type":"custom","name":"apply_patch","description":"Apply a patch"}]}]}`
 	recorder := serveGateway(t, server.WithCopilot(provider), plain, "/v1/responses", request)
 	body := recorder.Body.String()
 	if recorder.Code != http.StatusOK || !strings.Contains(body, `"type":"response.custom_tool_call_input.done"`) ||
-		!strings.Contains(body, `"type":"custom_tool_call"`) || !strings.Contains(body, `"input":"patch"`) ||
+		!strings.Contains(body, `"type":"custom_tool_call"`) || !strings.Contains(body, `"input":"patch"`) || !strings.Contains(body, `"namespace":"workspace"`) ||
 		strings.Contains(body, `"type":"response.function_call_arguments.done"`) {
 		t.Fatalf("status = %d, body=%s", recorder.Code, body)
 	}
