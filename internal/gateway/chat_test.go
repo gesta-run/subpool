@@ -210,6 +210,58 @@ func TestResponsesTranslationOmitsDeferredMCPToolSearch(t *testing.T) {
 	}
 }
 
+func TestResponsesTranslationMergesAdditionalTools(t *testing.T) {
+	raw, copilotTools, err := responsesToChat([]byte(`{
+		"model":"gpt-test",
+		"input":[
+			{"type":"additional_tools","role":"developer","tools":[
+				{"type":"namespace","name":"workspace","tools":[
+					{"type":"function","name":"read_file","defer_loading":true,"parameters":{"type":"object"}}
+				]}
+			]},
+			{"type":"message","role":"user","content":"read it"}
+		],
+		"tools":[{"type":"function","name":"lookup","parameters":{"type":"object"}}],
+		"tool_choice":{"type":"function","name":"read_file","namespace":"workspace"}
+	}`), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var chat map[string]any
+	if err = json.Unmarshal(raw, &chat); err != nil {
+		t.Fatal(err)
+	}
+	tools, _ := chat["tools"].([]any)
+	if len(tools) != 2 {
+		t.Fatalf("tools = %#v", tools)
+	}
+	namespaced := tools[1].(map[string]any)["function"].(map[string]any)
+	upstreamName, _ := namespaced["name"].(string)
+	if upstreamName == "" || copilotTools[upstreamName].Name != "read_file" || copilotTools[upstreamName].Namespace != "workspace" {
+		t.Fatalf("namespaced tool = %#v mappings=%#v", namespaced, copilotTools)
+	}
+	messages, _ := chat["messages"].([]any)
+	if len(messages) != 1 || messages[0].(map[string]any)["role"] != "user" {
+		t.Fatalf("messages = %#v", messages)
+	}
+	choice := chat["tool_choice"].(map[string]any)["function"].(map[string]any)
+	if choice["name"] != upstreamName {
+		t.Fatalf("tool_choice = %#v, want name %q", choice, upstreamName)
+	}
+}
+
+func TestResponsesTranslationRejectsInvalidAdditionalTools(t *testing.T) {
+	for _, input := range []string{
+		`{"type":"additional_tools","role":"user","tools":[]}`,
+		`{"type":"additional_tools","role":"developer","tools":{}}`,
+	} {
+		_, _, err := responsesToChat([]byte(`{"model":"gpt-test","input":[`+input+`]}`), true)
+		if err == nil || !strings.Contains(err.Error(), "additional_tools") {
+			t.Fatalf("input=%s error=%v", input, err)
+		}
+	}
+}
+
 func TestChatCompletionTranslationMapsToolCalls(t *testing.T) {
 	completion := map[string]any{
 		"id": "chatcmpl-test", "model": "gpt-test", "created": float64(42),

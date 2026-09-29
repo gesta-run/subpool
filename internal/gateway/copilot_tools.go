@@ -22,6 +22,37 @@ func isCopilotOmittableTool(toolType string) bool {
 	}
 }
 
+func responseToolsWithAdditional(value any, hasTools bool, input any) ([]any, error) {
+	var tools []any
+	if hasTools {
+		declared, ok := value.([]any)
+		if !ok {
+			return nil, fmt.Errorf("tools must be an array")
+		}
+		tools = append(tools, declared...)
+	}
+	items, ok := input.([]any)
+	if !ok {
+		return tools, nil
+	}
+	for _, rawItem := range items {
+		item, valid := rawItem.(map[string]any)
+		if !valid || item["type"] != "additional_tools" {
+			continue
+		}
+		role, _ := item["role"].(string)
+		if role != "developer" {
+			return nil, fmt.Errorf("additional_tools requires developer role")
+		}
+		additional, valid := item["tools"].([]any)
+		if !valid {
+			return nil, fmt.Errorf("additional_tools requires tools")
+		}
+		tools = append(tools, additional...)
+	}
+	return tools, nil
+}
+
 func responseToolChoiceToChat(value any, copilotTools map[string]copilotToolInfo, allowToolFallback bool) (any, error) {
 	if choice, ok := value.(string); ok {
 		switch choice {

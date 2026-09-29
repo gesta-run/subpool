@@ -36,7 +36,12 @@ func responsesToChat(raw []byte, allowToolFallback bool) ([]byte, map[string]cop
 			chat["reasoning_effort"] = effort
 		}
 	}
-	if tools, exists := response["tools"]; exists {
+	toolValue, hasTools := response["tools"]
+	tools, err := responseToolsWithAdditional(toolValue, hasTools, response["input"])
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(tools) > 0 {
 		converted, mappings, convertErr := responsesToolsToChat(tools, allowToolFallback)
 		if convertErr != nil {
 			return nil, nil, convertErr
@@ -128,6 +133,8 @@ func responsesInputToChat(input any, copilotTools map[string]copilotToolInfo) ([
 				return nil, fmt.Errorf("function_call_output requires call_id")
 			}
 			messages = append(messages, map[string]any{"role": "tool", "tool_call_id": callID, "content": stringifyToolOutput(item["output"])})
+		case "additional_tools":
+			continue
 		case "reasoning":
 			continue
 		default:
