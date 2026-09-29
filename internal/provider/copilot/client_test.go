@@ -148,14 +148,83 @@ func TestClientDoesNotForwardCodexIdentity(t *testing.T) {
 func TestDecodeModels(t *testing.T) {
 	response := &http.Response{
 		StatusCode: http.StatusOK,
-		Body:       io.NopCloser(strings.NewReader(`{"data":[{"id":"gpt-test","name":"GPT Test","display_name":"GPT Test"}]}`)),
+		Body:       io.NopCloser(strings.NewReader(`{"data":[{"id":"gpt-test","name":"GPT Test","display_name":"GPT Test","supported_endpoints":["/chat/completions","/responses","ws:/responses"]}]}`)),
 	}
 	models, err := DecodeModels(response)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(models) != 1 || models[0].ID != "gpt-test" {
+	if len(models) != 1 || models[0].ID != "gpt-test" || !models[0].SupportsEndpoint(EndpointResponses) {
 		t.Fatalf("models = %#v", models)
+	}
+}
+
+func TestClientCachesModelEndpointCapabilities(t *testing.T) {
+	var modelRequests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/token":
+			_, _ = fmt.Fprintf(w, `{"token":"copilot-token","expires_at":%d,"refresh_in":3600,"endpoints":{"api":%q}}`, time.Now().Add(time.Hour).Unix(), "http://"+r.Host)
+		case "/models":
+			modelRequests.Add(1)
+			if r.Header.Get("X-Github-Api-Version") != "2026-06-01" {
+				t.Errorf("X-Github-Api-Version = %q", r.Header.Get("X-Github-Api-Version"))
+			}
+			_, _ = io.WriteString(w, `{"data":[{"id":"gpt-native","supported_endpoints":["/responses","ws:/responses"]},{"id":"gpt-chat","supported_endpoints":["/chat/completions"]}]}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	client := NewClient(ClientConfig{APIBase: server.URL, TokenExchangeURL: server.URL + "/token", HTTPClient: server.Client()})
+	credentials := Credentials{GitHubToken: "github-token"}
+	for _, test := range []struct {
+		model    string
+		endpoint string
+		want     bool
+	}{
+		{model: "gpt-native", endpoint: EndpointResponses, want: true},
+		{model: "gpt-chat", endpoint: EndpointResponses, want: false},
+		{model: "missing", endpoint: EndpointResponses, want: false},
+	} {
+		supported, err := client.SupportsEndpoint(context.Background(), test.model, test.endpoint, credentials)
+		if err != nil || supported != test.want {
+			t.Fatalf("SupportsEndpoint(%q, %q) = %v, %v", test.model, test.endpoint, supported, err)
+		}
+	}
+	if modelRequests.Load() != 1 {
+		t.Fatalf("model requests = %d, want 1", modelRequests.Load())
+	}
+}
+
+func TestClientSendsNativeResponsesRequest(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/token":
+			_, _ = fmt.Fprintf(w, `{"token":"copilot-token","expires_at":%d,"refresh_in":3600,"endpoints":{"api":%q}}`, time.Now().Add(time.Hour).Unix(), "http://"+r.Host)
+		case "/responses":
+			if r.Header.Get("Authorization") != "Bearer copilot-token" || r.Header.Get("Accept") != "text/event-stream" {
+				t.Errorf("headers = %#v", r.Header)
+			}
+			body, _ := io.ReadAll(r.Body)
+			if strings.Contains(string(body), "client_metadata") || !strings.Contains(string(body), `"tools"`) {
+				t.Errorf("body = %s", body)
+			}
+			_, _ = io.WriteString(w, "data: [DONE]\n\n")
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	client := NewClient(ClientConfig{APIBase: server.URL, TokenExchangeURL: server.URL + "/token", HTTPClient: server.Client()})
+	body := []byte(`{"model":"gpt-native","client_metadata":{"session_id":"private"},"tools":[{"type":"web_search"}]}`)
+	response, err := client.Responses(context.Background(), body, http.Header{"Accept": {"text/event-stream"}}, Credentials{GitHubToken: "github-token"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", response.StatusCode)
 	}
 }
 

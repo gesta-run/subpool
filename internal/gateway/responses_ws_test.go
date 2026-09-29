@@ -14,6 +14,7 @@ import (
 	"github.com/gesta-run/subpool/internal/credential"
 	"github.com/gesta-run/subpool/internal/domain"
 	"github.com/gesta-run/subpool/internal/provider/codex"
+	"github.com/gesta-run/subpool/internal/provider/copilot"
 	"github.com/gesta-run/subpool/internal/provider/openaicompat"
 )
 
@@ -228,6 +229,40 @@ func TestResponsesWebSocketBridgesCopilotAccount(t *testing.T) {
 	}
 	if st.usageInput != 4 || st.usageOutput != 1 || !st.sessionSaved {
 		t.Fatalf("usage=%d/%d session=%v", st.usageInput, st.usageOutput, st.sessionSaved)
+	}
+}
+
+func TestResponsesWebSocketBridgesNativeCopilotResponses(t *testing.T) {
+	server, st, _, plain := newTestServer(t)
+	cipher := server.cipher.(*credential.Cipher)
+	st.route.Account = copilotAccountWithCipher(t, cipher, "copilot-account")
+	st.route.Pool.Provider = domain.ProviderCopilot
+	st.sessionSavedSignal = make(chan struct{}, 1)
+	provider := &fakeCopilotProvider{
+		supportedEndpoints: map[string]map[string]bool{"gpt-test": {copilot.EndpointResponses: true}},
+		response: sseResponse(http.StatusOK,
+			`data: {"type":"response.completed","response":{"id":"resp-native-copilot","model":"gpt-test","output":[],"usage":{"input_tokens":6,"output_tokens":2}}}`+"\n\n"),
+	}
+	server.WithCopilot(provider)
+	server.WithResponsesWebSocket(true, false, "")
+
+	client, cleanup := dialResponsesWSTestServer(t, server, plain)
+	defer cleanup()
+	writeResponsesWSMessage(t, client, `{"type":"response.create","model":"gpt-test","input":"hello","tools":[{"type":"web_search"}]}`)
+	event := readResponsesWSMessage(t, client)
+	if event["type"] != "response.completed" || provider.responsesCalls != 1 || provider.chatCalls != 0 {
+		t.Fatalf("event=%#v responses/chat calls=%d/%d", event, provider.responsesCalls, provider.chatCalls)
+	}
+	if upstream := string(provider.body); !strings.Contains(upstream, `"type":"web_search"`) || !strings.Contains(upstream, `"stream":true`) {
+		t.Fatalf("upstream request = %s", upstream)
+	}
+	select {
+	case <-st.sessionSavedSignal:
+	case <-time.After(time.Second):
+		t.Fatal("session completion was not recorded")
+	}
+	if st.usageInput != 6 || st.usageOutput != 2 {
+		t.Fatalf("usage=%d/%d", st.usageInput, st.usageOutput)
 	}
 }
 

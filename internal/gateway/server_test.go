@@ -163,29 +163,6 @@ type fakeCompatibleProvider struct {
 	credentials   openaicompat.Credentials
 }
 
-type fakeCopilotProvider struct {
-	body        []byte
-	credentials copilot.Credentials
-	err         error
-	status      int
-	response    *http.Response
-}
-
-func (f *fakeCopilotProvider) ChatCompletions(_ context.Context, body []byte, _ http.Header, credentials copilot.Credentials) (*http.Response, error) {
-	f.body = append([]byte(nil), body...)
-	f.credentials = credentials
-	if f.err != nil {
-		return nil, f.err
-	}
-	if f.status != 0 {
-		return &http.Response{StatusCode: f.status, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"error":{"message":"model is not available"}}`))}, nil
-	}
-	if f.response != nil {
-		return f.response, nil
-	}
-	return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"id":"copilot-chat","choices":[{"message":{"role":"assistant","content":"OK"},"finish_reason":"stop"}],"usage":{"prompt_tokens":7,"completion_tokens":3,"total_tokens":10}}`))}, nil
-}
-
 type countingCipher struct {
 	Cipher
 	decrypts int
