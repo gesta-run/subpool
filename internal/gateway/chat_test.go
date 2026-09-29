@@ -94,7 +94,7 @@ func TestResponsesTranslationMapsMessagesAndTools(t *testing.T) {
 			{"type":"custom","name":"apply_patch","description":"Apply a patch","format":{"type":"text"}}
 		],
 		"tool_choice":{"type":"function","name":"lookup"}
-	}`))
+	}`), true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +136,7 @@ func TestResponsesTranslationExpandsNamespacesAndSkipsToolSearch(t *testing.T) {
 			{"type":"tool_search","execution":"server"}
 		],
 		"tool_choice":{"type":"function","name":"read_file","namespace":"workspace"}
-	}`))
+	}`), true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -170,7 +170,7 @@ func TestResponsesTranslationExpandsNamespacesAndSkipsToolSearch(t *testing.T) {
 
 func TestResponsesTranslationRejectsUnknownToolSearchExecution(t *testing.T) {
 	for _, execution := range []string{`"future"`, `1`} {
-		_, _, err := responsesToChat([]byte(`{"model":"gpt-test","input":"hello","tools":[{"type":"tool_search","execution":` + execution + `}]}`))
+		_, _, err := responsesToChat([]byte(`{"model":"gpt-test","input":"hello","tools":[{"type":"tool_search","execution":`+execution+`}]}`), true)
 		if err == nil || !strings.Contains(err.Error(), "tool_search execution") {
 			t.Fatalf("execution %s: error = %v", execution, err)
 		}
@@ -178,12 +178,35 @@ func TestResponsesTranslationRejectsUnknownToolSearchExecution(t *testing.T) {
 }
 
 func TestResponsesTranslationEagerLoadsDeferredFunctionForClientToolSearch(t *testing.T) {
-	raw, _, err := responsesToChat([]byte(`{"model":"gpt-test","input":"hello","tools":[{"type":"function","name":"lookup","defer_loading":true,"parameters":{"type":"object"}},{"type":"tool_search","execution":"client"}]}`))
+	raw, _, err := responsesToChat([]byte(`{"model":"gpt-test","input":"hello","tools":[{"type":"function","name":"lookup","defer_loading":true,"parameters":{"type":"object"}},{"type":"tool_search","execution":"client"}]}`), true)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(string(raw), `"name":"lookup"`) || strings.Contains(string(raw), "tool_search") || strings.Contains(string(raw), "defer_loading") {
 		t.Fatalf("translated request = %s", raw)
+	}
+}
+
+func TestResponsesTranslationClassifiesOmittableTools(t *testing.T) {
+	for _, toolType := range []string{
+		"web_search", "web_search_preview", "file_search", "mcp", "shell", "local_shell",
+		"computer", "computer_use_preview", "image_generation", "code_interpreter",
+	} {
+		request := []byte(`{"model":"gpt-test","input":"hello","tools":[{"type":"` + toolType + `"}]}`)
+		raw, _, err := responsesToChat(request, true)
+		if err != nil || strings.Contains(string(raw), `"tools"`) {
+			t.Fatalf("fallback %s: request=%s error=%v", toolType, raw, err)
+		}
+		if _, _, err = responsesToChat(request, false); err == nil || !strings.Contains(err.Error(), toolType) {
+			t.Fatalf("strict %s: error=%v", toolType, err)
+		}
+	}
+}
+
+func TestResponsesTranslationOmitsDeferredMCPToolSearch(t *testing.T) {
+	raw, _, err := responsesToChat([]byte(`{"model":"gpt-test","input":"hello","tools":[{"type":"tool_search","execution":"client"},{"type":"mcp","server_label":"example","defer_loading":true}],"tool_choice":{"type":"tool_search"}}`), true)
+	if err != nil || strings.Contains(string(raw), `"tools"`) || strings.Contains(string(raw), `"tool_choice"`) {
+		t.Fatalf("translated request=%s error=%v", raw, err)
 	}
 }
 

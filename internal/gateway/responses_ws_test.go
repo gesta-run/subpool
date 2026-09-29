@@ -245,7 +245,7 @@ func TestResponsesWebSocketRestoresCopilotToolNamespace(t *testing.T) {
 
 	client, cleanup := dialResponsesWSTestServer(t, server, plain)
 	defer cleanup()
-	request := `{"type":"response.create","model":"gpt-test","input":"read it","tools":[{"type":"namespace","name":"workspace","tools":[{"type":"function","name":"read_file","defer_loading":true,"parameters":{"type":"object"}}]},{"type":"tool_search","execution":"client"}]}`
+	request := `{"type":"response.create","model":"gpt-test","input":"read it","tools":[{"type":"web_search"},{"type":"namespace","name":"workspace","tools":[{"type":"function","name":"read_file","defer_loading":true,"parameters":{"type":"object"}}]},{"type":"tool_search","execution":"client"}]}`
 	writeResponsesWSMessage(t, client, request)
 	foundNamespace := false
 	foundTerminal := false
@@ -264,7 +264,7 @@ func TestResponsesWebSocketRestoresCopilotToolNamespace(t *testing.T) {
 		t.Fatalf("namespace=%v terminal=%v upstream=%s", foundNamespace, foundTerminal, provider.body)
 	}
 	upstream := string(provider.body)
-	if !strings.Contains(upstream, `"name":"workspace__read_file"`) || strings.Contains(upstream, `tool_search`) || strings.Contains(upstream, `defer_loading`) {
+	if !strings.Contains(upstream, `"name":"workspace__read_file"`) || strings.Contains(upstream, `tool_search`) || strings.Contains(upstream, `defer_loading`) || strings.Contains(upstream, `web_search`) {
 		t.Fatalf("upstream request = %s", upstream)
 	}
 }
