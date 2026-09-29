@@ -18,6 +18,8 @@
 
 Subpool is a self-hosted control plane for allocating, governing, and auditing AI subscription capacity across teams. Administrators combine authorized subscription and API accounts into pools, distribute employee-specific keys, monitor remaining quota, and expose one consistent API without storing conversation content.
 
+[Release pages](https://gesta-run.github.io/subpool/) publish the current version, immutable container image coordinates, source commit, and complete notes from GitHub Releases.
+
 <p align="center">
   <img src="docs/images/subpool-accounts-console.png" alt="Subpool provider accounts console">
 </p>

@@ -4,6 +4,7 @@
 **/.DS_Store
 web/node_modules
 web/dist
+pages/dist
 coverage
 tmp
 *.log

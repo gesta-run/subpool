@@ -1,0 +1,11 @@
+{
+  "name": "subpool-release-pages",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "build:offline": "node scripts/build.mjs --offline",
+    "test": "node --test scripts/*.test.mjs"
+  }
+}

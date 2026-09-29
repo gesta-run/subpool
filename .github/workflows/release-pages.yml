@@ -1,0 +1,73 @@
+name: Publish Subpool Release Pages
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "pages/**"
+      - "web/public/brand/**"
+      - ".github/workflows/release-pages.yml"
+  release:
+    types:
+      - published
+      - edited
+      - deleted
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: subpool-release-pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build release pages
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Test release data
+        working-directory: pages
+        run: npm test
+
+      - name: Build release pages
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        working-directory: pages
+        run: npm run build
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload release pages
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: pages/dist
+
+  deploy:
+    name: Deploy release pages
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
