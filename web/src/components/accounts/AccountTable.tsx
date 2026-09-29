@@ -67,7 +67,7 @@ function CreditsMeter({ accountName, credits, quotaIsLastKnown }: { accountName:
   const prefix = quotaIsLastKnown ? 'Last known · ' : ''
   if (credits.unlimited) return <div className="capacity"><span><strong>Unlimited</strong> AI credits</span><small>{prefix}No included credit limit reported</small></div>
   return <div className="capacity">
-    <span><strong>{creditCount(credits.used)} / {creditCount(credits.entitlement)}</strong> AI credits</span>
+    <span><strong>{creditCount(credits.remaining)} / {creditCount(credits.entitlement)}</strong> AI credits</span>
     <div role="progressbar" aria-label={`${accountName} AI credits remaining`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={remaining}><i style={{ width: `${remaining}%` }} /></div>
     <small>{prefix}{credits.reset_at ? `Resets ${compactDate(new Date(credits.reset_at * 1000))}` : `${creditCount(credits.remaining)} included credits remaining`}</small>
     <small>{credits.overage_permitted ? `${creditCount(credits.overage_count)} additional credits used` : 'Additional usage disabled'}</small>

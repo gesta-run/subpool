@@ -227,7 +227,7 @@ describe('Subpool console', () => {
 
     render(<AccountsPage />)
 
-    await waitFor(() => expect(screen.getByText('100 / 1,500')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('1,400 / 1,500')).toBeInTheDocument())
     const checks = vi.mocked(fetch).mock.calls.filter(([path, init]) => String(path).endsWith('/check') && init?.method === 'POST')
     expect(checks).toHaveLength(1)
   })

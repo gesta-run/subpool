@@ -77,7 +77,7 @@ describe('AccountTable health states', () => {
     expect(screen.queryByText('Usage unavailable')).not.toBeInTheDocument()
   })
 
-  it('shows GitHub Copilot subscription capacity in AI credits', () => {
+  it('shows remaining GitHub Copilot subscription capacity in AI credits', () => {
     renderTable({
       ...baseAccount,
       provider: 'copilot',
@@ -98,7 +98,7 @@ describe('AccountTable health states', () => {
       },
     })
 
-    expect(screen.getByText('375 / 1,500')).toBeInTheDocument()
+    expect(screen.getByText('1,125 / 1,500')).toBeInTheDocument()
     expect(screen.getByText('AI credits')).toBeInTheDocument()
     expect(screen.getByText('Additional usage disabled')).toBeInTheDocument()
     expect(screen.getByRole('progressbar', { name: /AI credits remaining/i })).toHaveAttribute('aria-valuenow', '75')
