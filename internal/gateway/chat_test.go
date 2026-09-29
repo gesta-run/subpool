@@ -250,6 +250,53 @@ func TestResponsesTranslationMergesAdditionalTools(t *testing.T) {
 	}
 }
 
+func TestResponsesTranslationMapsNamespacedCustomTools(t *testing.T) {
+	raw, copilotTools, err := responsesToChat([]byte(`{
+		"model":"gpt-test",
+		"input":[
+			{"type":"additional_tools","role":"developer","tools":[
+				{"type":"namespace","name":"container","tools":[
+					{"type":"custom","name":"exec_command","description":"Run a command","format":{"type":"text"}}
+				]}
+			]},
+			{"type":"custom_tool_call","call_id":"call-1","name":"exec_command","namespace":"container","input":"pwd"}
+		],
+		"tool_choice":{"type":"custom","name":"exec_command","namespace":"container"}
+	}`), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var chat map[string]any
+	if err = json.Unmarshal(raw, &chat); err != nil {
+		t.Fatal(err)
+	}
+	function := chat["tools"].([]any)[0].(map[string]any)["function"].(map[string]any)
+	upstreamName := function["name"].(string)
+	info := copilotTools[upstreamName]
+	if info.Name != "exec_command" || info.Namespace != "container" || !info.Custom || function["parameters"] == nil {
+		t.Fatalf("custom tool = %#v mappings=%#v", function, copilotTools)
+	}
+	call := chat["messages"].([]any)[0].(map[string]any)["tool_calls"].([]any)[0].(map[string]any)
+	if call["function"].(map[string]any)["name"] != upstreamName {
+		t.Fatalf("messages = %#v", chat["messages"])
+	}
+	choice := chat["tool_choice"].(map[string]any)["function"].(map[string]any)
+	if choice["name"] != upstreamName {
+		t.Fatalf("tool choice = %#v", choice)
+	}
+}
+
+func TestCopilotToolHeadersPreserveNamespacedCustomTools(t *testing.T) {
+	header := make(http.Header)
+	setCopilotToolHeaders(header, map[string]copilotToolInfo{
+		"container__exec_command": {Name: "exec_command", Namespace: "container", Custom: true},
+	})
+	info := copilotToolsFromHeaders(header)["container__exec_command"]
+	if info.Name != "exec_command" || info.Namespace != "container" || !info.Custom {
+		t.Fatalf("tool info = %#v headers=%#v", info, header)
+	}
+}
+
 func TestResponsesTranslationRejectsInvalidAdditionalTools(t *testing.T) {
 	for _, input := range []string{
 		`{"type":"additional_tools","role":"user","tools":[]}`,
@@ -298,13 +345,13 @@ func TestChatCompletionTranslationRestoresCustomToolCall(t *testing.T) {
 		}},
 	}
 	response, _, _, err := chatCompletionToResponse(completion, "gpt-test", "fallback-id", map[string]copilotToolInfo{
-		"apply_patch": {Name: "apply_patch", Custom: true},
+		"apply_patch": {Name: "apply_patch", Namespace: "workspace", Custom: true},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	call := response["output"].([]any)[0].(map[string]any)
-	if call["type"] != "custom_tool_call" || call["input"] != "*** Begin Patch" {
+	if call["type"] != "custom_tool_call" || call["input"] != "*** Begin Patch" || call["namespace"] != "workspace" {
 		t.Fatalf("custom call = %#v", call)
 	}
 }

@@ -53,6 +53,25 @@ func responseToolsWithAdditional(value any, hasTools bool, input any) ([]any, er
 	return tools, nil
 }
 
+func responseCustomToolToChat(tool map[string]any, name string) (map[string]any, error) {
+	originalName, _ := tool["name"].(string)
+	if originalName == "" {
+		return nil, fmt.Errorf("custom tool requires name")
+	}
+	if name == "" {
+		name = originalName
+	}
+	function := map[string]any{"name": name}
+	if description, ok := tool["description"].(string); ok && description != "" {
+		function["description"] = description
+	}
+	function["parameters"] = map[string]any{
+		"type": "object", "properties": map[string]any{"input": map[string]any{"type": "string"}},
+		"required": []string{"input"}, "additionalProperties": false,
+	}
+	return function, nil
+}
+
 func responseToolChoiceToChat(value any, copilotTools map[string]copilotToolInfo, allowToolFallback bool) (any, error) {
 	if choice, ok := value.(string); ok {
 		switch choice {
