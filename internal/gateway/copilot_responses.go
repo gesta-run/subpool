@@ -237,10 +237,15 @@ func responsesToolsToChat(value any) ([]any, map[string]copilotToolInfo, error) 
 	converted := make([]any, 0, len(tools))
 	mappings := make(map[string]copilotToolInfo)
 	usedNames := make(map[string]struct{})
+	hasDeclaredSearchInventory := false
 	for _, rawTool := range tools {
 		tool, valid := rawTool.(map[string]any)
 		if !valid {
 			continue
+		}
+		children, _ := tool["tools"].([]any)
+		if (tool["type"] == "namespace" && len(children) > 0) || (tool["type"] == "function" && tool["defer_loading"] == true) {
+			hasDeclaredSearchInventory = true
 		}
 		if tool["type"] == "function" || tool["type"] == "custom" {
 			if name, _ := tool["name"].(string); name != "" {
@@ -305,8 +310,12 @@ func responsesToolsToChat(value any) ([]any, map[string]copilotToolInfo, error) 
 			}
 		case "tool_search":
 			execution, exists := tool["execution"]
-			if !exists || execution == "server" {
+			// Copilot cannot search tools, so eagerly load any inventory already declared by the client.
+			if !exists || execution == "server" || (execution == "client" && hasDeclaredSearchInventory) {
 				continue
+			}
+			if execution == "client" {
+				return nil, nil, fmt.Errorf("client tool_search requires declared namespace or deferred function tools for GitHub Copilot")
 			}
 			if mode, ok := execution.(string); ok {
 				return nil, nil, fmt.Errorf("tool_search execution %q is not supported for GitHub Copilot", mode)

@@ -245,7 +245,7 @@ func TestResponsesWebSocketRestoresCopilotToolNamespace(t *testing.T) {
 
 	client, cleanup := dialResponsesWSTestServer(t, server, plain)
 	defer cleanup()
-	request := `{"type":"response.create","model":"gpt-test","input":"read it","tools":[{"type":"namespace","name":"workspace","tools":[{"type":"function","name":"read_file","defer_loading":true,"parameters":{"type":"object"}}]},{"type":"tool_search"}]}`
+	request := `{"type":"response.create","model":"gpt-test","input":"read it","tools":[{"type":"namespace","name":"workspace","tools":[{"type":"function","name":"read_file","defer_loading":true,"parameters":{"type":"object"}}]},{"type":"tool_search","execution":"client"}]}`
 	writeResponsesWSMessage(t, client, request)
 	foundNamespace := false
 	foundTerminal := false
