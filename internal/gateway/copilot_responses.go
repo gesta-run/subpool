@@ -13,15 +13,7 @@ import (
 	"github.com/gesta-run/subpool/internal/gateway/responseevent"
 )
 
-const maxCopilotToolNameLength = 64
-
-type copilotToolInfo struct {
-	Name      string `json:"name"`
-	Namespace string `json:"namespace,omitempty"`
-	Custom    bool   `json:"custom,omitempty"`
-}
-
-func responsesToChat(raw []byte) ([]byte, map[string]copilotToolInfo, error) {
+func responsesToChat(raw []byte, allowToolFallback bool) ([]byte, map[string]copilotToolInfo, error) {
 	var response map[string]any
 	if err := json.Unmarshal(raw, &response); err != nil {
 		return nil, nil, fmt.Errorf("invalid JSON request")
@@ -45,7 +37,7 @@ func responsesToChat(raw []byte) ([]byte, map[string]copilotToolInfo, error) {
 		}
 	}
 	if tools, exists := response["tools"]; exists {
-		converted, mappings, convertErr := responsesToolsToChat(tools)
+		converted, mappings, convertErr := responsesToolsToChat(tools, allowToolFallback)
 		if convertErr != nil {
 			return nil, nil, convertErr
 		}
@@ -69,11 +61,13 @@ func responsesToChat(raw []byte) ([]byte, map[string]copilotToolInfo, error) {
 	}
 	chat["messages"] = messages
 	if choice, exists := response["tool_choice"]; exists {
-		converted, convertErr := responseToolChoiceToChat(choice, copilotTools)
+		converted, convertErr := responseToolChoiceToChat(choice, copilotTools, allowToolFallback)
 		if convertErr != nil {
 			return nil, nil, convertErr
 		}
-		chat["tool_choice"] = converted
+		if _, hasTools := chat["tools"]; converted != nil && hasTools {
+			chat["tool_choice"] = converted
+		}
 	}
 	if text, exists := response["text"]; exists {
 		format, convertErr := responseTextFormatToChat(text)
@@ -229,7 +223,7 @@ func stringifyToolOutput(output any) string {
 	return string(raw)
 }
 
-func responsesToolsToChat(value any) ([]any, map[string]copilotToolInfo, error) {
+func responsesToolsToChat(value any, allowToolFallback bool) ([]any, map[string]copilotToolInfo, error) {
 	tools, ok := value.([]any)
 	if !ok {
 		return nil, nil, fmt.Errorf("tools must be an array")
@@ -244,7 +238,8 @@ func responsesToolsToChat(value any) ([]any, map[string]copilotToolInfo, error) 
 			continue
 		}
 		children, _ := tool["tools"].([]any)
-		if (tool["type"] == "namespace" && len(children) > 0) || (tool["type"] == "function" && tool["defer_loading"] == true) {
+		deferred, _ := tool["defer_loading"].(bool)
+		if (tool["type"] == "namespace" && len(children) > 0) || ((tool["type"] == "function" || tool["type"] == "mcp") && deferred) {
 			hasDeclaredSearchInventory = true
 		}
 		if tool["type"] == "function" || tool["type"] == "custom" {
@@ -310,18 +305,21 @@ func responsesToolsToChat(value any) ([]any, map[string]copilotToolInfo, error) 
 			}
 		case "tool_search":
 			execution, exists := tool["execution"]
-			// Copilot cannot search tools, so eagerly load any inventory already declared by the client.
+			// Resolve declared inventories eagerly; fallback handling omits inventories Copilot cannot represent.
 			if !exists || execution == "server" || (execution == "client" && hasDeclaredSearchInventory) {
 				continue
 			}
 			if execution == "client" {
-				return nil, nil, fmt.Errorf("client tool_search requires declared namespace or deferred function tools for GitHub Copilot")
+				return nil, nil, fmt.Errorf("client tool_search requires a declared searchable tool inventory for GitHub Copilot")
 			}
 			if mode, ok := execution.(string); ok {
 				return nil, nil, fmt.Errorf("tool_search execution %q is not supported for GitHub Copilot", mode)
 			}
 			return nil, nil, fmt.Errorf("tool_search execution must be \"server\" for GitHub Copilot")
 		default:
+			if allowToolFallback && isCopilotOmittableTool(toolType) {
+				continue
+			}
 			return nil, nil, fmt.Errorf("tool type %q is not supported for GitHub Copilot", toolType)
 		}
 	}
@@ -421,28 +419,6 @@ func copilotToolsFromHeaders(header http.Header) map[string]copilotToolInfo {
 		}
 	}
 	return mappings
-}
-
-func responseToolChoiceToChat(value any, copilotTools map[string]copilotToolInfo) (any, error) {
-	if choice, ok := value.(string); ok {
-		switch choice {
-		case "auto", "none", "required":
-			return choice, nil
-		default:
-			return nil, fmt.Errorf("tool_choice %q is not supported for GitHub Copilot", choice)
-		}
-	}
-	choice, ok := value.(map[string]any)
-	if !ok || (choice["type"] != "function" && choice["type"] != "custom") {
-		return nil, fmt.Errorf("tool_choice is not supported for GitHub Copilot")
-	}
-	name, _ := choice["name"].(string)
-	if name == "" {
-		return nil, fmt.Errorf("function tool_choice requires name")
-	}
-	namespace, _ := choice["namespace"].(string)
-	name = copilotToolName(name, namespace, copilotTools)
-	return map[string]any{"type": "function", "function": map[string]any{"name": name}}, nil
 }
 
 func responseTextFormatToChat(value any) (any, error) {

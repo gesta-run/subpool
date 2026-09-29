@@ -428,7 +428,7 @@ func (s *Server) call(w http.ResponseWriter, r *http.Request, route domain.KeyRo
 
 func (s *Server) attemptAccount(r *http.Request, route domain.KeyRoute, request upstreamRequest, account domain.ProviderAccount) (*http.Response, retryReason, bool) {
 	if account.Provider == domain.ProviderCopilot && request.kind == "responses" {
-		body, copilotTools, err := responsesToChat(request.body)
+		body, copilotTools, err := responsesToChat(request.body, route.Pool.Provider == domain.ProviderCopilot)
 		if err != nil {
 			if route.Pool.Provider == domain.ProviderMixed {
 				return nil, retryUnsupported, false
