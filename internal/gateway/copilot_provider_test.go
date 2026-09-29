@@ -61,6 +61,9 @@ func (f *fakeCopilotProvider) SupportsEndpoint(_ context.Context, model, endpoin
 	if f.supportErr != nil {
 		return false, f.supportErr
 	}
+	if f.supportedEndpoints == nil {
+		return endpoint == copilot.EndpointChatCompletions, nil
+	}
 	return f.supportedEndpoints[model][endpoint], nil
 }
 
@@ -84,6 +87,37 @@ func TestCopilotResponsesUsesNativeEndpointWhenAdvertised(t *testing.T) {
 	}
 	if st.usageInput != 7 || st.usageOutput != 3 || !st.sessionSaved {
 		t.Fatalf("usage=%d/%d session=%v", st.usageInput, st.usageOutput, st.sessionSaved)
+	}
+}
+
+func TestCopilotChatPreservesChatOnlyRequestContent(t *testing.T) {
+	tests := []struct {
+		name    string
+		request string
+	}{
+		{
+			name:    "input audio",
+			request: `{"model":"gpt-test","messages":[{"role":"user","content":[{"type":"input_audio","input_audio":{"data":"UklGRg==","format":"wav"}}]}]}`,
+		},
+		{
+			name:    "legacy function call",
+			request: `{"model":"gpt-test","messages":[{"role":"assistant","content":null,"function_call":{"name":"lookup","arguments":"{}"}}]}`,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server, st, _, plain := newTestServer(t)
+			st.route.Account = copilotAccountWithCipher(t, server.cipher.(*credential.Cipher), "copilot-account")
+			st.route.Pool.Provider = domain.ProviderCopilot
+			provider := &fakeCopilotProvider{}
+			recorder := serveGateway(t, server.WithCopilot(provider), plain, "/v1/chat/completions", test.request)
+			if recorder.Code != http.StatusOK || provider.chatCalls != 1 || provider.responsesCalls != 0 {
+				t.Fatalf("status=%d responses/chat calls=%d/%d body=%s", recorder.Code, provider.responsesCalls, provider.chatCalls, recorder.Body.String())
+			}
+			if string(provider.body) != test.request {
+				t.Fatalf("upstream request = %s", provider.body)
+			}
+		})
 	}
 }
 
@@ -130,6 +164,186 @@ func TestCopilotChatUsesNativeResponsesForResponsesOnlyModel(t *testing.T) {
 				t.Fatalf("upstream request = %s", upstream)
 			}
 		})
+	}
+}
+
+func TestCopilotNativeChatFailureIsForwardedAndRecorded(t *testing.T) {
+	failure := `data: {"type":"response.failed","response":{"status":"failed","error":{"message":"Copilot quota exhausted","type":"insufficient_quota","code":"copilot_quota_exhausted"}}}` + "\n\n"
+	for _, stream := range []bool{false, true} {
+		t.Run(map[bool]string{false: "json", true: "stream"}[stream], func(t *testing.T) {
+			server, st, _, plain := newTestServer(t)
+			cipher := server.cipher.(*credential.Cipher)
+			st.route.Account = copilotAccountWithCipher(t, cipher, "copilot-account")
+			st.route.Pool.Provider = domain.ProviderCopilot
+			provider := &fakeCopilotProvider{
+				supportedEndpoints: map[string]map[string]bool{"gpt-test": {copilot.EndpointResponses: true}},
+				response:           sseResponse(http.StatusOK, failure),
+			}
+			request := `{"model":"gpt-test","messages":[{"role":"user","content":"hello"}]}`
+			if stream {
+				request = `{"model":"gpt-test","stream":true,"messages":[{"role":"user","content":"hello"}]}`
+			}
+			recorder := serveGateway(t, server.WithCopilot(provider), plain, "/v1/chat/completions", request)
+			body := recorder.Body.String()
+			if !strings.Contains(body, `"code":"copilot_quota_exhausted"`) || !strings.Contains(body, `"message":"Copilot quota exhausted"`) {
+				t.Fatalf("status=%d body=%s", recorder.Code, body)
+			}
+			if stream && (recorder.Code != http.StatusOK || !strings.Contains(body, "[DONE]")) {
+				t.Fatalf("stream status=%d body=%s", recorder.Code, body)
+			}
+			if !stream && recorder.Code != http.StatusTooManyRequests {
+				t.Fatalf("JSON status=%d body=%s", recorder.Code, body)
+			}
+			if len(st.availabilityUpdates) != 1 || st.availabilityUpdates[0].accountID != "copilot-account" || st.availabilityUpdates[0].allowed {
+				t.Fatalf("availability updates = %#v", st.availabilityUpdates)
+			}
+		})
+	}
+}
+
+func TestCopilotNativeResponsesFailureRecordsQuota(t *testing.T) {
+	for _, stream := range []bool{false, true} {
+		t.Run(map[bool]string{false: "json", true: "stream"}[stream], func(t *testing.T) {
+			server, st, _, plain := newTestServer(t)
+			cipher := server.cipher.(*credential.Cipher)
+			st.route.Account = copilotAccountWithCipher(t, cipher, "copilot-account")
+			st.route.Pool.Provider = domain.ProviderCopilot
+			provider := &fakeCopilotProvider{
+				supportedEndpoints: map[string]map[string]bool{"gpt-test": {copilot.EndpointResponses: true}},
+				response: sseResponse(http.StatusOK,
+					`data: {"type":"response.failed","response":{"status":"failed","error":{"message":"Copilot quota exhausted","code":"copilot_quota_exhausted"}}}`+"\n\n"),
+			}
+			request := `{"model":"gpt-test","input":"hello"}`
+			if stream {
+				request = `{"model":"gpt-test","stream":true,"input":"hello"}`
+			}
+			recorder := serveGateway(t, server.WithCopilot(provider), plain, "/v1/responses", request)
+			if stream && (recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"type":"response.failed"`)) {
+				t.Fatalf("stream status=%d body=%s", recorder.Code, recorder.Body.String())
+			}
+			if !stream && (recorder.Code != http.StatusTooManyRequests || !strings.Contains(recorder.Body.String(), `"code":"copilot_quota_exhausted"`)) {
+				t.Fatalf("JSON status=%d body=%s", recorder.Code, recorder.Body.String())
+			}
+			if len(st.availabilityUpdates) != 1 || st.availabilityUpdates[0].accountID != "copilot-account" || st.availabilityUpdates[0].allowed {
+				t.Fatalf("availability updates = %#v", st.availabilityUpdates)
+			}
+		})
+	}
+}
+
+func TestCopilotNativeChatPreservesRefusal(t *testing.T) {
+	tests := []struct {
+		name     string
+		request  string
+		response string
+	}{
+		{
+			name:    "json",
+			request: `{"model":"gpt-test","messages":[{"role":"user","content":"hello"}]}`,
+			response: `data: {"type":"response.completed","response":{"id":"resp-refusal","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"refusal","refusal":"Cannot assist"}]}],"usage":{}}}` +
+				"\n\n",
+		},
+		{
+			name:    "stream",
+			request: `{"model":"gpt-test","stream":true,"messages":[{"role":"user","content":"hello"}]}`,
+			response: `data: {"type":"response.refusal.delta","delta":"Cannot assist"}` + "\n\n" +
+				`data: {"type":"response.completed","response":{"id":"resp-refusal","status":"completed","output":[],"usage":{}}}` + "\n\n",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server, st, _, plain := newTestServer(t)
+			cipher := server.cipher.(*credential.Cipher)
+			st.route.Account = copilotAccountWithCipher(t, cipher, "copilot-account")
+			st.route.Pool.Provider = domain.ProviderCopilot
+			provider := &fakeCopilotProvider{
+				supportedEndpoints: map[string]map[string]bool{"gpt-test": {copilot.EndpointResponses: true}},
+				response:           sseResponse(http.StatusOK, test.response),
+			}
+			recorder := serveGateway(t, server.WithCopilot(provider), plain, "/v1/chat/completions", test.request)
+			if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"refusal":"Cannot assist"`) {
+				t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+			}
+		})
+	}
+}
+
+func TestCopilotUnsupportedModelFailsOverBeforeRequest(t *testing.T) {
+	server, st, _, plain := newTestServer(t)
+	cipher := server.cipher.(*credential.Cipher)
+	st.route.Account = copilotAccountWithCipher(t, cipher, "copilot-account")
+	st.route.Pool.Provider = domain.ProviderMixed
+	st.reassigned = compatibleAccountWithCipher(t, cipher, "compatible-account")
+	compatible := &fakeCompatibleProvider{}
+	server.compatible = compatible
+	provider := &fakeCopilotProvider{supportedEndpoints: map[string]map[string]bool{
+		"other-model": {copilot.EndpointChatCompletions: true},
+	}}
+	recorder := serveGateway(t, server.WithCopilot(provider), plain, "/v1/chat/completions", `{"model":"gpt-test","messages":[{"role":"user","content":"hello"}]}`)
+	if recorder.Code != http.StatusOK || len(compatible.chatBody) == 0 {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if provider.chatCalls != 0 || provider.responsesCalls != 0 {
+		t.Fatalf("Copilot calls=%d/%d", provider.chatCalls, provider.responsesCalls)
+	}
+}
+
+func TestMixedPoolRetriesChatConversionFailureWithOriginalRequest(t *testing.T) {
+	server, st, _, plain := newTestServer(t)
+	cipher := server.cipher.(*credential.Cipher)
+	st.route.Account = copilotAccountWithCipher(t, cipher, "copilot-account")
+	st.route.Pool.Provider = domain.ProviderMixed
+	st.reassigned = compatibleAccountWithCipher(t, cipher, "compatible-account")
+	compatible := &fakeCompatibleProvider{}
+	server.compatible = compatible
+	provider := &fakeCopilotProvider{supportedEndpoints: map[string]map[string]bool{
+		"gpt-test": {copilot.EndpointResponses: true},
+	}}
+	request := `{"model":"gpt-test","messages":[{"role":"user","content":[{"type":"input_audio","input_audio":{"data":"UklGRg==","format":"wav"}}]}]}`
+	recorder := serveGateway(t, server.WithCopilot(provider), plain, "/v1/chat/completions", request)
+	if recorder.Code != http.StatusOK || provider.responsesCalls != 0 || string(compatible.chatBody) != request {
+		t.Fatalf("status=%d Copilot responses=%d upstream=%s body=%s", recorder.Code, provider.responsesCalls, compatible.chatBody, recorder.Body.String())
+	}
+}
+
+func TestFeatureUnavailableResponseIsNotClassifiedAsModelError(t *testing.T) {
+	body := `{"error":{"message":"web_search is not available for this endpoint","type":"invalid_request_error"}}`
+	response := &http.Response{
+		StatusCode: http.StatusBadRequest,
+		Body:       io.NopCloser(strings.NewReader(body)),
+	}
+	if unsupportedModelResponse(response) {
+		t.Fatal("feature-level endpoint error was classified as model unavailable")
+	}
+	replayed, err := io.ReadAll(response.Body)
+	if err != nil || string(replayed) != body {
+		t.Fatalf("replayed body = %q, error=%v", replayed, err)
+	}
+	modelResponse := &http.Response{
+		StatusCode: http.StatusBadRequest,
+		Body:       io.NopCloser(strings.NewReader(`{"error":{"message":"model gpt-test is not available for this endpoint"}}`)),
+	}
+	if !unsupportedModelResponse(modelResponse) {
+		t.Fatal("model-specific endpoint error was not classified as model unavailable")
+	}
+}
+
+func TestMixedPoolRetriesModelUnavailableResponse(t *testing.T) {
+	server, st, _, plain := newTestServer(t)
+	cipher := server.cipher.(*credential.Cipher)
+	st.route.Account = compatibleAccountWithCipher(t, cipher, "compatible-account")
+	st.route.Account.CredentialType = domain.CredentialSubscription
+	st.route.Pool.Provider = domain.ProviderMixed
+	st.reassigned = copilotAccountWithCipher(t, cipher, "copilot-account")
+	server.compatible = &fakeCompatibleProvider{chatResponse: &http.Response{
+		StatusCode: http.StatusBadRequest,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(strings.NewReader(`{"error":{"message":"model is not available","code":"model_not_found"}}`)),
+	}}
+	provider := &fakeCopilotProvider{}
+	recorder := serveGateway(t, server.WithCopilot(provider), plain, "/v1/chat/completions", `{"model":"gpt-test","messages":[{"role":"user","content":"hello"}]}`)
+	if recorder.Code != http.StatusOK || provider.chatCalls != 1 || !strings.Contains(recorder.Body.String(), `"id":"copilot-chat"`) {
+		t.Fatalf("status=%d Copilot calls=%d body=%s", recorder.Code, provider.chatCalls, recorder.Body.String())
 	}
 }
 

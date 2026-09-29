@@ -98,11 +98,8 @@ func (s *Service) listCopilot(ctx context.Context, account domain.ProviderAccoun
 	models := make([]domain.ProviderModel, 0, len(upstream))
 	seen := make(map[string]struct{}, len(upstream))
 	for _, model := range upstream {
-		modelID := strings.TrimSpace(model.ID)
-		if modelID == "" {
-			modelID = strings.TrimSpace(model.Name)
-		}
-		if modelID == "" || model.Disabled || model.Hidden {
+		modelID := model.Identifier()
+		if modelID == "" || model.Disabled || model.Hidden || !model.SupportsGatewayEndpoint() {
 			continue
 		}
 		if _, exists := seen[modelID]; exists {

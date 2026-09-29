@@ -159,6 +159,7 @@ func (providerTimeoutError) Temporary() bool { return true }
 
 type fakeCompatibleProvider struct {
 	chatBody      []byte
+	chatResponse  *http.Response
 	responsesBody []byte
 	credentials   openaicompat.Credentials
 }
@@ -186,6 +187,9 @@ func (f *fakeCompatibleProvider) Responses(_ context.Context, body []byte, _ htt
 func (f *fakeCompatibleProvider) ChatCompletions(_ context.Context, body []byte, _ http.Header, credentials openaicompat.Credentials) (*http.Response, error) {
 	f.chatBody = append([]byte(nil), body...)
 	f.credentials = credentials
+	if f.chatResponse != nil {
+		return f.chatResponse, nil
+	}
 	return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"id":"chat-1","choices":[{"message":{"role":"assistant","content":"OK"},"finish_reason":"stop"}],"usage":{"prompt_tokens":9,"completion_tokens":2,"total_tokens":11}}`))}, nil
 }
 
@@ -805,6 +809,22 @@ func TestUpstreamErrorStatusIsPreserved(t *testing.T) {
 	recorder := serveGateway(t, server, plain, "/v1/responses", `{"model":"gpt-test","input":"hello"}`)
 	if recorder.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestUnsupportedModelResponseIsClassifiedWithoutConsumingBody(t *testing.T) {
+	body := `{"error":{"message":"model is not available","type":"invalid_request_error","code":"model_not_found"}}`
+	response := &http.Response{
+		StatusCode: http.StatusBadRequest,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(strings.NewReader(body)),
+	}
+	if !unsupportedModelResponse(response) {
+		t.Fatal("model-not-found response was not classified")
+	}
+	replayed, err := io.ReadAll(response.Body)
+	if err != nil || string(replayed) != body {
+		t.Fatalf("replayed body = %q, error=%v", replayed, err)
 	}
 }
 

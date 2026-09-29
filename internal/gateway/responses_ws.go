@@ -72,7 +72,7 @@ func (b responsesWSBackend) AttemptBridge(ctx context.Context, headers http.Head
 	request.Header = headers
 	payload = forceProviderStream(payload)
 	response, retry, complete := b.server.attemptAccount(request, route, upstreamRequest{
-		kind: "responses", model: model, body: payload, codexBody: payload,
+		kind: "responses", model: model, body: payload,
 	}, account)
 	if complete && response != nil && response.StatusCode >= http.StatusOK && response.StatusCode < http.StatusMultipleChoices &&
 		response.Header.Get(formatHeader) == "chat_completions" {

@@ -170,7 +170,7 @@ func TestClientCachesModelEndpointCapabilities(t *testing.T) {
 			if r.Header.Get("X-Github-Api-Version") != "2026-06-01" {
 				t.Errorf("X-Github-Api-Version = %q", r.Header.Get("X-Github-Api-Version"))
 			}
-			_, _ = io.WriteString(w, `{"data":[{"id":"gpt-native","supported_endpoints":["/responses","ws:/responses"]},{"id":"gpt-chat","supported_endpoints":["/chat/completions"]}]}`)
+			_, _ = io.WriteString(w, `{"data":[{"id":"gpt-native","supported_endpoints":["/responses","ws:/responses"]},{"id":"gpt-chat","supported_endpoints":["/chat/completions"]},{"name":"gpt-name-only","supported_endpoints":["/responses"]}]}`)
 		default:
 			http.NotFound(w, r)
 		}
@@ -185,6 +185,7 @@ func TestClientCachesModelEndpointCapabilities(t *testing.T) {
 	}{
 		{model: "gpt-native", endpoint: EndpointResponses, want: true},
 		{model: "gpt-chat", endpoint: EndpointResponses, want: false},
+		{model: "gpt-name-only", endpoint: EndpointResponses, want: true},
 		{model: "missing", endpoint: EndpointResponses, want: false},
 	} {
 		supported, err := client.SupportsEndpoint(context.Background(), test.model, test.endpoint, credentials)

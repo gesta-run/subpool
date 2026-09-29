@@ -66,6 +66,72 @@ func TestChatTranslationMapsMaxTokensAndTools(t *testing.T) {
 	}
 }
 
+func TestChatTranslationConvertsMultimodalContent(t *testing.T) {
+	raw, err := chatToResponses([]byte(`{
+		"model":"gpt-test",
+		"messages":[{"role":"user","content":[
+			{"type":"text","text":"describe"},
+			{"type":"image_url","image_url":{"url":"data:image/png;base64,AAAA","detail":"high"}}
+		]}]
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var value map[string]any
+	if json.Unmarshal(raw, &value) != nil {
+		t.Fatalf("translated request = %s", raw)
+	}
+	input := value["input"].([]any)
+	content := input[0].(map[string]any)["content"].([]any)
+	textPart := content[0].(map[string]any)
+	imagePart := content[1].(map[string]any)
+	if textPart["type"] != "input_text" || textPart["text"] != "describe" ||
+		imagePart["type"] != "input_image" || imagePart["image_url"] != "data:image/png;base64,AAAA" || imagePart["detail"] != "high" {
+		t.Fatalf("content = %#v", content)
+	}
+}
+
+func TestChatTranslationSkipsNullAssistantToolContent(t *testing.T) {
+	raw, err := chatToResponses([]byte(`{
+		"model":"gpt-test",
+		"messages":[
+			{"role":"assistant","content":null,"tool_calls":[{"id":"call-1","type":"function","function":{"name":"lookup","arguments":"{\"id\":1}"}}]},
+			{"role":"tool","tool_call_id":"call-1","content":"result"}
+		]
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var value map[string]any
+	_ = json.Unmarshal(raw, &value)
+	input := value["input"].([]any)
+	if len(input) != 2 || input[0].(map[string]any)["type"] != "function_call" || input[1].(map[string]any)["type"] != "function_call_output" {
+		t.Fatalf("input = %#v", input)
+	}
+}
+
+func TestChatTranslationMapsToolChoiceAndResponseFormat(t *testing.T) {
+	raw, err := chatToResponses([]byte(`{
+		"model":"gpt-test","messages":[{"role":"user","content":"hello"}],
+		"tools":[{"type":"function","function":{"name":"lookup","parameters":{"type":"object"}}}],
+		"tool_choice":{"type":"function","function":{"name":"lookup"}},
+		"response_format":{"type":"json_schema","json_schema":{"name":"result","strict":true,"schema":{"type":"object"}}}
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var value map[string]any
+	_ = json.Unmarshal(raw, &value)
+	choice := value["tool_choice"].(map[string]any)
+	format := value["text"].(map[string]any)["format"].(map[string]any)
+	if choice["type"] != "function" || choice["name"] != "lookup" || choice["function"] != nil {
+		t.Fatalf("tool choice = %#v", choice)
+	}
+	if format["type"] != "json_schema" || format["name"] != "result" || format["strict"] != true || format["schema"] == nil {
+		t.Fatalf("text format = %#v", format)
+	}
+}
+
 func TestChatTranslationRejectsMissingFunction(t *testing.T) {
 	if _, err := chatToResponses([]byte(`{"model":"gpt-test","messages":[],"tools":[{"type":"function"}]}`)); err == nil {
 		t.Fatal("function tool without function was accepted")

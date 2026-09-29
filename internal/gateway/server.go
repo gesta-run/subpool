@@ -150,7 +150,6 @@ type upstreamRequest struct {
 	kind         string
 	model        string
 	body         []byte
-	codexBody    []byte
 	copilotTools map[string]copilotToolInfo
 }
 
@@ -164,7 +163,7 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer releaseBody()
-	resp, ok := s.call(w, r, route, upstreamRequest{kind: "responses", model: meta.Model, body: body, codexBody: body}, meta.PreviousResponseID)
+	resp, ok := s.call(w, r, route, upstreamRequest{kind: "responses", model: meta.Model, body: body}, meta.PreviousResponseID)
 	releaseBody()
 	if !ok {
 		return
@@ -206,12 +205,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer releaseBody()
-	responseBody, err := chatToResponses(body)
-	if err != nil {
-		writeOpenAIError(w, http.StatusBadRequest, err.Error(), "invalid_request_error")
-		return
-	}
-	resp, ok := s.call(w, r, route, upstreamRequest{kind: "chat_completions", model: meta.Model, body: body, codexBody: responseBody}, "")
+	resp, ok := s.call(w, r, route, upstreamRequest{kind: "chat_completions", model: meta.Model, body: body}, "")
 	releaseBody()
 	if !ok {
 		return
@@ -230,14 +224,14 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 			s.proxyCompatibleChatStream(w, route.Key.ID, accountID, meta.Model, resp)
 			return
 		}
-		s.proxyChatStream(w, r, route.Key.ID, meta.Model, resp)
+		s.proxyChatStream(w, route.Key.ID, accountID, meta.Model, resp)
 		return
 	}
 	if format == "chat_completions" {
 		s.proxyCompatibleChatJSON(w, route.Key.ID, meta.Model, resp)
 		return
 	}
-	s.proxyChatJSON(w, r, route.Key.ID, meta.Model, resp)
+	s.proxyChatJSON(w, route.Key.ID, accountID, meta.Model, resp)
 }
 
 func (s *Server) authorize(w http.ResponseWriter, r *http.Request, requiredScope string) (domain.KeyRoute, bool) {
@@ -434,16 +428,23 @@ func (s *Server) attemptAccount(r *http.Request, route domain.KeyRoute, request 
 		s.recordHealthFailure(r.Context(), account.ID, "credential_unavailable")
 		return nil, retryUnavailable, false
 	}
+	if (account.Provider == "" || account.Provider == domain.ProviderCodex) && request.kind == "chat_completions" {
+		if convertErr := prepareChatResponsesRequest(&request); convertErr != nil {
+			return chatConversionFailure(route.Pool.Provider, convertErr)
+		}
+	}
 	if account.Provider == domain.ProviderCopilot && s.copilot != nil {
-		native, supportErr := s.copilot.SupportsEndpoint(r.Context(), request.model, copilot.EndpointResponses, credentials.copilot)
-		if request.kind == "responses" && supportErr != nil {
-			retry, complete := s.evaluateProviderError(r.Context(), account.ID, supportErr)
+		endpoints, retry, complete, ready := s.copilotEndpoints(r.Context(), account.ID, request.model, credentials.copilot)
+		if !ready {
 			return nil, retry, complete
 		}
-		if request.kind == "responses" && native {
+		if request.kind == "responses" && endpoints.responses {
 			request.kind = "copilot_responses"
 			request.body = forceProviderStream(request.body)
 		} else if request.kind == "responses" {
+			if !endpoints.chat {
+				return nil, retryUnsupported, false
+			}
 			body, copilotTools, convertErr := responsesToChat(request.body, route.Pool.Provider == domain.ProviderCopilot)
 			if convertErr != nil {
 				if route.Pool.Provider == domain.ProviderMixed {
@@ -453,12 +454,14 @@ func (s *Server) attemptAccount(r *http.Request, route domain.KeyRoute, request 
 			}
 			request.body = body
 			request.copilotTools = copilotTools
-		} else if request.kind == "chat_completions" && supportErr == nil && native {
-			chat, chatSupportErr := s.copilot.SupportsEndpoint(r.Context(), request.model, copilot.EndpointChatCompletions, credentials.copilot)
-			if chatSupportErr == nil && !chat {
-				request.kind = "copilot_responses"
-				request.body = forceProviderStream(request.codexBody)
+		} else if request.kind == "chat_completions" && !endpoints.chat {
+			if !endpoints.responses {
+				return nil, retryUnsupported, false
 			}
+			if convertErr := prepareChatResponsesRequest(&request); convertErr != nil {
+				return chatConversionFailure(route.Pool.Provider, convertErr)
+			}
+			request.kind = "copilot_responses"
 		}
 	}
 	resp, err := s.providerAccountResponse(r.Context(), request, r.Header, credentials, account)
@@ -475,6 +478,41 @@ func (s *Server) attemptAccount(r *http.Request, route domain.KeyRoute, request 
 		return nil, retryAuth, false
 	}
 	return s.retryRefreshedAccount(r, route, request, account)
+}
+
+func prepareChatResponsesRequest(request *upstreamRequest) error {
+	body, err := chatToResponses(request.body)
+	if err != nil {
+		return err
+	}
+	request.body = forceProviderStream(body)
+	return nil
+}
+
+func chatConversionFailure(poolProvider string, err error) (*http.Response, retryReason, bool) {
+	if poolProvider == domain.ProviderMixed {
+		return nil, retryUnsupported, false
+	}
+	return openAIErrorResponse(http.StatusBadRequest, err.Error(), "unsupported_request"), "", true
+}
+
+type copilotEndpointSupport struct {
+	responses bool
+	chat      bool
+}
+
+func (s *Server) copilotEndpoints(ctx context.Context, accountID, model string, credentials copilot.Credentials) (copilotEndpointSupport, retryReason, bool, bool) {
+	responsesSupported, err := s.copilot.SupportsEndpoint(ctx, model, copilot.EndpointResponses, credentials)
+	if err != nil {
+		retry, complete := s.evaluateProviderError(ctx, accountID, err)
+		return copilotEndpointSupport{}, retry, complete, false
+	}
+	chatSupported, err := s.copilot.SupportsEndpoint(ctx, model, copilot.EndpointChatCompletions, credentials)
+	if err != nil {
+		retry, complete := s.evaluateProviderError(ctx, accountID, err)
+		return copilotEndpointSupport{}, retry, complete, false
+	}
+	return copilotEndpointSupport{responses: responsesSupported, chat: chatSupported}, "", false, true
 }
 
 func (s *Server) retryRefreshedAccount(r *http.Request, route domain.KeyRoute, request upstreamRequest, account domain.ProviderAccount) (*http.Response, retryReason, bool) {
@@ -509,6 +547,10 @@ func (s *Server) evaluateResponse(ctx context.Context, keyID, accountID string, 
 		drainAndClose(resp)
 		_ = s.store.UpdateProviderStatus(ctx, accountID, domain.AccountCoolingDown, &retryAt)
 		return nil, retryRateLimit, false
+	}
+	if unsupportedModelResponse(resp) {
+		drainAndClose(resp)
+		return nil, retryUnsupported, false
 	}
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		if s.activity.ShouldRecord(accountID, keyID, s.now()) {
@@ -618,10 +660,56 @@ func writeRetryFailure(w http.ResponseWriter, reason retryReason) {
 	case retryTimeout:
 		writeOpenAIError(w, http.StatusGatewayTimeout, "provider response timed out", "provider_timeout")
 	case retryUnsupported:
-		writeOpenAIError(w, http.StatusBadRequest, "no eligible account supports this Responses API request", "unsupported_provider_endpoint")
+		writeOpenAIError(w, http.StatusBadRequest, "no eligible account supports the requested model or endpoint", "unsupported_provider_endpoint")
 	default:
 		writeOpenAIError(w, http.StatusServiceUnavailable, "no eligible account", "subpool_no_eligible_account")
 	}
+}
+
+type replayReadCloser struct {
+	io.Reader
+	closer io.Closer
+}
+
+func (r *replayReadCloser) Close() error {
+	return r.closer.Close()
+}
+
+func unsupportedModelResponse(resp *http.Response) bool {
+	if resp.StatusCode != http.StatusBadRequest && resp.StatusCode != http.StatusNotFound {
+		return false
+	}
+	original := resp.Body
+	prefix, err := io.ReadAll(io.LimitReader(original, 64<<10))
+	resp.Body = &replayReadCloser{Reader: io.MultiReader(bytes.NewReader(prefix), original), closer: original}
+	if err != nil {
+		return false
+	}
+	var envelope struct {
+		Error struct {
+			Code    any    `json:"code"`
+			Type    string `json:"type"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if json.Unmarshal(prefix, &envelope) != nil {
+		return false
+	}
+	for _, signal := range []string{fmt.Sprint(envelope.Error.Code), envelope.Error.Type} {
+		normalized := strings.ToLower(strings.ReplaceAll(signal, "-", "_"))
+		for _, candidate := range []string{"model_not_found", "unsupported_model", "model_not_supported", "model_unavailable"} {
+			if normalized == candidate {
+				return true
+			}
+		}
+	}
+	message := strings.ToLower(envelope.Error.Message)
+	for _, phrase := range []string{"model is not available", "model not found", "unsupported model", "model is not supported", "model does not support this endpoint"} {
+		if strings.Contains(message, phrase) {
+			return true
+		}
+	}
+	return strings.Contains(message, "model") && strings.Contains(message, "not available for this endpoint")
 }
 
 type providerCredentials struct {
@@ -711,14 +799,14 @@ func (s *Server) providerAccountResponse(ctx context.Context, request upstreamRe
 			err = identityErr
 			break
 		}
-		codexBody, normalizeErr := normalizeCodexRequest(request.codexBody, installationID, account.FastModeEnabled)
+		normalizedBody, normalizeErr := normalizeCodexRequest(request.body, installationID, account.FastModeEnabled)
 		if normalizeErr != nil {
 			err = normalizeErr
 			break
 		}
 		upstreamHeaders := codex.DeviceIdentityHeaders(header, installationID)
 		codex.SetRoutingHint(upstreamHeaders, request.model, account.FastModeEnabled)
-		resp, err = s.codex.Responses(ctx, codexBody, upstreamHeaders, credentials.codex)
+		resp, err = s.codex.Responses(ctx, normalizedBody, upstreamHeaders, credentials.codex)
 		responseFormat = "responses"
 	case domain.ProviderOpenAICompatible:
 		if s.compatible == nil {

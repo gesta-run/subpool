@@ -16,6 +16,19 @@ import (
 	"github.com/gesta-run/subpool/internal/gateway/responseevent"
 )
 
+type responseEventError struct {
+	payload map[string]any
+	limit   responseevent.LimitKind
+}
+
+func (e *responseEventError) Error() string {
+	message, _ := e.payload["message"].(string)
+	if message == "" {
+		return "provider response failed"
+	}
+	return message
+}
+
 func (s *Server) proxyUpstreamError(w http.ResponseWriter, resp *http.Response) {
 	copyResponseHeaders(w.Header(), resp.Header)
 	w.WriteHeader(resp.StatusCode)
@@ -29,14 +42,19 @@ func (s *Server) proxyResponsesStream(w http.ResponseWriter, r *http.Request, ke
 	responseID := ""
 	fallbackEventHash := s.randomUsageEventHash()
 	terminal := false
+	limit := responseevent.LimitNone
 	input, output, err := copySSE(w, resp.Body, func(data []byte) {
 		if id := responseevent.ResponseID(data); id != "" {
 			responseID = id
+		}
+		if limit == responseevent.LimitNone {
+			limit = responseevent.ClassifyLimit(data)
 		}
 		if event := eventType(data); event == "response.completed" || event == "response.incomplete" {
 			terminal = true
 		}
 	})
+	s.recordProviderStreamLimit(accountID, limit)
 	if err != nil || !terminal {
 		return
 	}
@@ -52,6 +70,12 @@ func (s *Server) proxyResponsesJSON(w http.ResponseWriter, r *http.Request, keyI
 	fallbackEventHash := s.randomUsageEventHash()
 	value, input, output, _, err := completedResponse(resp)
 	if err != nil {
+		var failure *responseEventError
+		if errors.As(err, &failure) {
+			s.recordProviderStreamLimit(accountID, failure.limit)
+			writeResponseEventError(w, failure)
+			return
+		}
 		writeOpenAIError(w, http.StatusBadGateway, "invalid provider response", "provider_error")
 		return
 	}
@@ -111,6 +135,9 @@ func completedResponse(resp *http.Response) (any, int64, int64, string, error) {
 		if response, ok := value.(map[string]any); ok {
 			status, _ = response["status"].(string)
 		}
+		if failure := responseFailure(raw); failure != nil {
+			return nil, i, o, status, failure
+		}
 		if err == nil && status != "completed" && status != "incomplete" {
 			err = fmt.Errorf("provider response is not terminal")
 		}
@@ -137,6 +164,9 @@ func completedResponse(resp *http.Response) (any, int64, int64, string, error) {
 		var event map[string]any
 		if json.Unmarshal(data, &event) != nil {
 			continue
+		}
+		if failure := responseFailure(data); failure != nil {
+			return nil, input, output, "failed", failure
 		}
 		eventType, _ := event["type"].(string)
 		if eventType == "response.output_item.added" || eventType == "response.output_item.done" {
@@ -171,6 +201,56 @@ func completedResponse(resp *http.Response) (any, int64, int64, string, error) {
 		}
 	}
 	return completed, input, output, status, nil
+}
+
+func responseFailure(data []byte) *responseEventError {
+	var event map[string]any
+	if json.Unmarshal(data, &event) != nil {
+		return nil
+	}
+	eventType, _ := event["type"].(string)
+	status, _ := event["status"].(string)
+	response, _ := event["response"].(map[string]any)
+	responseStatus, _ := response["status"].(string)
+	_, hasRawError := event["error"]
+	if eventType != "error" && eventType != "response.failed" && status != "failed" && responseStatus != "failed" && !(eventType == "" && hasRawError && event["error"] != nil) {
+		return nil
+	}
+	payload := event["error"]
+	if response != nil && response["error"] != nil {
+		payload = response["error"]
+	}
+	return &responseEventError{payload: normalizeResponseError(payload, event), limit: responseevent.ClassifyLimit(data)}
+}
+
+func normalizeResponseError(payload any, event map[string]any) map[string]any {
+	if value, ok := payload.(map[string]any); ok {
+		return value
+	}
+	message, _ := payload.(string)
+	if message == "" {
+		message, _ = event["message"].(string)
+	}
+	if message == "" {
+		message = "provider response failed"
+	}
+	errorType, _ := event["type"].(string)
+	if errorType == "" || errorType == "error" || errorType == "response.failed" {
+		errorType = "provider_error"
+	}
+	code, _ := event["code"].(string)
+	if code == "" {
+		code = errorType
+	}
+	return map[string]any{"message": message, "type": errorType, "code": code}
+}
+
+func writeResponseEventError(w http.ResponseWriter, failure *responseEventError) {
+	status := http.StatusBadGateway
+	if failure.limit != responseevent.LimitNone {
+		status = http.StatusTooManyRequests
+	}
+	writeJSON(w, status, map[string]any{"error": failure.payload})
 }
 
 func eventType(data []byte) string {
