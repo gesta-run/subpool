@@ -70,6 +70,8 @@ type OpenAICompatibleClient interface {
 
 type CopilotClient interface {
 	ChatCompletions(context.Context, []byte, http.Header, copilot.Credentials) (*http.Response, error)
+	Responses(context.Context, []byte, http.Header, copilot.Credentials) (*http.Response, error)
+	SupportsEndpoint(context.Context, string, string, copilot.Credentials) (bool, error)
 }
 
 type Server struct {
@@ -427,21 +429,37 @@ func (s *Server) call(w http.ResponseWriter, r *http.Request, route domain.KeyRo
 }
 
 func (s *Server) attemptAccount(r *http.Request, route domain.KeyRoute, request upstreamRequest, account domain.ProviderAccount) (*http.Response, retryReason, bool) {
-	if account.Provider == domain.ProviderCopilot && request.kind == "responses" {
-		body, copilotTools, err := responsesToChat(request.body, route.Pool.Provider == domain.ProviderCopilot)
-		if err != nil {
-			if route.Pool.Provider == domain.ProviderMixed {
-				return nil, retryUnsupported, false
-			}
-			return openAIErrorResponse(http.StatusBadRequest, err.Error(), "unsupported_request"), "", true
-		}
-		request.body = body
-		request.copilotTools = copilotTools
-	}
 	credentials, err := s.credentials(account)
 	if err != nil {
 		s.recordHealthFailure(r.Context(), account.ID, "credential_unavailable")
 		return nil, retryUnavailable, false
+	}
+	if account.Provider == domain.ProviderCopilot && s.copilot != nil {
+		native, supportErr := s.copilot.SupportsEndpoint(r.Context(), request.model, copilot.EndpointResponses, credentials.copilot)
+		if request.kind == "responses" && supportErr != nil {
+			retry, complete := s.evaluateProviderError(r.Context(), account.ID, supportErr)
+			return nil, retry, complete
+		}
+		if request.kind == "responses" && native {
+			request.kind = "copilot_responses"
+			request.body = forceProviderStream(request.body)
+		} else if request.kind == "responses" {
+			body, copilotTools, convertErr := responsesToChat(request.body, route.Pool.Provider == domain.ProviderCopilot)
+			if convertErr != nil {
+				if route.Pool.Provider == domain.ProviderMixed {
+					return nil, retryUnsupported, false
+				}
+				return openAIErrorResponse(http.StatusBadRequest, convertErr.Error(), "unsupported_request"), "", true
+			}
+			request.body = body
+			request.copilotTools = copilotTools
+		} else if request.kind == "chat_completions" && supportErr == nil && native {
+			chat, chatSupportErr := s.copilot.SupportsEndpoint(r.Context(), request.model, copilot.EndpointChatCompletions, credentials.copilot)
+			if chatSupportErr == nil && !chat {
+				request.kind = "copilot_responses"
+				request.body = forceProviderStream(request.codexBody)
+			}
+		}
 	}
 	resp, err := s.providerAccountResponse(r.Context(), request, r.Header, credentials, account)
 	if err != nil {
@@ -717,8 +735,13 @@ func (s *Server) providerAccountResponse(ctx context.Context, request upstreamRe
 			err = errors.New("Copilot provider client is unavailable")
 			break
 		}
-		resp, err = s.copilot.ChatCompletions(ctx, request.body, header, credentials.copilot)
-		responseFormat = "chat_completions"
+		if request.kind == "copilot_responses" {
+			resp, err = s.copilot.Responses(ctx, request.body, header, credentials.copilot)
+			responseFormat = "responses"
+		} else {
+			resp, err = s.copilot.ChatCompletions(ctx, request.body, header, credentials.copilot)
+			responseFormat = "chat_completions"
+		}
 	default:
 		err = fmt.Errorf("unsupported provider %q", account.Provider)
 	}

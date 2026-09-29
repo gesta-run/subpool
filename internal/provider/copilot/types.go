@@ -15,6 +15,8 @@ const (
 	DefaultAccessTokenURL   = "https://github.com/login/oauth/access_token"
 	DefaultUserURL          = "https://api.github.com/user"
 	DefaultOAuthClientID    = "Iv1.b507a08c87ecfe98"
+	EndpointChatCompletions = "/chat/completions"
+	EndpointResponses       = "/responses"
 )
 
 type Credentials struct {
@@ -37,12 +39,22 @@ type DeviceAuthorizationResult struct {
 }
 
 type Model struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	DisplayName string `json:"display_name"`
-	Preview     bool   `json:"preview"`
-	Disabled    bool   `json:"disabled"`
-	Hidden      bool   `json:"hidden"`
+	ID                 string   `json:"id"`
+	Name               string   `json:"name"`
+	DisplayName        string   `json:"display_name"`
+	Preview            bool     `json:"preview"`
+	Disabled           bool     `json:"disabled"`
+	Hidden             bool     `json:"hidden"`
+	SupportedEndpoints []string `json:"supported_endpoints"`
+}
+
+func (m Model) SupportsEndpoint(endpoint string) bool {
+	for _, supported := range m.SupportedEndpoints {
+		if supported == endpoint {
+			return true
+		}
+	}
+	return false
 }
 
 type CreditsQuota struct {

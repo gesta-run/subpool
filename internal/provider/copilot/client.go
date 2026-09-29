@@ -19,6 +19,8 @@ import (
 	providerhttp "github.com/gesta-run/subpool/internal/provider/httpclient"
 )
 
+const modelEndpointCacheTTL = 5 * time.Minute
+
 type ClientConfig struct {
 	APIBase          string
 	TokenExchangeURL string
@@ -31,6 +33,12 @@ type tokenEntry struct {
 	refreshing chan struct{}
 }
 
+type modelEntry struct {
+	models     map[string]Model
+	expiresAt  time.Time
+	refreshing chan struct{}
+}
+
 type Client struct {
 	apiBase          string
 	tokenExchangeURL string
@@ -39,6 +47,7 @@ type Client struct {
 	now              func() time.Time
 	mu               sync.Mutex
 	tokens           map[string]*tokenEntry
+	models           map[string]*modelEntry
 }
 
 func NewClient(config ClientConfig) *Client {
@@ -56,12 +65,21 @@ func NewClient(config ClientConfig) *Client {
 	}
 	return &Client{
 		apiBase: strings.TrimRight(config.APIBase, "/"), tokenExchangeURL: config.TokenExchangeURL, entitlementsURL: config.EntitlementsURL,
-		httpClient: config.HTTPClient, now: time.Now, tokens: make(map[string]*tokenEntry),
+		httpClient: config.HTTPClient, now: time.Now, tokens: make(map[string]*tokenEntry), models: make(map[string]*modelEntry),
 	}
 }
 
 func (c *Client) ChatCompletions(ctx context.Context, body []byte, source http.Header, credentials Credentials) (*http.Response, error) {
-	return c.request(ctx, http.MethodPost, "/chat/completions", sanitizeChatCompletionsBody(body), source, credentials)
+	return c.request(ctx, http.MethodPost, EndpointChatCompletions, sanitizeRequestBody(body), source, credentials)
+}
+
+func (c *Client) Responses(ctx context.Context, body []byte, source http.Header, credentials Credentials) (*http.Response, error) {
+	headers := source.Clone()
+	if headers == nil {
+		headers = make(http.Header)
+	}
+	headers.Set("Accept", "text/event-stream")
+	return c.request(ctx, http.MethodPost, EndpointResponses, sanitizeRequestBody(body), headers, credentials)
 }
 
 func (c *Client) Models(ctx context.Context, credentials Credentials) (*http.Response, error) {
@@ -71,6 +89,71 @@ func (c *Client) Models(ctx context.Context, credentials Credentials) (*http.Res
 func (c *Client) Validate(ctx context.Context, credentials Credentials) error {
 	_, err := c.token(ctx, credentials)
 	return err
+}
+
+func (c *Client) SupportsEndpoint(ctx context.Context, modelID, endpoint string, credentials Credentials) (bool, error) {
+	models, err := c.cachedModels(ctx, credentials)
+	if err != nil {
+		return false, err
+	}
+	model, ok := models[modelID]
+	return ok && model.SupportsEndpoint(endpoint), nil
+}
+
+func (c *Client) cachedModels(ctx context.Context, credentials Credentials) (map[string]Model, error) {
+	key := tokenKey(credentials.GitHubToken)
+	for {
+		c.mu.Lock()
+		entry := c.models[key]
+		if entry != nil && entry.refreshing == nil && c.now().Before(entry.expiresAt) {
+			models := entry.models
+			c.mu.Unlock()
+			return models, nil
+		}
+		if entry != nil && entry.refreshing != nil {
+			ready := entry.refreshing
+			c.mu.Unlock()
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-ready:
+				continue
+			}
+		}
+		entry = &modelEntry{refreshing: make(chan struct{})}
+		c.models[key] = entry
+		c.mu.Unlock()
+
+		models, err := c.fetchModels(ctx, credentials)
+		c.mu.Lock()
+		if err == nil {
+			entry.models = models
+			entry.expiresAt = c.now().Add(modelEndpointCacheTTL)
+		}
+		close(entry.refreshing)
+		entry.refreshing = nil
+		if err != nil {
+			delete(c.models, key)
+		}
+		c.mu.Unlock()
+		return models, err
+	}
+}
+
+func (c *Client) fetchModels(ctx context.Context, credentials Credentials) (map[string]Model, error) {
+	resp, err := c.Models(ctx, credentials)
+	if err != nil {
+		return nil, err
+	}
+	models, err := DecodeModels(resp)
+	if err != nil {
+		return nil, err
+	}
+	byID := make(map[string]Model, len(models))
+	for _, model := range models {
+		byID[model.ID] = model
+	}
+	return byID, nil
 }
 
 func (c *Client) request(ctx context.Context, method, path string, body []byte, source http.Header, credentials Credentials) (*http.Response, error) {
@@ -193,11 +276,11 @@ func setEditorHeaders(header http.Header) {
 	header.Set("editor-version", "vscode/1.98.1")
 	header.Set("editor-plugin-version", "copilot-chat/0.26.7")
 	header.Set("User-Agent", "GitHubCopilotChat/0.26.7")
-	header.Set("x-github-api-version", "2025-04-01")
+	header.Set("x-github-api-version", "2026-06-01")
 	header.Set("x-vscode-user-agent-library-version", "electron-fetch")
 }
 
-func sanitizeChatCompletionsBody(body []byte) []byte {
+func sanitizeRequestBody(body []byte) []byte {
 	value, err := jsonobject.Parse(body)
 	if err != nil {
 		return body
