@@ -77,6 +77,25 @@ describe('AccountTable health states', () => {
     expect(screen.queryByText('Usage unavailable')).not.toBeInTheDocument()
   })
 
+  it('shows Codex AI credits alongside subscription capacity', () => {
+    renderTable({
+      ...baseAccount,
+      quota_snapshot: {
+        ...baseAccount.quota_snapshot,
+        credits: {
+          has_credits: true,
+          unlimited: false,
+          balance: '499',
+        },
+      },
+    })
+
+    expect(screen.getByText('weekly capacity')).toBeInTheDocument()
+    expect(screen.getByText('499')).toBeInTheDocument()
+    expect(screen.getByText('AI credits')).toBeInTheDocument()
+    expect(screen.getByText('Available credit balance')).toBeInTheDocument()
+  })
+
   it('shows remaining GitHub Copilot subscription capacity in AI credits', () => {
     renderTable({
       ...baseAccount,

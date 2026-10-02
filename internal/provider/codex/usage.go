@@ -12,12 +12,19 @@ type UsageWindow struct {
 	ResetAt          int64   `json:"reset_at"`
 }
 
+type CreditsSnapshot struct {
+	HasCredits bool    `json:"has_credits"`
+	Unlimited  bool    `json:"unlimited"`
+	Balance    *string `json:"balance"`
+}
+
 type UsageSnapshot struct {
-	PlanType     string       `json:"plan_type,omitempty"`
-	UsageAllowed *bool        `json:"usage_allowed,omitempty"`
-	LimitReason  string       `json:"limit_reason,omitempty"`
-	FiveHour     *UsageWindow `json:"five_hour,omitempty"`
-	Weekly       *UsageWindow `json:"weekly,omitempty"`
+	PlanType     string           `json:"plan_type,omitempty"`
+	UsageAllowed *bool            `json:"usage_allowed,omitempty"`
+	LimitReason  string           `json:"limit_reason,omitempty"`
+	FiveHour     *UsageWindow     `json:"five_hour,omitempty"`
+	Weekly       *UsageWindow     `json:"weekly,omitempty"`
+	Credits      *CreditsSnapshot `json:"credits,omitempty"`
 }
 
 func (s *UsageSnapshot) markUsageBlocked(reason string) {
