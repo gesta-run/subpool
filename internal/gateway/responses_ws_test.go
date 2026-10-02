@@ -111,6 +111,38 @@ func TestResponsesWebSocketUsesConfiguredRequestLimit(t *testing.T) {
 	}
 }
 
+func TestResponsesWebSocketOutlivesHTTPServerReadTimeout(t *testing.T) {
+	server, _, provider, plain := newTestServer(t)
+	provider.responses = []*http.Response{sseResponse(http.StatusOK, "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-after-wait\",\"usage\":{}}}\n\n")}
+	server.WithRequestBodyLimits(256, 256*maxHTTPRequestBodyCopies, time.Second)
+	server.WithResponsesWebSocket(true, true, "")
+	mux := http.NewServeMux()
+	server.Register(mux)
+	testServer := httptest.NewUnstartedServer(mux)
+	testServer.Config.ReadTimeout = 20 * time.Millisecond
+	testServer.Start()
+	defer testServer.Close()
+
+	headers := http.Header{"Authorization": {"Bearer " + plain}}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	client, response, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(testServer.URL, "http")+"/v1/responses", &websocket.DialOptions{HTTPHeader: headers})
+	cancel()
+	if response != nil && response.Body != nil {
+		defer response.Body.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.CloseNow()
+
+	time.Sleep(50 * time.Millisecond)
+	writeResponsesWSMessage(t, client, `{"type":"response.create","model":"gpt-test","input":"hello"}`)
+	event := readResponsesWSMessage(t, client)
+	if event["type"] != "response.completed" {
+		t.Fatalf("event = %#v", event)
+	}
+}
+
 func TestResponsesWebSocketCodexNormalizationClassifiesFailures(t *testing.T) {
 	server, _, _, _ := newTestServer(t)
 	backend := responsesWSBackend{server: server}

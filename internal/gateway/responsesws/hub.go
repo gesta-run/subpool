@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/coder/websocket"
 )
@@ -54,6 +56,11 @@ func (h *Hub) Handle(w http.ResponseWriter, r *http.Request) {
 	route, keyDigest, requestErr := h.backend.Authenticate(r.Context(), r.Header.Get("Authorization"), "responses")
 	if requestErr != nil {
 		writeOpenAIError(w, requestErr.Status, requestErr.Message, requestErr.Code)
+		return
+	}
+	if err := http.NewResponseController(w).SetReadDeadline(time.Time{}); err != nil {
+		slog.Error("WebSocket connection deadline could not be cleared", "error", err)
+		writeOpenAIError(w, http.StatusInternalServerError, "WebSocket connection could not be initialized", "server_error")
 		return
 	}
 	if !h.reserveConnection(route.Key.ID) {
