@@ -115,7 +115,8 @@ SELECT
     p.created_at AS pool_created_at, p.updated_at AS pool_updated_at,
     a.id AS account_id, a.provider AS account_provider, a.credential_type,
     a.display_name, a.credential_ciphertext, a.credential_version, a.status,
-    a.fast_mode_enabled, a.health_status, a.quota_snapshot, a.cooldown_until,
+    a.fast_mode_enabled, a.health_status, a.quota_snapshot, a.quota_checked_at,
+    COALESCE(a.last_quota_error_code, '') AS last_quota_error_code, a.cooldown_until,
     a.last_success_at, a.last_failure_at, a.created_at AS account_created_at,
     a.updated_at AS account_updated_at, pa.enabled AS membership_enabled
 FROM api_keys k
@@ -137,7 +138,8 @@ SELECT
     p.created_at AS pool_created_at, p.updated_at AS pool_updated_at,
     a.id AS account_id, a.provider AS account_provider, a.credential_type,
     a.display_name, a.credential_ciphertext, a.credential_version, a.status,
-    a.fast_mode_enabled, a.health_status, a.quota_snapshot, a.cooldown_until,
+    a.fast_mode_enabled, a.health_status, a.quota_snapshot, a.quota_checked_at,
+    COALESCE(a.last_quota_error_code, '') AS last_quota_error_code, a.cooldown_until,
     a.last_success_at, a.last_failure_at, a.created_at AS account_created_at,
     a.updated_at AS account_updated_at, pa.enabled AS membership_enabled
 FROM api_keys k
@@ -162,7 +164,9 @@ SELECT EXISTS(
 -- name: ResolveSessionAccount :one
 SELECT a.id, a.provider, a.credential_type, a.display_name, a.credential_ciphertext,
     a.credential_version, a.status, a.fast_mode_enabled, a.health_status,
-    a.quota_snapshot, a.cooldown_until, a.last_success_at, a.last_failure_at,
+    a.quota_snapshot, a.quota_checked_at,
+    COALESCE(a.last_quota_error_code, '') AS last_quota_error_code,
+    a.cooldown_until, a.last_success_at, a.last_failure_at,
     a.created_at, a.updated_at
 FROM session_bindings s
 JOIN provider_accounts a ON a.id = s.provider_account_id
@@ -189,6 +193,7 @@ WHERE api_key_id = sqlc.arg(api_key_id);
 -- name: GetRoutableProviderAccount :one
 SELECT id, provider, credential_type, display_name, credential_ciphertext,
     credential_version, status, fast_mode_enabled, health_status, quota_snapshot,
+    quota_checked_at, COALESCE(last_quota_error_code, '') AS last_quota_error_code,
     cooldown_until, last_success_at, last_failure_at, created_at, updated_at
 FROM provider_accounts
 WHERE id = sqlc.arg(id);
