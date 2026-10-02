@@ -229,6 +229,9 @@ func TestResponsesWebSocketBridgesCopilotAccount(t *testing.T) {
 	server, st, _, plain := newTestServer(t)
 	cipher := server.cipher.(*credential.Cipher)
 	account := copilotAccountWithCipher(t, cipher, "copilot-account")
+	checkedAt := time.Now()
+	account.QuotaSnapshot = json.RawMessage(`{"credits":{"entitlement":1500,"remaining":1125,"remaining_percent":75,"unlimited":false}}`)
+	account.QuotaCheckedAt = &checkedAt
 	st.route.Account = account
 	st.route.Pool.Provider = domain.ProviderCopilot
 	st.sessionSavedSignal = make(chan struct{}, 1)
@@ -243,16 +246,21 @@ func TestResponsesWebSocketBridgesCopilotAccount(t *testing.T) {
 	defer cleanup()
 	writeResponsesWSMessage(t, client, `{"type":"response.create","model":"gpt-test","input":"hello"}`)
 	var terminal map[string]any
+	foundCredits := false
 	for range 12 {
 		event := readResponsesWSMessage(t, client)
+		if event["type"] == "codex.rate_limits" {
+			credits, _ := event["credits"].(map[string]any)
+			foundCredits = credits["has_credits"] == true && credits["balance"] == "1125"
+		}
 		if event["type"] == "response.completed" {
 			terminal = event
 			break
 		}
 	}
-	if terminal == nil || !strings.Contains(string(provider.body), `"messages":[{"content":"hello","role":"user"}]`) ||
+	if !foundCredits || terminal == nil || !strings.Contains(string(provider.body), `"messages":[{"content":"hello","role":"user"}]`) ||
 		!strings.Contains(string(provider.body), `"stream":true`) {
-		t.Fatalf("terminal=%#v upstream=%s", terminal, provider.body)
+		t.Fatalf("credits=%v terminal=%#v upstream=%s", foundCredits, terminal, provider.body)
 	}
 	select {
 	case <-st.sessionSavedSignal:

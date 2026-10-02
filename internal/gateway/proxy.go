@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gesta-run/subpool/internal/gateway/clientquota"
 	"github.com/gesta-run/subpool/internal/gateway/responseevent"
 )
 
@@ -89,6 +90,7 @@ func (s *Server) proxyResponsesJSON(w http.ResponseWriter, r *http.Request, keyI
 	if input > 0 || output > 0 {
 		s.addUsage(keyID, s.usageEventHash(responseID, fallbackEventHash), model, input, output)
 	}
+	clientquota.CopyHeaders(w.Header(), resp.Header)
 	writeJSON(w, http.StatusOK, value)
 }
 

@@ -19,6 +19,7 @@ import (
 	"github.com/gesta-run/subpool/internal/catalog"
 	"github.com/gesta-run/subpool/internal/credential"
 	"github.com/gesta-run/subpool/internal/domain"
+	"github.com/gesta-run/subpool/internal/gateway/clientquota"
 	"github.com/gesta-run/subpool/internal/gateway/responseevent"
 	"github.com/gesta-run/subpool/internal/gateway/responsesws"
 	"github.com/gesta-run/subpool/internal/jsonobject"
@@ -840,6 +841,7 @@ func (s *Server) providerAccountResponse(ctx context.Context, request upstreamRe
 		return nil, errors.New("provider returned an empty response")
 	}
 	resp.Header.Set(formatHeader, responseFormat)
+	clientquota.ApplyHeaders(resp.Header, account, s.now())
 	setCopilotToolHeaders(resp.Header, request.copilotTools)
 	return resp, nil
 }
