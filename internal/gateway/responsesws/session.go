@@ -166,7 +166,7 @@ func (s *responsesWSSession) readClient() {
 				closeReason = "request body is too large"
 			}
 			bodyState = s.hub.backend.RequestBodyState()
-			slog.Warn("WebSocket request body rejected", "reason", reason, "max_bytes", bodyState.MaxBytes,
+			slog.Warn("WebSocket request body rejected", "reason", reason, "error", err, "max_bytes", bodyState.MaxBytes,
 				"inflight_buffer_bytes", bodyState.InflightBytes, "max_inflight_buffer_bytes", bodyState.MaxInflightBytes)
 			s.close(closeStatus, closeReason)
 			return

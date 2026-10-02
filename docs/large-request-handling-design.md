@@ -66,8 +66,9 @@ Large Responses payloads are rewritten one top-level field at a time. Nested
 copy of base64 image data. WebSocket messages use the streaming reader so
 capacity is reserved before the library buffers the complete message.
 
-HTTP and WebSocket body reads use the configured timeout. HTTP headers retain a
-separate short timeout.
+HTTP request bodies and individual WebSocket messages use the configured
+timeout. The timeout does not apply to the lifetime of a WebSocket connection.
+HTTP headers retain a separate short timeout.
 
 ## Observability and Privacy
 
