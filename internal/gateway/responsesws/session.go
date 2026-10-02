@@ -13,6 +13,7 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/gesta-run/subpool/internal/domain"
+	"github.com/gesta-run/subpool/internal/gateway/clientquota"
 	"github.com/gesta-run/subpool/internal/gateway/responseevent"
 	"github.com/gesta-run/subpool/internal/jsonobject"
 	"github.com/gesta-run/subpool/internal/provider/codex"
@@ -868,6 +869,12 @@ func (s *responsesWSSession) forwardBridgeTurnResponse(turn *responsesWSTurn, re
 		code, message := readResponsesWSHTTPError(response)
 		s.sendError(turn.streamID, code, message)
 		return
+	}
+	if credits := clientquota.EventFromHeaders(response.Header, turn.streamID); len(credits) > 0 {
+		if err := s.writeClient(credits); err != nil {
+			s.close(websocket.StatusInternalError, "client write failed")
+			return
+		}
 	}
 	if err := s.forwardBridgeResponse(turn, response); err != nil && s.ctx.Err() == nil {
 		s.sendError(turn.streamID, "provider_error", "provider response stream failed")

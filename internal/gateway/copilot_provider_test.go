@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"strings"
@@ -87,6 +88,32 @@ func TestCopilotResponsesUsesNativeEndpointWhenAdvertised(t *testing.T) {
 	}
 	if st.usageInput != 7 || st.usageOutput != 3 || !st.sessionSaved {
 		t.Fatalf("usage=%d/%d session=%v", st.usageInput, st.usageOutput, st.sessionSaved)
+	}
+}
+
+func TestCopilotResponsesExposeCreditsToCodex(t *testing.T) {
+	for _, stream := range []bool{true, false} {
+		t.Run(map[bool]string{true: "stream", false: "json"}[stream], func(t *testing.T) {
+			server, st, _, plain := newTestServer(t)
+			account := copilotAccountWithCipher(t, server.cipher.(*credential.Cipher), "copilot-account")
+			checkedAt := time.Now()
+			account.QuotaSnapshot = json.RawMessage(`{"credits":{"entitlement":1500,"remaining":1125,"remaining_percent":75,"unlimited":false}}`)
+			account.QuotaCheckedAt = &checkedAt
+			st.route.Account = account
+			st.route.Pool.Provider = domain.ProviderCopilot
+			provider := &fakeCopilotProvider{supportedEndpoints: map[string]map[string]bool{
+				"gpt-test": {copilot.EndpointResponses: true},
+			}}
+			request := `{"model":"gpt-test","input":"hello"}`
+			if stream {
+				request = `{"model":"gpt-test","stream":true,"input":"hello"}`
+			}
+			recorder := serveGateway(t, server.WithCopilot(provider), plain, "/v1/responses", request)
+			if recorder.Code != http.StatusOK || recorder.Header().Get("X-Codex-Credits-Has-Credits") != "true" ||
+				recorder.Header().Get("X-Codex-Credits-Unlimited") != "false" || recorder.Header().Get("X-Codex-Credits-Balance") != "1125" {
+				t.Fatalf("status=%d headers=%#v body=%s", recorder.Code, recorder.Header(), recorder.Body.String())
+			}
+		})
 	}
 }
 

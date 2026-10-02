@@ -1,7 +1,7 @@
 ---
 version: 0.1
 name: Subpool Console Design System
-description: A dense self-hosted subscription-pool console aligned with the Gesta operations shell
+description: A dense self-hosted subscription-pool console aligned with Ubang branding
 colors:
   background: "#0A0A0A"
   surface: "#171717"
@@ -35,10 +35,10 @@ components:
 
 ## Overview
 
-Subpool is an operational console, not a marketing surface. It inherits Gesta's
-dark, neutral shell and information density while making account concurrency,
-assignment, routing health, and per-key token usage the primary information.
-Color is reserved for status and quantitative charts.
+Subpool is an operational console, not a marketing surface. It combines Ubang's
+official brand mark with a dark, neutral shell and information density while
+making account concurrency, assignment, routing health, and per-key token usage
+the primary information. Color is reserved for status and quantitative charts.
 
 ## Colors
 
