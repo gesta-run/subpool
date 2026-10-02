@@ -26,6 +26,9 @@ func TestAppServerReadsAndConsumesResetCredits(t *testing.T) {
 	if usage.Weekly == nil || usage.Weekly.RemainingPercent != 75 || usage.FiveHour == nil || usage.FiveHour.RemainingPercent != 75 {
 		t.Fatalf("usage = %#v", usage)
 	}
+	if usage.Credits == nil || !usage.Credits.HasCredits || usage.Credits.Unlimited || usage.Credits.Balance == nil || *usage.Credits.Balance != "499" {
+		t.Fatalf("usage credits = %#v", usage.Credits)
+	}
 	credits, err := client.ReadResetCredits(ctx, credentials)
 	if err != nil {
 		t.Fatal(err)
@@ -188,6 +191,7 @@ func TestCodexAppServerHelperProcess(t *testing.T) {
 					"limitId": "codex", "planType": "plus",
 					"primary":   map[string]any{"usedPercent": usedPercent, "windowDurationMins": 300, "resetsAt": 1800000000},
 					"secondary": map[string]any{"usedPercent": usedPercent, "windowDurationMins": 10080, "resetsAt": 1800500000},
+					"credits":   map[string]any{"hasCredits": true, "unlimited": false, "balance": "499"},
 				},
 				"rateLimitResetCredits": map[string]any{
 					"availableCount": available,

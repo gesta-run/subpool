@@ -261,10 +261,17 @@ type appServerRateLimitWindow struct {
 	ResetsAt           *int64  `json:"resetsAt"`
 }
 
+type appServerCreditsSnapshot struct {
+	HasCredits bool    `json:"hasCredits"`
+	Unlimited  bool    `json:"unlimited"`
+	Balance    *string `json:"balance"`
+}
+
 type appServerRateLimits struct {
 	PlanType             *string                   `json:"planType"`
 	Primary              *appServerRateLimitWindow `json:"primary"`
 	Secondary            *appServerRateLimitWindow `json:"secondary"`
+	Credits              *appServerCreditsSnapshot `json:"credits"`
 	RateLimitReachedType *string                   `json:"rateLimitReachedType"`
 	SpendControlReached  *bool                     `json:"spendControlReached"`
 }
@@ -311,7 +318,7 @@ func (s *appServerSession) readRateLimits(id int) (appServerRateLimitSnapshot, e
 }
 
 func normalizeAppServerRateLimits(limits appServerRateLimits) *UsageSnapshot {
-	if limits.PlanType == nil && limits.Primary == nil && limits.Secondary == nil && limits.RateLimitReachedType == nil && limits.SpendControlReached == nil {
+	if limits.PlanType == nil && limits.Primary == nil && limits.Secondary == nil && limits.Credits == nil && limits.RateLimitReachedType == nil && limits.SpendControlReached == nil {
 		return nil
 	}
 	allowed := true
@@ -329,6 +336,13 @@ func normalizeAppServerRateLimits(limits appServerRateLimits) *UsageSnapshot {
 		snapshot.FiveHour = secondary
 	} else if secondary != nil && secondary.WindowSeconds < weeklyWindowSeconds {
 		snapshot.Weekly = nil
+	}
+	if limits.Credits != nil {
+		snapshot.Credits = &CreditsSnapshot{
+			HasCredits: limits.Credits.HasCredits,
+			Unlimited:  limits.Credits.Unlimited,
+			Balance:    limits.Credits.Balance,
+		}
 	}
 	if limits.RateLimitReachedType != nil && *limits.RateLimitReachedType != "" && *limits.RateLimitReachedType != "unknown" {
 		snapshot.markUsageBlocked(*limits.RateLimitReachedType)
