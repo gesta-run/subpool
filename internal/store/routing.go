@@ -210,7 +210,8 @@ func (p *Postgres) ResolveAPIKey(ctx context.Context, digest []byte) (domain.Key
 		Pool: domain.Pool{ID: row.PoolID, Name: row.PoolName, Provider: row.PoolProvider, CreatedAt: row.PoolCreatedAt.Time, UpdatedAt: row.PoolUpdatedAt.Time},
 		Account: routeAccount(row.AccountID, row.AccountProvider, row.CredentialType, row.DisplayName,
 			row.CredentialCiphertext, row.CredentialVersion, row.Status, row.FastModeEnabled, row.HealthStatus,
-			row.QuotaSnapshot, row.CooldownUntil, row.LastSuccessAt, row.LastFailureAt, row.AccountCreatedAt, row.AccountUpdatedAt),
+			row.QuotaSnapshot, row.QuotaCheckedAt, row.LastQuotaErrorCode, row.CooldownUntil,
+			row.LastSuccessAt, row.LastFailureAt, row.AccountCreatedAt, row.AccountUpdatedAt),
 		MembershipEnabled: row.MembershipEnabled,
 	}, nil
 }
@@ -229,7 +230,8 @@ func (p *Postgres) ResolvePinnedAPIKey(ctx context.Context, digest []byte, poolI
 			Pool: domain.Pool{ID: row.PoolID, Name: row.PoolName, Provider: row.PoolProvider, CreatedAt: row.PoolCreatedAt.Time, UpdatedAt: row.PoolUpdatedAt.Time},
 			Account: routeAccount(row.AccountID, row.AccountProvider, row.CredentialType, row.DisplayName,
 				row.CredentialCiphertext, row.CredentialVersion, row.Status, row.FastModeEnabled, row.HealthStatus,
-				row.QuotaSnapshot, row.CooldownUntil, row.LastSuccessAt, row.LastFailureAt, row.AccountCreatedAt, row.AccountUpdatedAt),
+				row.QuotaSnapshot, row.QuotaCheckedAt, row.LastQuotaErrorCode, row.CooldownUntil,
+				row.LastSuccessAt, row.LastFailureAt, row.AccountCreatedAt, row.AccountUpdatedAt),
 			MembershipEnabled: row.MembershipEnabled,
 		}, nil
 	}
@@ -254,7 +256,8 @@ func (p *Postgres) ResolveSessionAccount(ctx context.Context, keyID string, sess
 	}
 	return routeAccount(row.ID, row.Provider, row.CredentialType, row.DisplayName,
 		row.CredentialCiphertext, row.CredentialVersion, row.Status, row.FastModeEnabled,
-		row.HealthStatus, row.QuotaSnapshot, row.CooldownUntil, row.LastSuccessAt,
+		row.HealthStatus, row.QuotaSnapshot, row.QuotaCheckedAt, row.LastQuotaErrorCode,
+		row.CooldownUntil, row.LastSuccessAt,
 		row.LastFailureAt, row.CreatedAt, row.UpdatedAt), nil
 }
 
@@ -292,7 +295,8 @@ func (p *Postgres) ReassignAPIKey(ctx context.Context, keyID, poolID string, exc
 	}
 	return routeAccount(row.ID, row.Provider, row.CredentialType, row.DisplayName,
 		row.CredentialCiphertext, row.CredentialVersion, row.Status, row.FastModeEnabled,
-		row.HealthStatus, row.QuotaSnapshot, row.CooldownUntil, row.LastSuccessAt,
+		row.HealthStatus, row.QuotaSnapshot, row.QuotaCheckedAt, row.LastQuotaErrorCode,
+		row.CooldownUntil, row.LastSuccessAt,
 		row.LastFailureAt, row.CreatedAt, row.UpdatedAt), nil
 }
 
@@ -420,13 +424,14 @@ func (p *Postgres) Audit(ctx context.Context, event domain.AuditEvent) error {
 }
 
 func routeAccount(id, provider, credentialType, displayName string, ciphertext []byte, version int32,
-	status string, fastMode bool, healthStatus string, quota []byte, cooldown, lastSuccess,
-	lastFailure, createdAt, updatedAt pgtype.Timestamptz,
+	status string, fastMode bool, healthStatus string, quota []byte, quotaCheckedAt pgtype.Timestamptz,
+	lastQuotaErrorCode string, cooldown, lastSuccess, lastFailure, createdAt, updatedAt pgtype.Timestamptz,
 ) domain.ProviderAccount {
 	return domain.ProviderAccount{
 		ID: id, Provider: provider, CredentialType: credentialType, DisplayName: displayName,
 		CredentialCiphertext: ciphertext, CredentialVersion: int(version), Status: status,
 		FastModeEnabled: fastMode, HealthStatus: healthStatus, QuotaSnapshot: quota,
+		QuotaCheckedAt: optionalTime(quotaCheckedAt), LastQuotaErrorCode: lastQuotaErrorCode,
 		CooldownUntil: optionalTime(cooldown), LastSuccessAt: optionalTime(lastSuccess),
 		LastFailureAt: optionalTime(lastFailure), CreatedAt: createdAt.Time, UpdatedAt: updatedAt.Time,
 	}

@@ -320,6 +320,11 @@ func TestPostgresAssignmentAndUsage(t *testing.T) {
 	if err = database.CreateProviderAccount(ctx, account); err != nil {
 		t.Fatal(err)
 	}
+	quotaCheckedAt := time.Now().UTC().Truncate(time.Microsecond)
+	quotaSnapshot := []byte(`{"credits":{"remaining":499}}`)
+	if err = database.UpdateProviderDetails(ctx, account.ID, "", quotaSnapshot, quotaCheckedAt); err != nil {
+		t.Fatal(err)
+	}
 	duplicate := account
 	duplicate.ID = "00000000-0000-4000-8000-000000000099"
 	if err = database.CreateProviderAccount(ctx, duplicate); !errors.Is(err, ErrConflict) {
@@ -360,13 +365,21 @@ func TestPostgresAssignmentAndUsage(t *testing.T) {
 	if err != nil || route.Account.ID != account.ID || route.Pool.ID != pool.ID || !route.MembershipEnabled {
 		t.Fatalf("route = %#v, %v", route, err)
 	}
+	assertRoutedQuota(t, route.Account, quotaCheckedAt)
+	pinned, err := database.ResolvePinnedAPIKey(ctx, keys[2].KeyHMAC, pool.ID, account.ID)
+	if err != nil {
+		t.Fatalf("pinned route = %#v, %v", pinned, err)
+	}
+	assertRoutedQuota(t, pinned.Account, quotaCheckedAt)
 	sessionHash := bytes.Repeat([]byte{9}, 32)
 	if err = database.SaveSessionBinding(ctx, keys[2].ID, pool.ID, sessionHash, account.ID, time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	if sessionAccount, resolveErr := database.ResolveSessionAccount(ctx, keys[2].ID, sessionHash); resolveErr != nil || sessionAccount.ID != account.ID {
+	sessionAccount, resolveErr := database.ResolveSessionAccount(ctx, keys[2].ID, sessionHash)
+	if resolveErr != nil || sessionAccount.ID != account.ID {
 		t.Fatalf("session account = %#v, %v", sessionAccount, resolveErr)
 	}
+	assertRoutedQuota(t, sessionAccount, quotaCheckedAt)
 	if err = database.AddPoolAccount(ctx, domain.PoolAccount{PoolID: pool.ID, ProviderAccountID: account.ID, Weight: 1, Enabled: false}); err != nil {
 		t.Fatal(err)
 	}
@@ -380,6 +393,19 @@ func TestPostgresAssignmentAndUsage(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertUsageActivity(t, ctx, database, account, keys[2])
+}
+
+func assertRoutedQuota(t *testing.T, account domain.ProviderAccount, checkedAt time.Time) {
+	t.Helper()
+	var quota struct {
+		Credits struct {
+			Remaining float64 `json:"remaining"`
+		} `json:"credits"`
+	}
+	if err := json.Unmarshal(account.QuotaSnapshot, &quota); err != nil || account.QuotaCheckedAt == nil ||
+		!account.QuotaCheckedAt.Equal(checkedAt) || quota.Credits.Remaining != 499 {
+		t.Fatalf("routed quota = snapshot %s, checked at %v, error %v", account.QuotaSnapshot, account.QuotaCheckedAt, err)
+	}
 }
 
 func assertUsageActivity(t *testing.T, ctx context.Context, database *Postgres, account domain.ProviderAccount, key domain.APIKey) {
