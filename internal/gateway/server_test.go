@@ -143,12 +143,14 @@ func (f *fakeStore) RecordProviderHealthFailure(_ context.Context, _ string, cod
 }
 
 type fakeProvider struct {
-	responses   []*http.Response
-	errors      []error
-	models      []codex.Model
-	credentials []codex.Credentials
-	bodies      [][]byte
-	headers     []http.Header
+	responses             []*http.Response
+	errors                []error
+	models                []codex.Model
+	credentials           []codex.Credentials
+	bodies                [][]byte
+	imageGenerationBodies [][]byte
+	imageEditBodies       [][]byte
+	headers               []http.Header
 }
 
 type providerTimeoutError struct{}
