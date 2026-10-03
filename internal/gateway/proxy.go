@@ -36,6 +36,27 @@ func (s *Server) proxyUpstreamError(w http.ResponseWriter, resp *http.Response) 
 	_, _ = io.Copy(w, io.LimitReader(resp.Body, 1<<20))
 }
 
+func (s *Server) proxyImageJSON(w http.ResponseWriter, keyID, model string, resp *http.Response) {
+	copyResponseHeaders(w.Header(), resp.Header)
+	w.WriteHeader(resp.StatusCode)
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		_, _ = io.Copy(w, resp.Body)
+		return
+	}
+	var envelope struct {
+		Usage struct {
+			InputTokens  int64 `json:"input_tokens"`
+			OutputTokens int64 `json:"output_tokens"`
+		} `json:"usage"`
+	}
+	decoder := json.NewDecoder(io.TeeReader(resp.Body, w))
+	decodeErr := decoder.Decode(&envelope)
+	_, copyErr := io.Copy(w, resp.Body)
+	if decodeErr == nil && copyErr == nil && (envelope.Usage.InputTokens > 0 || envelope.Usage.OutputTokens > 0) {
+		s.addUsage(keyID, s.randomUsageEventHash(), model, envelope.Usage.InputTokens, envelope.Usage.OutputTokens)
+	}
+}
+
 func (s *Server) proxyResponsesStream(w http.ResponseWriter, r *http.Request, keyID, poolID, accountID, model string, resp *http.Response) {
 	copyResponseHeaders(w.Header(), resp.Header)
 	w.Header().Set("Content-Type", "text/event-stream")

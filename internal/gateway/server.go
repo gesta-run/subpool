@@ -62,6 +62,8 @@ type Cipher interface {
 
 type CodexClient interface {
 	Responses(context.Context, []byte, http.Header, codex.Credentials) (*http.Response, error)
+	ImageGenerations(context.Context, []byte, http.Header, codex.Credentials) (*http.Response, error)
+	ImageEdits(context.Context, []byte, http.Header, codex.Credentials) (*http.Response, error)
 }
 
 type OpenAICompatibleClient interface {
@@ -138,6 +140,8 @@ func (s *Server) Register(mux *http.ServeMux) {
 		mux.HandleFunc("GET /v1/responses", s.responsesWS.Handle)
 	}
 	mux.HandleFunc("POST /v1/chat/completions", s.handleChat)
+	mux.HandleFunc("POST /v1/images/generations", s.handleImageGenerations)
+	mux.HandleFunc("POST /v1/images/edits", s.handleImageEdits)
 	mux.HandleFunc("GET /v1/models", s.handleModels)
 }
 
@@ -233,6 +237,37 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.proxyChatJSON(w, route.Key.ID, accountID, meta.Model, resp)
+}
+
+func (s *Server) handleImageGenerations(w http.ResponseWriter, r *http.Request) {
+	s.handleImages(w, r, "image_generations")
+}
+
+func (s *Server) handleImageEdits(w http.ResponseWriter, r *http.Request) {
+	s.handleImages(w, r, "image_edits")
+}
+
+func (s *Server) handleImages(w http.ResponseWriter, r *http.Request, kind string) {
+	// Image generation is a Codex capability, so existing Responses-scoped keys
+	// remain valid when the Codex client invokes its built-in image tool.
+	route, ok := s.authorize(w, r, "responses")
+	if !ok {
+		return
+	}
+	body, meta, releaseBody, ok := s.readRequest(w, r)
+	if !ok {
+		return
+	}
+	defer releaseBody()
+	resp, ok := s.call(w, r, route, upstreamRequest{kind: kind, model: meta.Model, body: body}, "")
+	releaseBody()
+	if !ok {
+		return
+	}
+	defer resp.Body.Close()
+	resp.Header.Del(accountHeader)
+	resp.Header.Del(formatHeader)
+	s.proxyImageJSON(w, route.Key.ID, meta.Model, resp)
 }
 
 func (s *Server) authorize(w http.ResponseWriter, r *http.Request, requiredScope string) (domain.KeyRoute, bool) {
@@ -372,7 +407,7 @@ func (s *Server) call(w http.ResponseWriter, r *http.Request, route domain.KeyRo
 			return nil, false
 		}
 	}
-	if !continuation && route.Pool.Provider == domain.ProviderMixed && account.CredentialType == domain.CredentialAPIKey {
+	if !continuation && !isImageRequest(request.kind) && route.Pool.Provider == domain.ProviderMixed && account.CredentialType == domain.CredentialAPIKey {
 		if preferred, reassignErr := s.store.ReassignAPIKey(r.Context(), route.Key.ID, route.Pool.ID, nil); reassignErr == nil {
 			account = preferred
 		}
@@ -424,6 +459,9 @@ func (s *Server) call(w http.ResponseWriter, r *http.Request, route domain.KeyRo
 }
 
 func (s *Server) attemptAccount(r *http.Request, route domain.KeyRoute, request upstreamRequest, account domain.ProviderAccount) (*http.Response, retryReason, bool) {
+	if isImageRequest(request.kind) && !isCodexSubscriptionAccount(account) {
+		return nil, retryUnsupported, false
+	}
 	credentials, err := s.credentials(account)
 	if err != nil {
 		s.recordHealthFailure(r.Context(), account.ID, "credential_unavailable")
@@ -745,8 +783,16 @@ func (s *Server) refresh(ctx context.Context, account domain.ProviderAccount) (d
 }
 
 func refreshableCredentials(account domain.ProviderAccount) bool {
+	return isCodexSubscriptionAccount(account)
+}
+
+func isCodexSubscriptionAccount(account domain.ProviderAccount) bool {
 	return (account.Provider == "" || account.Provider == domain.ProviderCodex) &&
 		(account.CredentialType == "" || account.CredentialType == domain.CredentialSubscription)
+}
+
+func isImageRequest(kind string) bool {
+	return kind == "image_generations" || kind == "image_edits"
 }
 
 func accountHealthy(account domain.ProviderAccount, now time.Time) bool {
@@ -800,12 +846,20 @@ func (s *Server) providerAccountResponse(ctx context.Context, request upstreamRe
 			err = identityErr
 			break
 		}
+		upstreamHeaders := codex.DeviceIdentityHeaders(header, installationID)
+		if isImageRequest(request.kind) {
+			if request.kind == "image_edits" {
+				resp, err = s.codex.ImageEdits(ctx, request.body, upstreamHeaders, credentials.codex)
+			} else {
+				resp, err = s.codex.ImageGenerations(ctx, request.body, upstreamHeaders, credentials.codex)
+			}
+			break
+		}
 		normalizedBody, normalizeErr := normalizeCodexRequest(request.body, installationID, account.FastModeEnabled)
 		if normalizeErr != nil {
 			err = normalizeErr
 			break
 		}
-		upstreamHeaders := codex.DeviceIdentityHeaders(header, installationID)
 		codex.SetRoutingHint(upstreamHeaders, request.model, account.FastModeEnabled)
 		resp, err = s.codex.Responses(ctx, normalizedBody, upstreamHeaders, credentials.codex)
 		responseFormat = "responses"

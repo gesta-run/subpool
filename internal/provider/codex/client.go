@@ -57,13 +57,25 @@ func validRoutingHintModel(model string) bool {
 }
 
 func (c *Client) Responses(ctx context.Context, body []byte, downstream http.Header, credentials Credentials) (*http.Response, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/responses", bytes.NewReader(body))
+	return c.postJSON(ctx, "/responses", body, downstream, credentials, "text/event-stream")
+}
+
+func (c *Client) ImageGenerations(ctx context.Context, body []byte, downstream http.Header, credentials Credentials) (*http.Response, error) {
+	return c.postJSON(ctx, "/images/generations", body, downstream, credentials, "application/json")
+}
+
+func (c *Client) ImageEdits(ctx context.Context, body []byte, downstream http.Header, credentials Credentials) (*http.Response, error) {
+	return c.postJSON(ctx, "/images/edits", body, downstream, credentials, "application/json")
+}
+
+func (c *Client) postJSON(ctx context.Context, path string, body []byte, downstream http.Header, credentials Credentials, accept string) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+path, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("create Codex request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+credentials.AccessToken)
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "text/event-stream")
+	req.Header.Set("Accept", accept)
 	req.Header.Set("Connection", "Keep-Alive")
 	req.Header.Set("Originator", "codex_cli_rs")
 	req.Header.Set("User-Agent", defaultUserAgent)

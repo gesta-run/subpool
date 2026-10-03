@@ -79,6 +79,8 @@ GitHub Copilot subscriptions use GitHub Device OAuth. Select **GitHub Copilot su
 
 Fast mode is controlled per Codex subscription account from the **Accounts** page. Subpool enforces the selected mode, so employees do not need to configure Fast mode in Codex.
 
+Codex's built-in image tool can use the same Subpool API key and bound Codex subscription. Subpool forwards JSON requests for `POST /v1/images/generations` and `POST /v1/images/edits` to the Codex subscription endpoint; no separate OpenAI API key is required. Image endpoints use the existing `responses` API key scope.
+
 After creating an employee API key, configure Codex on each user's machine to route requests through Subpool. Edit the user-level Codex configuration file:
 
 - Linux: `/home/<username>/.codex/config.toml` (or `~/.codex/config.toml`)
@@ -106,7 +108,7 @@ responses_websockets_v2 = true
 
 Save the file, then restart Codex so the new provider and WebSocket settings are loaded. Codex subscription accounts use a dedicated upstream WebSocket, while OpenAI-compatible accounts use the existing HTTP/SSE bridge.
 
-Available endpoints include `GET/POST /v1/responses`, `POST /v1/chat/completions`, `GET /v1/models`, `GET /healthz`, `GET /readyz`, and `GET /metrics`.
+Available endpoints include `GET/POST /v1/responses`, `POST /v1/chat/completions`, `POST /v1/images/generations`, `POST /v1/images/edits`, `GET /v1/models`, `GET /healthz`, `GET /readyz`, and `GET /metrics`.
 
 ## Deployment notes
 
