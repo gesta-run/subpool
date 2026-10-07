@@ -1,8 +1,6 @@
 <p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="web/public/brand/subpool-by-gesta-inverse.svg">
-    <img src="web/public/brand/subpool-by-gesta.svg" alt="Subpool by Gesta" width="460">
-  </picture>
+  <img src="web/public/brand/subpool-by-gesta.svg#gh-light-mode-only" alt="Subpool by Gesta" width="460">
+  <img src="web/public/brand/subpool-by-gesta-inverse.svg#gh-dark-mode-only" alt="Subpool by Gesta" width="460">
 </p>
 
 <p align="center">
