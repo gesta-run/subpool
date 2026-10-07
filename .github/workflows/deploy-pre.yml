@@ -1,4 +1,4 @@
-name: Deploy Subpool to Ubang Pre
+name: Deploy Subpool to Gesta Pre
 
 on:
   workflow_dispatch:

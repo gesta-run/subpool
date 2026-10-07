@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from 'react'
 import { errorMessage, request } from '../api'
-import { BrandCredit } from '../components/BrandCredit'
+import { GestaCredit } from '../components/GestaCredit'
 import { Spinner } from '../components/Spinner'
 
 interface LoginPageProps {
@@ -60,7 +60,7 @@ function LoginForm(props: LoginFormProps) {
       </form>
       <p className="login-security">Credentials stay in the server environment and are never stored in the database.</p>
     </div>
-    <BrandCredit className="login-panel__credit" />
+    <GestaCredit className="login-panel__credit" />
   </section>
 }
 

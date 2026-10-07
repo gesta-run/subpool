@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 140" role="img" aria-labelledby="title">
+  <title id="title">Subpool by Gesta</title>
+  <text x="20" y="105" font-family="Avenir Next, Helvetica Neue, Arial, sans-serif" font-size="92" font-weight="700" letter-spacing="-5"><tspan fill="#F7F8FA">subp</tspan><tspan fill="#22A6F2">o</tspan><tspan fill="#6D63FF">o</tspan><tspan fill="#F7F8FA">l</tspan></text>
+  <path d="M415 28L387 112" stroke="#22A6F2" stroke-width="6" stroke-linecap="round"/>
+  <text x="443" y="62" fill="#94A3B8" font-family="Avenir Next, Helvetica Neue, Arial, sans-serif" font-size="15" font-weight="700" letter-spacing="3">BY</text>
+  <text x="443" y="105" fill="#F7F8FA" font-family="Gesta Serif, Playfair Display, Georgia, serif" font-size="48" font-weight="600">Gesta</text>
+</svg>

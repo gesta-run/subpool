@@ -1,5 +1,5 @@
 import { useEffect, useState, type ComponentType, type SVGProps } from 'react'
-import { BrandCredit } from './BrandCredit'
+import { GestaCredit } from './GestaCredit'
 import {
   AccountIcon,
   CloseIcon,
@@ -72,7 +72,7 @@ export function Shell({ activePage, onNavigate, onLogout, children }: ShellProps
             )
           })}
         </nav>
-        <BrandCredit />
+        <GestaCredit />
       </aside>
       <div className="shell-content">
         <header className="topbar">

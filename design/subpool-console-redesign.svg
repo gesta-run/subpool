@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="3240" height="2030" viewBox="0 0 3240 2030" role="img" aria-labelledby="title desc">
   <title id="title">Subpool console redesign</title>
-  <desc id="desc">Four desktop administration screens for Overview, Accounts, Pools, and API Keys, using the Ubang console visual language.</desc>
+  <desc id="desc">Four desktop administration screens for Overview, Accounts, Pools, and API Keys, using the Gesta console visual language.</desc>
   <defs>
     <filter id="frame-shadow" x="-20%" y="-20%" width="140%" height="150%">
       <feDropShadow dx="0" dy="22" stdDeviation="34" flood-color="#000000" flood-opacity="0.46"/>
@@ -92,7 +92,7 @@
   <g class="ui">
     <text x="120" y="76" class="eyebrow" fill="#6ea8fe">SUBPOOL CONSOLE · REDESIGN 01</text>
     <text x="120" y="124" fill="#fafafa" font-size="38" font-weight="650">Subscription pooling, made operational.</text>
-    <text x="120" y="153" fill="#8f8f8f" font-size="15">Four implementation-ready desktop views aligned with the Ubang console shell.</text>
+    <text x="120" y="153" fill="#8f8f8f" font-size="15">Four implementation-ready desktop views aligned with the Gesta console shell.</text>
     <g transform="translate(2653 78)">
       <circle cx="5" cy="5" r="5" fill="#4ade80"/><text x="20" y="10" class="label">Illustrative data only</text>
     </g>
@@ -276,6 +276,6 @@
 
   <g class="ui">
     <text x="120" y="1975" class="label">Design tokens and responsive behavior are documented in subpool/DESIGN.md</text>
-    <text x="2784" y="1975" class="eyebrow">UBANG VISUAL LANGUAGE · SUBPOOL DOMAIN MODEL</text>
+    <text x="2784" y="1975" class="eyebrow">GESTA VISUAL LANGUAGE · SUBPOOL DOMAIN MODEL</text>
   </g>
 </svg>

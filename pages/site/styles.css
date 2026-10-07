@@ -58,15 +58,13 @@ summary:focus-visible {
   margin: 0 auto;
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-start;
   gap: 24px;
   border-bottom: 1px solid var(--line);
 }
 .brand-lockup { display: flex; align-items: center; gap: 14px; }
 .brand-lockup img { width: 126px; height: auto; }
 .brand-lockup span { padding-left: 14px; border-left: 1px solid var(--line-strong); color: var(--text-muted); font-size: 12px; font-weight: 650; }
-.brand-endorsement { display: flex; align-items: center; gap: 10px; color: var(--text-muted); font-size: 10px; font-weight: 650; text-transform: uppercase; }
-.brand-endorsement img { width: 70px; height: auto; aspect-ratio: 519 / 195; object-fit: contain; }
 
 main { width: min(calc(100% - 48px), var(--page-width)); margin: 0 auto; }
 .latest-release {
@@ -209,8 +207,6 @@ h1 { max-width: 700px; margin-bottom: 16px; font-size: 52px; line-height: 1.02; 
   .masthead { min-height: 62px; }
   .brand-lockup img { width: 112px; }
   .brand-lockup span { display: none; }
-  .brand-endorsement span { display: none; }
-  .brand-endorsement img { width: 64px; }
   .latest-release { min-height: 0; padding: 42px 0 40px; }
   h1 { font-size: 38px; }
   .latest-release__summary { font-size: 15px; }

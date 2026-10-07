@@ -1,15 +1,7 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="web/public/brand/subpool-wordmark-inverse.svg">
-    <img src="web/public/brand/subpool-wordmark.svg" alt="Subpool" width="360">
-  </picture>
-</p>
-
-<p align="center">
-  <sub>Supported by</sub><br>
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="web/public/brand/ubang-logo-light.png">
-    <img src="web/public/brand/ubang-logo-blue.png" alt="Ubang" width="112">
+    <source media="(prefers-color-scheme: dark)" srcset="web/public/brand/subpool-by-gesta-inverse.svg">
+    <img src="web/public/brand/subpool-by-gesta.svg" alt="Subpool by Gesta" width="460">
   </picture>
 </p>
 

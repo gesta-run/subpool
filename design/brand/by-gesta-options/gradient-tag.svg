@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 140" role="img" aria-labelledby="title">
+  <title id="title">Subpool by Gesta — gradient endorsement</title>
+  <defs>
+    <linearGradient id="tag" x1="585" y1="35" x2="875" y2="108" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#22A6F2"/><stop offset="1" stop-color="#4F46E5"/>
+    </linearGradient>
+  </defs>
+  <style>.ink{fill:#10141C}@media (prefers-color-scheme:dark){.ink{fill:#F7F8FA}}</style>
+  <text x="20" y="105" font-family="Avenir Next, Helvetica Neue, Arial, sans-serif" font-size="92" font-weight="700" letter-spacing="-5"><tspan class="ink">subp</tspan><tspan fill="#22A6F2">o</tspan><tspan fill="#4F46E5">o</tspan><tspan class="ink">l</tspan></text>
+  <rect x="585" y="35" width="290" height="73" rx="18" fill="url(#tag)"/>
+  <text x="620" y="82" fill="#FFFFFF" font-family="Avenir Next, Helvetica Neue, Arial, sans-serif" font-size="16" font-weight="700" letter-spacing="3">BY</text>
+  <text x="690" y="91" fill="#FFFFFF" font-family="Gesta Serif, Playfair Display, Georgia, serif" font-size="45" font-weight="600">Gesta</text>
+</svg>

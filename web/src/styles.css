@@ -1,4 +1,4 @@
-/* Ubang-aligned Subpool console */
+/* Gesta-aligned Subpool console */
 :root {
   color-scheme: dark;
   font-family: "Geist Sans", "Aptos", "SF Pro Text", sans-serif;
@@ -147,8 +147,10 @@ select:focus-visible,
   text-transform: uppercase;
 }
 .sidebar__credit i { width: 1px; height: 20px; background: var(--line-strong); }
-.sidebar__credit img { width: 58px; height: auto; aspect-ratio: 519 / 195; object-fit: contain; opacity: .9; }
+.sidebar__credit img { width: 20px; height: 20px; opacity: .9; }
+.sidebar__credit strong { color: var(--ink-soft); font: 600 17px/1 Georgia, serif; }
 .sidebar__credit:hover img { opacity: 1; }
+.sidebar__credit:hover strong { color: var(--ink); }
 
 .shell-content {
   min-width: 0;

@@ -36,7 +36,6 @@ async function build() {
   await cp(sourceRoot, outputRoot, { recursive: true })
   await cp(`${repositoryRoot}web/public/brand/subpool-wordmark-inverse.svg`, `${outputRoot}/assets/subpool-wordmark-inverse.svg`)
   await cp(`${repositoryRoot}web/public/brand/subpool-favicon.svg`, `${outputRoot}/assets/subpool-favicon.svg`)
-  await cp(`${repositoryRoot}web/public/brand/ubang-logo-light.png`, `${outputRoot}/assets/ubang-logo-light.png`)
 
   const manifest = offline
     ? JSON.parse(await readFile(`${sourceRoot}/releases.json`, 'utf8'))
