@@ -48,7 +48,7 @@ describe('Subpool console', () => {
     expect(await screen.findByText('No accounts connected')).toBeInTheDocument()
     expect(screen.queryByText('LOCAL')).not.toBeInTheDocument()
     expect(screen.queryByText('Administrator')).not.toBeInTheDocument()
-    expect(screen.getByRole('link', { name: /Supported by\s*Ubang/i })).toHaveAttribute('href', 'https://ubang.cn/ubang/home')
+    expect(screen.getByRole('link', { name: /Supported by\s*Gesta/i })).toHaveAttribute('href', 'https://gesta.run')
     expect(fetch).toHaveBeenCalledWith('/api/v1/auth/login', expect.objectContaining({ method: 'POST' }))
   })
 

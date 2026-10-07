@@ -8,7 +8,7 @@ Subpool currently has one manually triggered preproduction workflow. It builds
 an image, publishes an immutable `sha-<commit>` tag to GHCR, and deploys that
 image through AWS Systems Manager. Pull requests and main-branch changes do not
 have an automated validation pipeline. New images will move to the same ECR
-Public publishing model used by the existing release pipeline.
+Public publishing model used by Gesta.
 
 ## Goals
 
@@ -58,7 +58,7 @@ Publishing behavior:
   releases.
 - Attach OCI source and revision labels.
 - Authenticate with the existing AWS credentials and
-  `aws-actions/amazon-ecr-login`, matching the existing pipeline.
+  `aws-actions/amazon-ecr-login`, matching Gesta's pipeline.
 - Publish to `public.ecr.aws/cloudpilotai/subpool`.
 - Use read-only GitHub permissions; ECR writes are authorized by AWS IAM.
 - Never publish an image when Go or web validation fails.
