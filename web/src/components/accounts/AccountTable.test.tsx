@@ -1,5 +1,6 @@
 import { render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
+import type { ResetCreditState } from '../../hooks/useResetCredits'
 import type { ProviderAccount } from '../../types'
 import { AccountTable } from './AccountTable'
 
@@ -21,13 +22,13 @@ const baseAccount: ProviderAccount = {
   },
 }
 
-function renderTable(account: ProviderAccount) {
+function renderTable(account: ProviderAccount, resetStates: Record<string, ResetCreditState> = {}) {
   const noop = vi.fn()
   return render(<AccountTable
     accounts={[account]}
     busyID=""
     resetBusyID=""
-    resetStates={{}}
+    resetStates={resetStates}
     onModels={noop}
     onRefresh={noop}
     onResetLoad={noop}
@@ -39,6 +40,14 @@ function renderTable(account: ProviderAccount) {
 }
 
 describe('AccountTable health states', () => {
+  it('groups availability and the latest check in the health column', () => {
+    renderTable({ ...baseAccount, last_checked_at: '2026-09-10T08:00:00Z' })
+
+    expect(screen.getByRole('columnheader', { name: 'Health' })).toBeInTheDocument()
+    expect(screen.queryByRole('columnheader', { name: 'Last checked' })).not.toBeInTheDocument()
+    expect(screen.getByText(/^Checked /)).toBeInTheDocument()
+  })
+
   it('shows both Codex subscription limit windows', () => {
     renderTable({
       ...baseAccount,
@@ -94,6 +103,42 @@ describe('AccountTable health states', () => {
     expect(screen.getByText('499')).toBeInTheDocument()
     expect(screen.getByText('AI credits')).toBeInTheDocument()
     expect(screen.getByText('Available credit balance')).toBeInTheDocument()
+  })
+
+  it('stacks credit and reset details in two left-aligned groups', () => {
+    const { container } = renderTable({
+      ...baseAccount,
+      last_quota_error_code: 'quota_probe_rate_limited',
+      quota_snapshot: {
+        ...baseAccount.quota_snapshot,
+        credits: {
+          has_credits: true,
+          unlimited: false,
+          balance: '48200',
+        },
+      },
+    }, {
+      'account-1': {
+        loading: false,
+        data: {
+          available_count: 3,
+          credits: [{
+            id: 'reset-1',
+            reset_type: 'full',
+            status: 'available',
+            granted_at: 1899000000,
+            expires_at: 1900000000,
+          }],
+        },
+      },
+    })
+
+    const details = container.querySelector('.reset-credit--with-balance')
+    expect(details?.children[0]).toHaveClass('capacity')
+    expect(details?.children[1]).toHaveClass('reset-credit__action')
+    expect(screen.getByText('3 resets available')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Reset credits' })).toBeInTheDocument()
+    expect(screen.getByText(/^Last known · Expires /)).toBeInTheDocument()
   })
 
   it('shows remaining GitHub Copilot subscription capacity in AI credits', () => {
