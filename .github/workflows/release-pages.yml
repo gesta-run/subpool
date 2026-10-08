@@ -21,12 +21,26 @@ permissions:
   id-token: write
 
 concurrency:
-  group: subpool-release-pages
+  group: subpool-release-pages-${{ github.event_name == 'release' && 'refresh' || 'deploy' }}
   cancel-in-progress: true
 
 jobs:
+  refresh:
+    name: Refresh release pages from main
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
+      - name: Dispatch release pages from main
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh workflow run release-pages.yml --repo "$GITHUB_REPOSITORY" --ref main
+
   build:
     name: Build release pages
+    if: github.event_name != 'release'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:

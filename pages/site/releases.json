@@ -3,8 +3,22 @@
     "name": "Subpool",
     "image": "public.ecr.aws/cloudpilotai/subpool"
   },
-  "generated_at": "2026-09-29T05:30:00Z",
+  "generated_at": "2026-10-08T01:39:12Z",
   "releases": [
+    {
+      "tag": "v0.3.0",
+      "name": "Subpool v0.3.0",
+      "published_at": "2026-10-07T17:06:49Z",
+      "commit_sha": "35fdaed6c5234c27a8129f36a4cc192090d5cf96",
+      "notes_html": "<h2>Highlights</h2><ul><li>Route Codex built-in image generation and edit requests through bound Codex subscription accounts, using existing Responses-scoped API keys and mixed-pool failover without buffering large image payloads.</li><li>Surface fresh GitHub Copilot and Codex subscription credit snapshots to Codex through HTTP and SSE response headers and Responses WebSocket rate-limit events.</li><li>Display Codex AI credit balances alongside five-hour and weekly capacity in the account console.</li></ul><h2>Reliability and operations</h2><ul><li>Preserve long-lived Responses WebSockets by clearing inherited HTTP read deadlines after connection upgrades while retaining per-message timeouts.</li><li>Keep quota freshness metadata available across API key, pinned-account, and WebSocket routing so credit updates reach the final routed account after failover.</li><li>Record image token usage and preserve subscription routing behavior across image generation and edit requests.</li></ul><h2>Documentation</h2><ul><li>Document Codex subscription image endpoints and their existing API key scope.</li></ul><h2>Upgrade notes</h2><p>Pull <code>public.ecr.aws/cloudpilotai/subpool:v0.3.0</code> for the stable image. No new database migrations are included since v0.2.0. Existing Codex, GitHub Copilot, and OpenAI-compatible configurations remain supported.</p>"
+    },
+    {
+      "tag": "v0.2.0",
+      "name": "Subpool v0.2.0",
+      "published_at": "2026-09-29T10:20:40Z",
+      "commit_sha": "e5c691652c1328364a538dbb15c249aa28acc142",
+      "notes_html": "<h2>Highlights</h2><ul><li>Add GitHub Copilot as a subscription provider with device OAuth, model discovery, account health, and AI credits visibility.</li><li>Support Copilot through both Chat Completions and the native Responses API, with model-aware endpoint routing and mixed-pool failover.</li><li>Bridge function, custom, namespaced, tool-search, multimodal, structured-output, refusal, and streaming error semantics across compatible endpoints.</li><li>Publish a dedicated release page with stable version history, immutable image coordinates, source revisions, and release notes.</li></ul><h2>Reliability and operations</h2><ul><li>Isolate Responses WebSocket sessions and improve quota-aware failover, cooldown recovery, request ordering, and process cleanup.</li><li>Support larger buffered requests and longer upstream model responses with bounded, configurable limits.</li><li>Refresh Codex quota against the official source, preserve quota freshness during probe failures, and surface five-hour usage.</li><li>Generate typed store queries and scope assignment locks to strengthen concurrent routing behavior.</li></ul><h2>Console and usage</h2><ul><li>Add employee usage summaries and paginated usage details while keeping API keys out of usage views.</li><li>Improve account connection, quota, reset-credit, and provider-status workflows.</li><li>Precompress web assets and update the bundled Codex CLI for GPT-6 models.</li></ul><h2>Upgrade notes</h2><p>Pull <code>public.ecr.aws/cloudpilotai/subpool:v0.2.0</code> for the stable image. Database migrations 016 through 018 are applied automatically during startup. Existing Codex and OpenAI-compatible configurations remain supported.</p>"
+    },
     {
       "tag": "v0.1.0",
       "name": "Subpool v0.1.0",
