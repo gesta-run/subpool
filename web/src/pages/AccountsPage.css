@@ -55,29 +55,34 @@
 .subscription-summary .capacity { width: 100%; max-width: 460px; }
 .subscription-summary .capacity > span { margin-bottom: 7px; font-size: 13px; }
 .subscription-summary .capacity > span strong { font-size: 15px; }
+.subscription-summary .capacity__heading { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 20px; }
+.capacity__label { white-space: nowrap; }
+.capacity__credits { padding-left: 20px; border-left: 1px solid var(--line-strong); color: var(--ink-soft); white-space: nowrap; }
+.capacity__credits strong { margin-inline: 3px; color: var(--ink); font-family: "Geist Mono", "SFMono-Regular", monospace; }
 .subscription-summary .capacity > div { height: 7px; }
 .subscription-summary .capacity small { display: block; margin-top: 7px; font-size: 12px; line-height: 1.4; }
 .subscription-summary__empty { display: grid; gap: 4px; }
 .subscription-summary__empty strong { color: var(--ink-soft); font-size: 15px; font-weight: 650; }
 .subscription-summary__empty small { margin: 0; color: var(--ink-muted); font-size: 12px; }
 .subscription-summary > .reset-credit { width: 100%; max-width: 460px; }
-.reset-credit { display: grid; justify-items: start; align-items: start; gap: 8px; }
-.reset-credit--with-balance { grid-template-columns: minmax(150px, 1fr) minmax(130px, .75fr); column-gap: 20px; }
-.reset-credit--with-balance > .capacity { min-width: 0; }
-.reset-credit__action { min-width: 0; display: grid; justify-items: start; align-content: start; gap: 8px; }
+.reset-credit { padding: 10px 12px; display: grid; justify-items: start; align-items: start; gap: 8px; border: 1px solid var(--line); border-radius: var(--radius-control); background: var(--panel-nested); }
+.reset-credit__action { width: 100%; min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px 12px; }
 .reset-credit__summary { min-width: 0; display: flex; align-items: center; gap: 8px; }
 .reset-credit__summary > i { width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; background: var(--acid-deep); }
-.reset-credit__copy { min-width: 0; display: grid; justify-items: start; gap: 4px; }
+.reset-credit__copy { min-width: 0; display: grid; gap: 3px; }
 .reset-credit__copy strong { color: var(--ink-soft); font-size: 12px; font-weight: 650; white-space: nowrap; }
 .reset-credit__copy small { margin: 0; color: var(--ink-muted); font-size: 11px; line-height: 1.4; }
 .reset-credit__button,
-.reset-credit--error button { min-height: 32px; padding: 0; border: 0; border-bottom: 1px solid currentColor; border-radius: 0; color: var(--ink-soft); background: transparent; font-size: 12px; font-weight: 650; white-space: nowrap; }
+.reset-credit--error button { min-height: 32px; padding: 0 12px; border: 1px solid var(--line-strong); border-radius: var(--radius-control); color: var(--ink-soft); background: var(--paper-deep); font-size: 12px; font-weight: 650; white-space: nowrap; transition: color 140ms ease, border-color 140ms ease, background-color 140ms ease, transform 140ms ease; }
 .reset-credit__button:hover:not(:disabled),
-.reset-credit--error button:hover:not(:disabled) { color: white; }
+.reset-credit--error button:hover:not(:disabled) { color: white; border-color: var(--ink-muted); background: var(--panel); transform: translateY(-1px); }
+.reset-credit__button:active:not(:disabled),
+.reset-credit--error button:active:not(:disabled) { transform: translateY(0); }
+.reset-credit__button { grid-column: 2; grid-row: 1; }
 .reset-credit__state { min-height: 32px; display: flex; align-items: center; gap: 8px; color: var(--ink-muted); font-size: 12px; }
-.reset-credit__notice { margin: 0; font-size: 11px; line-height: 1.4; }
-.reset-credit--error .reset-credit__action > div,
-.reset-credit--empty .reset-credit__action > div { display: grid; justify-items: start; gap: 4px; }
+.reset-credit__notice { grid-column: 1 / -1; grid-row: 2; margin: 0; font-size: 11px; line-height: 1.4; }
+.reset-credit--error .reset-credit__action > div:not(.reset-credit__summary),
+.reset-credit--empty .reset-credit__action > div:not(.reset-credit__summary) { display: grid; justify-items: start; gap: 4px; }
 .reset-credit--error strong,
 .reset-credit--empty strong { color: var(--ink-soft); font-size: 12px; font-weight: 650; }
 .reset-credit--error small,
