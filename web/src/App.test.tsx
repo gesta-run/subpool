@@ -460,7 +460,7 @@ describe('Subpool console', () => {
     })
 
     render(<AccountsPage />)
-    await screen.findByText(/Expires/)
+    await screen.findByText(/Next reset expires/i)
     const user = userEvent.setup()
     await user.click(await screen.findByRole('button', { name: 'Reset credits' }))
     await user.click((await screen.findAllByRole('button', { name: 'Use full reset' })).at(-1)!)

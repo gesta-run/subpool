@@ -87,7 +87,7 @@ describe('AccountTable health states', () => {
   })
 
   it('shows Codex AI credits alongside subscription capacity', () => {
-    renderTable({
+    const { container } = renderTable({
       ...baseAccount,
       quota_snapshot: {
         ...baseAccount.quota_snapshot,
@@ -101,11 +101,28 @@ describe('AccountTable health states', () => {
 
     expect(screen.getByText('weekly capacity')).toBeInTheDocument()
     expect(screen.getByText('499')).toBeInTheDocument()
-    expect(screen.getByText('AI credits')).toBeInTheDocument()
-    expect(screen.getByText('Available credit balance')).toBeInTheDocument()
+    expect(container.querySelector('.capacity__heading')).toHaveTextContent('weekly capacity with 499 AI credits')
+    expect(screen.queryByText('Available credit balance')).not.toBeInTheDocument()
   })
 
-  it('stacks credit and reset details in two left-aligned groups', () => {
+  it('preserves a reported zero Codex AI credit balance', () => {
+    const { container } = renderTable({
+      ...baseAccount,
+      quota_snapshot: {
+        ...baseAccount.quota_snapshot,
+        credits: {
+          has_credits: true,
+          unlimited: false,
+          balance: '0',
+        },
+      },
+    })
+
+    expect(container.querySelector('.capacity__heading')).toHaveTextContent('weekly capacity with 0 AI credits')
+    expect(container.querySelector('.capacity__heading')).not.toHaveTextContent('Available AI credits')
+  })
+
+  it('keeps AI credits with capacity and expiry with reset credits', () => {
     const { container } = renderTable({
       ...baseAccount,
       last_quota_error_code: 'quota_probe_rate_limited',
@@ -120,6 +137,7 @@ describe('AccountTable health states', () => {
     }, {
       'account-1': {
         loading: false,
+        notice: 'Full reset applied. Quota has been refreshed.',
         data: {
           available_count: 3,
           credits: [{
@@ -133,12 +151,14 @@ describe('AccountTable health states', () => {
       },
     })
 
-    const details = container.querySelector('.reset-credit--with-balance')
-    expect(details?.children[0]).toHaveClass('capacity')
-    expect(details?.children[1]).toHaveClass('reset-credit__action')
+    const heading = container.querySelector('.capacity__heading')
+    const reset = container.querySelector('.reset-credit')
+    expect(heading).toHaveTextContent('weekly capacity with 48,200 AI credits')
+    expect(reset).not.toHaveTextContent('AI credits')
     expect(screen.getByText('3 resets available')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Reset credits' })).toBeInTheDocument()
-    expect(screen.getByText(/^Last known · Expires /)).toBeInTheDocument()
+    expect(screen.getByText(/^Next reset expires /)).toBeInTheDocument()
+    expect(screen.getByRole('status')).toHaveTextContent('Full reset applied')
   })
 
   it('shows remaining GitHub Copilot subscription capacity in AI credits', () => {
