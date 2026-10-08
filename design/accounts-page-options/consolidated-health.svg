@@ -1,0 +1,113 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1000" viewBox="0 0 1600 1000" role="img" aria-labelledby="title desc">
+  <title id="title">Provider accounts — consolidated health concept</title>
+  <desc id="desc">A recommended four-column Subpool accounts table that groups availability and last checked information.</desc>
+  <defs>
+    <style>
+      .ui { font-family:"Geist","Inter",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+      .title { fill:#F5F7F9; font-size:34px; font-weight:650; letter-spacing:-1px; }
+      .subtitle { fill:#969DA6; font-size:14px; }
+      .nav { fill:#A5ABB4; font-size:14px; font-weight:560; }
+      .navOn { fill:#F7F8FA; font-size:14px; font-weight:650; }
+      .label { fill:#888F99; font-size:12px; font-weight:680; letter-spacing:.35px; }
+      .primary { fill:#F1F3F6; font-size:15px; font-weight:650; }
+      .body { fill:#C2C7CE; font-size:13px; }
+      .meta { fill:#939AA4; font-size:12px; }
+      .number { fill:#F7F8FA; font-size:17px; font-weight:700; letter-spacing:-.3px; }
+      .status { fill:#B8EBD4; font-size:12px; font-weight:700; letter-spacing:.5px; }
+      .icon { fill:none; stroke:#A2A9B2; stroke-width:1.7; stroke-linecap:round; stroke-linejoin:round; }
+      .action { fill:#DFE4EA; font-size:12px; font-weight:650; }
+    </style>
+    <clipPath id="tableClip"><rect x="260" y="212" width="1300" height="690" rx="14"/></clipPath>
+  </defs>
+  <rect width="1600" height="1000" fill="#090A0B"/>
+  <rect width="220" height="1000" fill="#0C0D0F"/>
+  <path d="M220 0V1000" stroke="#23262B"/>
+
+  <g class="ui">
+    <g transform="translate(24 34)">
+      <rect width="28" height="28" rx="8" fill="#F4F6F8"/><path d="M8 18V10h4.5c4 0 6.5 1.3 6.5 4s-2.5 4-6.5 4H8Z" fill="#0A0B0C"/>
+      <text x="40" y="20" fill="#F4F6F8" font-size="16" font-weight="700">Subpool</text>
+    </g>
+    <g transform="translate(12 92)">
+      <g><path class="icon" d="M14 19V12m5 7V8m5 11v-4"/><text class="nav" x="42" y="18">Overview</text></g>
+      <g transform="translate(0 54)"><rect width="196" height="44" rx="9" fill="#22252A"/><path class="icon" d="M14 18a5 5 0 0 1 10 0m-5-8a3 3 0 1 0 0-6 3 3 0 0 0 0 6"/><text class="navOn" x="42" y="27">Accounts</text></g>
+      <g transform="translate(0 118)"><circle class="icon" cx="14" cy="12" r="2"/><circle class="icon" cx="24" cy="8" r="2"/><circle class="icon" cx="20" cy="20" r="2"/><path class="icon" d="m16 11 6-2m-7 5 4 4"/><text class="nav" x="42" y="17">Pools</text></g>
+      <g transform="translate(0 172)"><circle class="icon" cx="17" cy="13" r="4"/><path class="icon" d="m20 10 6-6m-3 3 3 3"/><text class="nav" x="42" y="18">API Keys</text></g>
+      <g transform="translate(0 226)"><path class="icon" d="M14 20V10m5 10V5m5 15v-7"/><text class="nav" x="42" y="18">Usage</text></g>
+      <g transform="translate(0 280)"><circle class="icon" cx="19" cy="13" r="7"/><circle class="icon" cx="19" cy="13" r="2.5"/><text class="nav" x="42" y="18">Settings</text></g>
+    </g>
+
+    <g transform="translate(260 48)">
+      <text class="title" y="30">Provider accounts</text>
+      <text class="subtitle" y="60">Connect and manage subscription or API endpoint accounts.</text>
+      <g transform="translate(1126 -4)"><rect width="174" height="44" rx="10" fill="#F3F5F7"/><path d="M20 22h12m-6-6v12" stroke="#15171A" stroke-width="1.8" stroke-linecap="round"/><text x="44" y="27" fill="#141619" font-size="13" font-weight="700">Connect account</text></g>
+      <g transform="translate(0 102)">
+        <text class="number" x="0" y="18">4</text><text class="meta" x="18" y="18">/ 4</text><circle cx="53" cy="13" r="4" fill="#3BD49A"/><text class="body" x="64" y="18" font-weight="650">Healthy</text>
+        <path d="M140 0v28" stroke="#262A30"/><text class="number" x="164" y="18">7</text><text class="body" x="183" y="18">Bound keys</text>
+        <path d="M282 0v28" stroke="#262A30"/><text class="number" x="306" y="18">3</text><text class="body" x="325" y="18">Providers</text>
+        <g transform="translate(1138 -2)"><rect width="162" height="30" rx="15" fill="#14171B" stroke="#2B3037"/><circle cx="16" cy="15" r="3" fill="#6CA8FF"/><text class="meta" x="27" y="19">Illustrative data</text></g>
+      </g>
+    </g>
+
+    <g clip-path="url(#tableClip)">
+      <rect x="260" y="212" width="1300" height="690" fill="#121416"/>
+      <rect x="260" y="212" width="1300" height="54" fill="#191C1F"/>
+      <text class="label" x="284" y="245">ACCOUNT</text>
+      <text class="label" x="570" y="245">HEALTH</text>
+      <text class="label" x="814" y="245">SUBSCRIPTION &amp; CREDITS</text>
+      <text class="label" x="1422" y="245">ACTIONS</text>
+      <path d="M260 266H1560M260 423H1560M260 580H1560M260 737H1560" stroke="#292D32"/>
+
+      <!-- Codex subscription -->
+      <g transform="translate(0 266)">
+        <circle cx="290" cy="59" r="18" fill="#20242A"/><text x="290" y="65" text-anchor="middle" fill="#D9E8FF" font-size="14" font-weight="700">N</text>
+        <text class="primary" x="320" y="52">Northstar Codex</text><text class="body" x="320" y="77">demo@sample.invalid</text><text class="meta" x="320" y="99">Codex subscription</text>
+        <circle cx="574" cy="45" r="4" fill="#3BD49A"/><text class="status" x="587" y="49">HEALTHY</text>
+        <text class="body" x="570" y="75">Routing enabled</text><path class="icon" d="M570 98h12m-6-6v12"/><text class="meta" x="591" y="102">Checked today at 7:20 PM</text>
+        <text class="number" x="814" y="38">68%</text><text class="body" x="852" y="38">weekly capacity</text>
+        <rect x="814" y="51" width="430" height="7" rx="3.5" fill="#24282D"/><rect x="814" y="51" width="292" height="7" rx="3.5" fill="#5A9EFF"/>
+        <text class="meta" x="814" y="81">Weekly reset · Oct 14 at 11:30 AM</text>
+        <text class="primary" x="814" y="111">48,200 AI credits</text><circle cx="995" cy="106" r="3.5" fill="#5A9EFF"/><text class="meta" x="1007" y="111">3 resets available</text>
+        <text class="meta" x="814" y="135">Credits expire Oct 23 at 4:30 AM</text><text class="action" x="1007" y="135">Reset credits</text><path d="M1007 140h73" stroke="#77808B"/>
+        <g transform="translate(1422 51)"><rect width="40" height="40" rx="9" fill="#1A1D21" stroke="#30353C"/><path class="icon" d="m13 25 14-14m-10 0h10v10"/><rect x="48" width="40" height="40" rx="9" fill="#1A1D21" stroke="#30353C"/><path class="icon" d="M60 20a8 8 0 1 0 2-5m-2-4v5h5"/><rect x="96" width="40" height="40" rx="9" fill="#1A1D21" stroke="#30353C"/><path class="icon" d="M116 13v7m-5-4a7 7 0 1 0 10 0"/></g>
+      </g>
+
+      <g transform="translate(0 423)">
+        <circle cx="290" cy="59" r="18" fill="#20242A"/><text x="290" y="65" text-anchor="middle" fill="#E6DDFF" font-size="14" font-weight="700">A</text>
+        <text class="primary" x="320" y="52">Atlas Studio</text><text class="body" x="320" y="77">team@sample.invalid</text><text class="meta" x="320" y="99">Codex subscription</text>
+        <circle cx="574" cy="45" r="4" fill="#3BD49A"/><text class="status" x="587" y="49">HEALTHY</text><text class="body" x="570" y="75">Routing enabled</text><path class="icon" d="M570 98h12m-6-6v12"/><text class="meta" x="591" y="102">Checked today at 7:18 PM</text>
+        <text class="number" x="814" y="38">92%</text><text class="body" x="852" y="38">weekly capacity</text>
+        <rect x="814" y="51" width="430" height="7" rx="3.5" fill="#24282D"/><rect x="814" y="51" width="396" height="7" rx="3.5" fill="#5A9EFF"/>
+        <text class="meta" x="814" y="81">Weekly reset · Oct 14 at 11:28 AM</text>
+        <text class="primary" x="814" y="111">51,000 AI credits</text><circle cx="995" cy="106" r="3.5" fill="#5A9EFF"/><text class="meta" x="1007" y="111">2 resets available</text>
+        <text class="meta" x="814" y="135">Credits expire Oct 22 at 9:00 AM</text><text class="action" x="1007" y="135">Reset credits</text><path d="M1007 140h73" stroke="#77808B"/>
+        <g transform="translate(1422 51)"><rect width="40" height="40" rx="9" fill="#1A1D21" stroke="#30353C"/><path class="icon" d="m13 25 14-14m-10 0h10v10"/><rect x="48" width="40" height="40" rx="9" fill="#1A1D21" stroke="#30353C"/><path class="icon" d="M60 20a8 8 0 1 0 2-5m-2-4v5h5"/><rect x="96" width="40" height="40" rx="9" fill="#1A1D21" stroke="#30353C"/><path class="icon" d="M116 13v7m-5-4a7 7 0 1 0 10 0"/></g>
+      </g>
+
+      <g transform="translate(0 580)">
+        <circle cx="290" cy="59" r="18" fill="#20242A"/><text x="290" y="65" text-anchor="middle" fill="#C8F4E2" font-size="14" font-weight="700">B</text>
+        <text class="primary" x="320" y="52">Beacon API</text><text class="body" x="320" y="77">OpenAI-compatible</text><text class="meta" x="320" y="99">API key</text>
+        <circle cx="574" cy="45" r="4" fill="#3BD49A"/><text class="status" x="587" y="49">HEALTHY</text><text class="body" x="570" y="75">Routing enabled</text><path class="icon" d="M570 98h12m-6-6v12"/><text class="meta" x="591" y="102">Checked today at 7:18 PM</text>
+        <text class="primary" x="814" y="58">External API</text><text class="body" x="814" y="83">Quota is managed upstream</text><text class="meta" x="814" y="108">No local credit balance is available.</text>
+        <g transform="translate(1470 51)"><rect width="40" height="40" rx="9" fill="#1A1D21" stroke="#30353C"/><path class="icon" d="M12 20a8 8 0 1 0 2-5m-2-4v5h5"/><rect x="48" width="40" height="40" rx="9" fill="#1A1D21" stroke="#30353C"/><path class="icon" d="M68 13v7m-5-4a7 7 0 1 0 10 0"/></g>
+      </g>
+
+      <g transform="translate(0 737)">
+        <circle cx="290" cy="59" r="18" fill="#20242A"/><text x="290" y="65" text-anchor="middle" fill="#FFE0B6" font-size="14" font-weight="700">L</text>
+        <text class="primary" x="320" y="52">Lumen Copilot</text><text class="body" x="320" y="77">GitHub identity connected</text><text class="meta" x="320" y="99">Copilot subscription</text>
+        <circle cx="574" cy="45" r="4" fill="#3BD49A"/><text class="status" x="587" y="49">HEALTHY</text><text class="body" x="570" y="75">Routing enabled</text><path class="icon" d="M570 98h12m-6-6v12"/><text class="meta" x="591" y="102">Checked today at 7:20 PM</text>
+        <text class="number" x="814" y="42">1,180 / 1,500</text><text class="body" x="932" y="42">AI credits</text>
+        <rect x="814" y="55" width="430" height="7" rx="3.5" fill="#24282D"/><rect x="814" y="55" width="338" height="7" rx="3.5" fill="#5A9EFF"/>
+        <text class="meta" x="814" y="86">Monthly reset · Nov 1 at 8:00 AM</text><text class="meta" x="814" y="112">Additional usage is disabled</text>
+        <g transform="translate(1470 51)"><rect width="40" height="40" rx="9" fill="#1A1D21" stroke="#30353C"/><path class="icon" d="M12 20a8 8 0 1 0 2-5m-2-4v5h5"/><rect x="48" width="40" height="40" rx="9" fill="#1A1D21" stroke="#30353C"/><path class="icon" d="M68 13v7m-5-4a7 7 0 1 0 10 0"/></g>
+      </g>
+    </g>
+    <rect x="260.5" y="212.5" width="1299" height="689" rx="13.5" fill="none" stroke="#2B2F34"/>
+
+    <g transform="translate(260 930)">
+      <circle cx="5" cy="5" r="5" fill="#3BD49A"/>
+      <text class="label" x="18" y="9" fill="#B8EBD4">CONCEPT B · CONSOLIDATED HEALTH — RECOMMENDED</text>
+      <text class="meta" x="404" y="9">Four columns reduce horizontal scanning and give quota details room to breathe.</text>
+    </g>
+  </g>
+</svg>

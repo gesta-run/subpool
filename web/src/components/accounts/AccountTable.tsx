@@ -12,17 +12,30 @@ function resetCreditExpiryLabel(credits: CodexResetCredits) {
   return expirations.length === 0 ? 'Expiry not reported' : `Expires ${compactDate(new Date(Math.min(...expirations) * 1000))}`
 }
 
-function ResetCreditControl({ state, busy, onRetry, onReset }: { state?: ResetCreditState; busy: boolean; onRetry: () => void; onReset: (creditID?: string) => void }) {
-  if (!state) return <div className="reset-credit reset-credit--inline reset-credit--loading" role="status"><Spinner /><span>Loading reset credits</span></div>
-  if (state.loading) return <div className="reset-credit reset-credit--inline reset-credit--loading" role="status"><Spinner /><span>Loading reset credits</span></div>
-  if (state.error) return <div className="reset-credit reset-credit--inline reset-credit--error"><div><strong>Reset status unavailable</strong><small>Try the account again.</small></div><button className="reset-credit__button" type="button" onClick={onRetry}>Retry</button></div>
-  if (!state.data) return <div className="reset-credit reset-credit--inline reset-credit--empty"><div><strong>Resets unavailable</strong><small>This plan did not report reset credits.</small></div></div>
+function ResetCreditControl({ state, busy, credits, quotaIsLastKnown, onRetry, onReset }: { state?: ResetCreditState; busy: boolean; credits?: CodexCreditsQuota; quotaIsLastKnown: boolean; onRetry: () => void; onReset: (creditID?: string) => void }) {
+  const layoutClass = credits ? ' reset-credit--with-balance' : ''
+  const balance = (detail?: string) => credits ? <CodexCreditsBalance credits={credits} quotaIsLastKnown={quotaIsLastKnown} detail={detail} /> : null
+  if (!state || state.loading) return <div className={`reset-credit reset-credit--inline reset-credit--loading${layoutClass}`}>
+    {balance()}
+    <div className="reset-credit__action"><div className="reset-credit__state" role="status"><Spinner /><span>Loading reset credits</span></div></div>
+  </div>
+  if (state.error) return <div className={`reset-credit reset-credit--inline reset-credit--error${layoutClass}`}>
+    {balance()}
+    <div className="reset-credit__action"><div><strong>Reset status unavailable</strong><small>Try the account again.</small></div><button className="reset-credit__button" type="button" onClick={onRetry}>Retry</button></div>
+  </div>
+  if (!state.data) return <div className={`reset-credit reset-credit--inline reset-credit--empty${layoutClass}`}>
+    {balance()}
+    <div className="reset-credit__action"><div><strong>Resets unavailable</strong><small>This plan did not report reset credits.</small></div></div>
+  </div>
   const credit = state.data.credits?.find((item) => item.status === 'available')
   const count = state.data.available_count
-  return <div className={`reset-credit reset-credit--inline ${count > 0 ? 'reset-credit--available' : 'reset-credit--empty'}`}>
-    <div className="reset-credit__summary"><i aria-hidden="true" /><span className="reset-credit__copy"><strong>{count} {count === 1 ? 'reset' : 'resets'} available</strong><small>{count > 0 ? resetCreditExpiryLabel(state.data) : 'No earned resets available'}</small></span></div>
-    {state.notice ? <small className="reset-credit__notice" role="status">{state.notice}</small> : null}
-    {count > 0 ? <button className="reset-credit__button" type="button" onClick={() => onReset(credit?.id)} disabled={busy}>Reset quota</button> : null}
+  return <div className={`reset-credit reset-credit--inline ${count > 0 ? 'reset-credit--available' : 'reset-credit--empty'}${layoutClass}`}>
+    {balance(count > 0 ? resetCreditExpiryLabel(state.data) : undefined)}
+    <div className="reset-credit__action">
+      <div className="reset-credit__summary"><i aria-hidden="true" /><span className="reset-credit__copy"><strong>{count} {count === 1 ? 'reset' : 'resets'} available</strong>{count === 0 ? <small>No earned resets available</small> : !credits ? <small>{resetCreditExpiryLabel(state.data)}</small> : null}</span></div>
+      {state.notice ? <small className="reset-credit__notice" role="status">{state.notice}</small> : null}
+      {count > 0 ? <button className="reset-credit__button" type="button" onClick={() => onReset(credit?.id)} disabled={busy}>Reset credits</button> : null}
+    </div>
   </div>
 }
 
@@ -80,13 +93,13 @@ function CopilotCreditsMeter({ accountName, credits, quotaIsLastKnown }: { accou
   </div>
 }
 
-function CodexCreditsBalance({ credits, quotaIsLastKnown }: { credits: CodexCreditsQuota; quotaIsLastKnown: boolean }) {
+function CodexCreditsBalance({ credits, quotaIsLastKnown, detail }: { credits: CodexCreditsQuota; quotaIsLastKnown: boolean; detail?: string }) {
   const prefix = quotaIsLastKnown ? 'Last known · ' : ''
-  if (credits.unlimited) return <div className="capacity"><span><strong>Unlimited</strong> AI credits</span><small>{prefix}No credit limit reported</small></div>
+  if (credits.unlimited) return <div className="capacity"><span><strong>Unlimited</strong> AI credits</span><small>{prefix}{detail ?? 'No credit limit reported'}</small></div>
   const balance = codexCreditBalance(credits.balance)
   return <div className="capacity">
     <span><strong>{balance ?? 'Available'}</strong> AI credits</span>
-    <small>{prefix}{balance ? 'Available credit balance' : 'Credit balance not reported'}</small>
+    <small>{prefix}{detail ?? (balance ? 'Available credit balance' : 'Credit balance not reported')}</small>
   </div>
 }
 
@@ -100,9 +113,9 @@ function isCodexCredits(credits: CreditsQuota | CodexCreditsQuota | undefined): 
 
 export function AccountTable({ accounts, busyID, resetBusyID, resetStates, onModels, onRefresh, onResetLoad, onReset, onFastMode, onToggle, onRemove }: { accounts: ProviderAccount[]; busyID: string; resetBusyID: string; resetStates: Record<string, ResetCreditState>; onModels: (account: ProviderAccount) => void; onRefresh: (account: ProviderAccount) => void; onResetLoad: (account: ProviderAccount) => void; onReset: (account: ProviderAccount, creditID?: string) => void; onFastMode: (account: ProviderAccount) => void; onToggle: (account: ProviderAccount) => void; onRemove: (account: ProviderAccount) => void }) {
   return <div className="table-frame account-table-frame"><table className="account-table">
-    <caption className="sr-only">Connected provider accounts, routing availability, subscription capacity, and actions</caption>
-    <colgroup><col className="account-table__account" /><col className="account-table__availability" /><col className="account-table__subscription" /><col className="account-table__checked" /><col className="account-table__actions" /></colgroup>
-    <thead><tr><th>Account</th><th>Availability</th><th>Subscription</th><th>Last checked</th><th><span className="sr-only">Actions</span></th></tr></thead>
+    <caption className="sr-only">Connected provider accounts, health, subscription capacity, credits, and actions</caption>
+    <colgroup><col className="account-table__account" /><col className="account-table__health" /><col className="account-table__subscription" /><col className="account-table__actions" /></colgroup>
+    <thead><tr><th>Account</th><th>Health</th><th>Subscription &amp; credits</th><th>Actions</th></tr></thead>
     <tbody>{accounts.map((account) => {
       const fiveHour = account.quota_snapshot?.five_hour
       const weekly = account.quota_snapshot?.weekly
@@ -119,11 +132,12 @@ export function AccountTable({ accounts, busyID, resetBusyID, resetStates, onMod
       const quotaIsLastKnown = !account.quota_checked_at || Boolean(account.last_quota_error_code)
       const availabilityLabel = unavailable ? statusLabel(effectiveStatus) : degraded ? 'degraded' : healthLabel(health)
       const routingLabel = usageBlocked ? 'Routing suspended' : unavailable ? `${healthLabel(health)} health` : health === 'unhealthy' ? 'Routing suspended' : degraded ? 'Routing enabled while retrying' : 'Routing enabled'
+      const isCodexSubscription = account.provider === 'codex' && account.credential_type !== 'api_key'
+      const hasLimitWindow = Boolean(fiveHour || weekly)
       return <tr key={account.id}>
-        <td data-label="Account"><button className="account-detail-button" type="button" aria-label={`View supported models for ${account.display_name}`} onClick={() => onModels(account)}><span className="account-detail-button__title"><strong>{account.display_name}</strong><ChevronIcon /></span><small>{accountProviderLabel(account)}</small></button></td>
-        <td data-label="Availability"><div className="account-availability"><span className={`status ${unavailable ? `status--${effectiveStatus}` : `status--health-${healthStatus}`}`}><i />{availabilityLabel}</span><small>{routingLabel}</small>{account.last_health_error_code ? <small className="health-error">{account.last_health_error_code.replaceAll('_', ' ')}</small> : null}</div></td>
-        <td data-label="Subscription"><div className="subscription-summary">{copilotCredits ? <CopilotCreditsMeter accountName={account.display_name} credits={copilotCredits} quotaIsLastKnown={quotaIsLastKnown} /> : fiveHour || weekly || codexCredits ? <div className="subscription-capacities">{fiveHour ? <CapacityMeter accountName={account.display_name} label="5-hour" window={fiveHour} usageBlocked={usageBlocked} quotaIsLastKnown={quotaIsLastKnown} /> : null}{weekly ? <CapacityMeter accountName={account.display_name} label="weekly" window={weekly} usageBlocked={usageBlocked} quotaIsLastKnown={quotaIsLastKnown} /> : null}{codexCredits ? <CodexCreditsBalance credits={codexCredits} quotaIsLastKnown={quotaIsLastKnown} /> : null}</div> : <div className="subscription-summary__empty"><strong>{account.credential_type === 'api_key' ? 'External API' : account.provider === 'copilot' ? 'Credits unavailable' : 'Usage unavailable'}</strong><small>{account.credential_type === 'api_key' ? 'Quota is managed upstream' : account.provider === 'copilot' ? 'No AI credit quota reported' : 'No subscription quota reported'}</small></div>}{account.provider === 'codex' && account.credential_type !== 'api_key' ? <ResetCreditControl state={resetStates[account.id]} busy={busy} onRetry={() => onResetLoad(account)} onReset={(creditID) => onReset(account, creditID)} /> : null}</div></td>
-        <td data-label="Last checked"><div className="last-checked" title={account.last_checked_at ? new Date(account.last_checked_at).toLocaleString() : undefined}><strong>{account.last_checked_at ? lastCheckedLabel(account.last_checked_at) : 'Never'}</strong><small>Health probe</small></div></td>
+        <td data-label="Account"><button className="account-detail-button" type="button" aria-label={`View supported models for ${account.display_name}`} onClick={() => onModels(account)}><span className="account-detail-button__avatar" aria-hidden="true">{account.display_name.trim().charAt(0).toUpperCase() || '?'}</span><span className="account-detail-button__copy"><span className="account-detail-button__title"><strong>{account.display_name}</strong><ChevronIcon /></span><small>{accountProviderLabel(account)}</small></span></button></td>
+        <td data-label="Health"><div className="account-health"><span className={`status ${unavailable ? `status--${effectiveStatus}` : `status--health-${healthStatus}`}`}><i />{availabilityLabel}</span><small>{routingLabel}</small><small className="account-health__checked" title={account.last_checked_at ? new Date(account.last_checked_at).toLocaleString() : undefined}>{account.last_checked_at ? `Checked ${lastCheckedLabel(account.last_checked_at)}` : 'Not checked yet'}</small>{account.last_health_error_code ? <small className="health-error">{account.last_health_error_code.replaceAll('_', ' ')}</small> : null}</div></td>
+        <td data-label="Subscription and credits"><div className="subscription-summary">{copilotCredits ? <CopilotCreditsMeter accountName={account.display_name} credits={copilotCredits} quotaIsLastKnown={quotaIsLastKnown} /> : <>{hasLimitWindow ? <div className="subscription-capacities">{fiveHour ? <CapacityMeter accountName={account.display_name} label="5-hour" window={fiveHour} usageBlocked={usageBlocked} quotaIsLastKnown={quotaIsLastKnown} /> : null}{weekly ? <CapacityMeter accountName={account.display_name} label="weekly" window={weekly} usageBlocked={usageBlocked} quotaIsLastKnown={quotaIsLastKnown} /> : null}</div> : null}{codexCredits || isCodexSubscription ? <ResetCreditControl state={resetStates[account.id]} busy={busy} credits={codexCredits} quotaIsLastKnown={quotaIsLastKnown} onRetry={() => onResetLoad(account)} onReset={(creditID) => onReset(account, creditID)} /> : null}{!hasLimitWindow && !codexCredits ? <div className="subscription-summary__empty"><strong>{account.credential_type === 'api_key' ? 'External API' : account.provider === 'copilot' ? 'Credits unavailable' : 'Usage unavailable'}</strong><small>{account.credential_type === 'api_key' ? 'Quota is managed upstream' : account.provider === 'copilot' ? 'No AI credit quota reported' : 'No subscription quota reported'}</small></div> : null}</>}</div></td>
         <td><div className="row-actions">{account.provider === 'codex' && account.credential_type !== 'api_key' ? <button className={`row-action-button ${account.fast_mode_enabled ? 'row-action-button--active' : ''}`} type="button" aria-label={`${account.fast_mode_enabled ? 'Disable' : 'Enable'} Fast mode for ${account.display_name}`} aria-pressed={Boolean(account.fast_mode_enabled)} title={account.fast_mode_enabled ? 'Disable Fast mode' : 'Enable Fast mode'} onClick={() => onFastMode(account)} disabled={busy}><FastIcon /></button> : null}<button className="row-action-button" type="button" aria-label={`${account.provider === 'codex' && account.credential_type !== 'api_key' ? 'Refresh credentials and quota' : account.provider === 'copilot' ? 'Refresh AI credits' : 'Check health'} for ${account.display_name}`} title={account.provider === 'codex' && account.credential_type !== 'api_key' ? 'Refresh credentials and quota' : account.provider === 'copilot' ? 'Refresh AI credits' : 'Check health'} onClick={() => onRefresh(account)} disabled={busy}>{busyID === account.id ? <Spinner /> : <RefreshIcon />}</button><button className="row-action-button" type="button" aria-label={`${account.status === 'disabled' ? 'Enable' : 'Disable'} ${account.display_name}`} title={account.status === 'disabled' ? 'Enable account' : 'Disable account'} onClick={() => onToggle(account)} disabled={busy}><PowerIcon /></button><button className="row-action-button row-action-button--danger" type="button" aria-label={`Remove ${account.display_name}`} title="Remove account" onClick={() => onRemove(account)} disabled={busy}><TrashIcon /></button></div></td>
       </tr>
     })}</tbody>

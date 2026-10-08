@@ -120,7 +120,7 @@ describe('Subpool console', () => {
 
     render(<AccountsPage />)
     const user = userEvent.setup()
-    expect(await screen.findByRole('columnheader', { name: 'Availability' })).toBeInTheDocument()
+    expect(await screen.findByRole('columnheader', { name: 'Health' })).toBeInTheDocument()
     expect(screen.queryByRole('columnheader', { name: 'Assigned API keys' })).not.toBeInTheDocument()
     expect(screen.getByText('Bound keys')).toBeInTheDocument()
     expect(screen.queryByText(/of 3 keys/i)).not.toBeInTheDocument()
@@ -462,7 +462,7 @@ describe('Subpool console', () => {
     render(<AccountsPage />)
     await screen.findByText(/Expires/)
     const user = userEvent.setup()
-    await user.click(await screen.findByRole('button', { name: 'Reset quota' }))
+    await user.click(await screen.findByRole('button', { name: 'Reset credits' }))
     await user.click((await screen.findAllByRole('button', { name: 'Use full reset' })).at(-1)!)
 
     expect(await screen.findByText(/Full reset applied/)).toBeInTheDocument()
