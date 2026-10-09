@@ -63,13 +63,7 @@ Replace every `replace-with-*` value. Docker Compose pulls the latest published 
 2. Create a pool and add the account.
 3. Create an employee API key for the pool.
 
-Codex subscriptions use [device-code authorization](https://developers.openai.com/codex/auth/). Copy the one-time code from Subpool, continue to OpenAI, and confirm it there. This works on remote and headless deployments without a localhost callback or an extra exposed port. Device-code login must be enabled in ChatGPT security or workspace settings.
-
-GitHub Copilot subscriptions use GitHub Device OAuth. Select **GitHub Copilot subscription**, generate a one-time code, open the displayed GitHub verification URL, and approve the device. Subpool verifies that the GitHub account has Copilot access before saving its encrypted credential. Copilot accounts serve `POST /v1/chat/completions`, `POST /v1/responses`, Responses WebSocket requests, and `GET /v1/models`. Subpool reads each model's `supported_endpoints` metadata and forwards Responses requests to Copilot's native `/responses` endpoint when available. Models limited to `/chat/completions` use the compatibility translator for text and image messages, function and custom tools, structured output settings, streaming events, and protocol-level token usage. Subpool reads GitHub's AI credit entitlement separately for subscription capacity and routing; token telemetry is not presented as Copilot billing. On chat-only models, stateful `previous_response_id` continuation and provider-hosted tools such as web search remain unavailable; mixed pools can fail over those requests to another compatible provider.
-
-Fast mode is controlled per Codex subscription account from the **Accounts** page. Subpool enforces the selected mode, so employees do not need to configure Fast mode in Codex.
-
-Codex's built-in image tool can use the same Subpool API key and bound Codex subscription. Subpool forwards JSON requests for `POST /v1/images/generations` and `POST /v1/images/edits` to the Codex subscription endpoint; no separate OpenAI API key is required. Image endpoints use the existing `responses` API key scope.
+For authorization methods, supported endpoints, and provider-specific limitations, see [Provider accounts](docs/provider-accounts.md).
 
 After creating an employee API key, configure Codex on each user's machine to route requests through Subpool. Edit the user-level Codex configuration file:
 
