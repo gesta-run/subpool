@@ -113,3 +113,32 @@ func TestAcceptsGzipHonorsQuality(t *testing.T) {
 		}
 	}
 }
+
+func TestConsoleRouteBoundariesRejectAPIRoutes(t *testing.T) {
+	console := http.NewServeMux()
+	console.HandleFunc("GET /", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("console")) })
+	handler := consoleOnlyHandler(console)
+
+	for _, request := range []struct {
+		method string
+		path   string
+	}{
+		{method: http.MethodGet, path: "/v1/models"},
+		{method: http.MethodPost, path: "/v1/responses"},
+		{method: http.MethodGet, path: "/healthz"},
+		{method: http.MethodGet, path: "/readyz"},
+		{method: http.MethodGet, path: "/metrics"},
+	} {
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, httptest.NewRequest(request.method, request.path, nil))
+		if recorder.Code != http.StatusNotFound {
+			t.Errorf("%s %s: status=%d body=%q", request.method, request.path, recorder.Code, recorder.Body.String())
+		}
+	}
+
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/accounts", nil))
+	if recorder.Code != http.StatusOK || recorder.Body.String() != "console" {
+		t.Fatalf("console path: status=%d body=%q", recorder.Code, recorder.Body.String())
+	}
+}

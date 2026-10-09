@@ -29,5 +29,5 @@ WORKDIR /app
 COPY --from=go-builder /out/subpool /usr/local/bin/subpool
 COPY --from=web-builder /src/web/dist ./web/dist
 USER subpool
-EXPOSE 8080
+EXPOSE 8080 8081
 ENTRYPOINT ["/sbin/tini", "--", "/usr/local/bin/subpool"]

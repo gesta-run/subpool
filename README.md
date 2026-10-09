@@ -55,7 +55,7 @@ openssl rand -hex 32
 docker compose up -d
 ```
 
-Replace every `replace-with-*` value. Docker Compose pulls the latest published Subpool image from ECR Public; no local image build is required. Open [http://localhost:8080](http://localhost:8080) and sign in with the administrator credentials from `.env`.
+Replace every `replace-with-*` value. Docker Compose pulls the latest published Subpool image from ECR Public; no local image build is required. Open [http://localhost:8081](http://localhost:8081) and sign in with the administrator credentials from `.env`. The employee API remains on [http://localhost:8080](http://localhost:8080).
 
 ## Connect and use
 
@@ -98,11 +98,13 @@ responses_websockets_v2 = true
 
 Save the file, then restart Codex so the new provider and WebSocket settings are loaded. Codex subscription accounts use a dedicated upstream WebSocket, while OpenAI-compatible accounts use the existing HTTP/SSE bridge.
 
-Available endpoints include `GET/POST /v1/responses`, `POST /v1/chat/completions`, `POST /v1/images/generations`, `POST /v1/images/edits`, `GET /v1/models`, `GET /healthz`, `GET /readyz`, and `GET /metrics`.
+Available API endpoints include `GET/POST /v1/responses`, `POST /v1/chat/completions`, `POST /v1/images/generations`, `POST /v1/images/edits`, `GET /v1/models`, `GET /healthz`, `GET /readyz`, and `GET /metrics`.
+
+Subpool always serves two listeners. `SUBPOOL_API_LISTEN_ADDRESS` exposes the employee API and operational endpoints, while `SUBPOOL_CONSOLE_LISTEN_ADDRESS` exposes the console and its `/api/v1/*` control API. For Compose deployments, `SUBPOOL_PORT` and `SUBPOOL_CONSOLE_PORT` select their host ports. The pre deployment uses `SUBPOOL_HOST_PORT` (API, default `8082`) and `SUBPOOL_CONSOLE_HOST_PORT` (console, default `8083`).
 
 ## Deployment notes
 
-- Terminate TLS at a reverse proxy and set `SUBPOOL_PUBLIC_URL` to the public origin.
+- Terminate TLS at a reverse proxy and set `SUBPOOL_PUBLIC_URL` to the console's public origin.
 - Back up PostgreSQL together with `SUBPOOL_CREDENTIAL_KEY` and `SUBPOOL_API_KEY_HMAC_KEY`.
 - Use PostgreSQL for shared authentication, rate-limit, assignment, and health state across replicas.
 - HTTP and Responses WebSocket request bodies default to 256 MiB per request, a 1 GiB estimated buffer budget across the process, and a five-minute read timeout. Tune `SUBPOOL_MAX_REQUEST_BODY_BYTES`, `SUBPOOL_MAX_INFLIGHT_REQUEST_BODY_BYTES`, and `SUBPOOL_REQUEST_BODY_READ_TIMEOUT` together for the available memory and network.
