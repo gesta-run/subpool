@@ -20,7 +20,8 @@ env:
   AWS_REGION: ${{ vars.SUBPOOL_DEPLOY_AWS_REGION || 'us-east-2' }}
   GESTA_PRE_INSTANCE_ID: i-06dd31f05e6c295fd
   SUBPOOL_HOST_PORT: "8082"
-  SUBPOOL_PUBLIC_URL: http://3.21.189.90:8082
+  SUBPOOL_CONSOLE_HOST_PORT: "8083"
+  SUBPOOL_PUBLIC_URL: http://3.21.189.90:8083
   SUBPOOL_RESPONSES_WS_ENABLED: ${{ vars.SUBPOOL_RESPONSES_WS_ENABLED || 'true' }}
   SUBPOOL_RESPONSES_WS_FORCE_HTTP_BRIDGE: ${{ vars.SUBPOOL_RESPONSES_WS_FORCE_HTTP_BRIDGE || 'false' }}
   SUBPOOL_UPSTREAM_RESPONSE_HEADER_TIMEOUT: ${{ vars.SUBPOOL_UPSTREAM_RESPONSE_HEADER_TIMEOUT || '3m' }}
@@ -113,6 +114,7 @@ jobs:
           environment_b64="$(printf '%s\n' \
             "SUBPOOL_IMAGE=$SUBPOOL_IMAGE" \
             "SUBPOOL_HOST_PORT=$SUBPOOL_HOST_PORT" \
+            "SUBPOOL_CONSOLE_HOST_PORT=$SUBPOOL_CONSOLE_HOST_PORT" \
             "SUBPOOL_PUBLIC_URL=$SUBPOOL_PUBLIC_URL" \
             "SUBPOOL_ADMIN_USERNAME=$SUBPOOL_ADMIN_USERNAME" \
             "SUBPOOL_ADMIN_PASSWORD=$SUBPOOL_ADMIN_PASSWORD" \
@@ -133,7 +135,8 @@ jobs:
           docker compose --env-file .env pull
           docker compose --env-file .env up -d --remove-orphans
           for _ in \$(seq 1 30); do
-            if curl -fsS 'http://127.0.0.1:$SUBPOOL_HOST_PORT/healthz' >/dev/null; then
+            if curl -fsS 'http://127.0.0.1:$SUBPOOL_HOST_PORT/healthz' >/dev/null && \
+               curl -fsS 'http://127.0.0.1:$SUBPOOL_CONSOLE_HOST_PORT/' >/dev/null; then
               exit 0
             fi
             sleep 2

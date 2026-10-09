@@ -9,6 +9,8 @@ import (
 
 func setValidEnv(t *testing.T) {
 	t.Helper()
+	t.Setenv("SUBPOOL_API_LISTEN_ADDRESS", "")
+	t.Setenv("SUBPOOL_CONSOLE_LISTEN_ADDRESS", "")
 	t.Setenv("SUBPOOL_DATABASE_URL", "postgres://db/subpool")
 	t.Setenv("SUBPOOL_PUBLIC_URL", "https://subpool.example.com")
 	t.Setenv("SUBPOOL_ADMIN_USERNAME", "admin")
@@ -43,6 +45,31 @@ func TestLoad(t *testing.T) {
 	}
 	if cfg.RequestBodyReadTimeout != 5*time.Minute {
 		t.Fatalf("request body read timeout = %s", cfg.RequestBodyReadTimeout)
+	}
+	if cfg.APIListenAddress != ":8080" || cfg.ConsoleListenAddress != ":8081" {
+		t.Fatalf("listen addresses = %q/%q", cfg.APIListenAddress, cfg.ConsoleListenAddress)
+	}
+}
+
+func TestLoadSeparateConsoleListener(t *testing.T) {
+	setValidEnv(t)
+	t.Setenv("SUBPOOL_API_LISTEN_ADDRESS", "127.0.0.1:9080")
+	t.Setenv("SUBPOOL_CONSOLE_LISTEN_ADDRESS", "127.0.0.1:9081")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.APIListenAddress != "127.0.0.1:9080" || cfg.ConsoleListenAddress != "127.0.0.1:9081" {
+		t.Fatalf("listen addresses = %q/%q", cfg.APIListenAddress, cfg.ConsoleListenAddress)
+	}
+}
+
+func TestLoadRejectsDuplicateListenerAddress(t *testing.T) {
+	setValidEnv(t)
+	t.Setenv("SUBPOOL_API_LISTEN_ADDRESS", ":9080")
+	t.Setenv("SUBPOOL_CONSOLE_LISTEN_ADDRESS", ":9080")
+	if _, err := Load(); err == nil {
+		t.Fatal("duplicate listener addresses were accepted")
 	}
 }
 

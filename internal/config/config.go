@@ -13,7 +13,8 @@ import (
 )
 
 type Config struct {
-	ListenAddress                 string
+	APIListenAddress              string
+	ConsoleListenAddress          string
 	DatabaseURL                   string
 	PublicURL                     string
 	AdminUsername                 string
@@ -39,7 +40,8 @@ type Config struct {
 
 func Load() (Config, error) {
 	cfg := Config{
-		ListenAddress:                 envOr("SUBPOOL_LISTEN_ADDRESS", ":8080"),
+		APIListenAddress:              envOr("SUBPOOL_API_LISTEN_ADDRESS", ":8080"),
+		ConsoleListenAddress:          envOr("SUBPOOL_CONSOLE_LISTEN_ADDRESS", ":8081"),
 		DatabaseURL:                   strings.TrimSpace(os.Getenv("SUBPOOL_DATABASE_URL")),
 		PublicURL:                     strings.TrimRight(strings.TrimSpace(os.Getenv("SUBPOOL_PUBLIC_URL")), "/"),
 		AdminUsername:                 strings.TrimSpace(os.Getenv("SUBPOOL_ADMIN_USERNAME")),
@@ -102,6 +104,8 @@ func Load() (Config, error) {
 	switch {
 	case cfg.DatabaseURL == "":
 		return Config{}, errors.New("SUBPOOL_DATABASE_URL is required")
+	case cfg.ConsoleListenAddress == cfg.APIListenAddress:
+		return Config{}, errors.New("SUBPOOL_CONSOLE_LISTEN_ADDRESS must differ from SUBPOOL_API_LISTEN_ADDRESS")
 	case cfg.PublicURL == "":
 		return Config{}, errors.New("SUBPOOL_PUBLIC_URL is required")
 	case cfg.AdminUsername == "":

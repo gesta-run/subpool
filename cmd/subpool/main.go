@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"mime"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -72,24 +74,24 @@ func main() {
 		slog.Error("trusted proxy configuration failed", "error", err)
 		os.Exit(1)
 	}
-	mux := http.NewServeMux()
 	gatewayServer := gateway.New(database, keys, cipher, provider, refreshManager, compatibleProvider).
 		WithCopilot(copilotClient).
 		WithRequestBodyLimits(cfg.MaxRequestBodyBytes, cfg.MaxInflightRequestBodyBytes, cfg.RequestBodyReadTimeout).
 		WithModelProviders(resetCredits, compatibleProvider, copilotClient).
 		WithResponsesWebSocket(cfg.ResponsesWSEnabled, cfg.ResponsesWSForceHTTPBridge, cfg.CodexUpstreamURL)
-	control.New(database, sessions, keys, cipher, deviceAuth, refreshManager, sources, healthChecker).
+	controlServer := control.New(database, sessions, keys, cipher, deviceAuth, refreshManager, sources, healthChecker).
 		WithCopilotDeviceAuth(copilotDeviceAuth).
 		WithResetCredits(resetCredits).
 		WithModelProviders(resetCredits, compatibleProvider, copilotClient).
-		WithAccountRoutingChange(gatewayServer.CloseResponsesWebSocketsForAccount).
-		Register(mux)
-	gatewayServer.Register(mux)
-	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
+		WithAccountRoutingChange(gatewayServer.CloseResponsesWebSocketsForAccount)
+
+	apiMux := http.NewServeMux()
+	gatewayServer.Register(apiMux)
+	apiMux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"status":"ok"}`))
 	})
-	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, r *http.Request) {
+	apiMux.HandleFunc("GET /readyz", func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 		defer cancel()
 		if database.Ping(ctx) != nil {
@@ -99,28 +101,102 @@ func main() {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"status":"ready"}`))
 	})
-	mux.HandleFunc("GET /metrics", func(w http.ResponseWriter, _ *http.Request) {
+	apiMux.HandleFunc("GET /metrics", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4")
 		_, _ = w.Write([]byte("# HELP subpool_up Whether the service is running.\n# TYPE subpool_up gauge\nsubpool_up 1\n" + gatewayServer.ResponsesWebSocketMetrics()))
 	})
-	registerWeb(mux)
-	server := &http.Server{Addr: cfg.ListenAddress, Handler: securityHeaders(mux), ReadHeaderTimeout: 10 * time.Second, ReadTimeout: cfg.RequestBodyReadTimeout, IdleTimeout: 120 * time.Second, MaxHeaderBytes: 1 << 20}
+
+	consoleMux := http.NewServeMux()
+	controlServer.Register(consoleMux)
+	registerWeb(consoleMux)
+
+	bindings := []serverBinding{
+		{name: "API", server: newHTTPServer(cfg.APIListenAddress, apiMux, cfg.RequestBodyReadTimeout)},
+		{name: "console", server: newHTTPServer(cfg.ConsoleListenAddress, consoleOnlyHandler(consoleMux), cfg.RequestBodyReadTimeout)},
+	}
 	stopCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	go healthChecker.Run(stopCtx)
 	go database.RunMaintenance(stopCtx)
-	go func() {
-		<-stopCtx.Done()
-		gatewayServer.CloseResponsesWebSockets()
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		defer cancel()
-		_ = server.Shutdown(ctx)
-	}()
-	slog.Info("Subpool is listening", "address", cfg.ListenAddress)
-	if err = server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	if err = serveHTTPServers(stopCtx, bindings, gatewayServer.CloseResponsesWebSockets); err != nil {
 		slog.Error("HTTP server failed", "error", err)
 		os.Exit(1)
 	}
+}
+
+type serverBinding struct {
+	name   string
+	server *http.Server
+}
+
+type serverResult struct {
+	name string
+	err  error
+}
+
+func newHTTPServer(address string, handler http.Handler, readTimeout time.Duration) *http.Server {
+	return &http.Server{Addr: address, Handler: securityHeaders(handler), ReadHeaderTimeout: 10 * time.Second, ReadTimeout: readTimeout, IdleTimeout: 120 * time.Second, MaxHeaderBytes: 1 << 20}
+}
+
+func serveHTTPServers(ctx context.Context, bindings []serverBinding, beforeShutdown func()) error {
+	results := make(chan serverResult, len(bindings))
+	for _, binding := range bindings {
+		binding := binding
+		slog.Info("Subpool listener is starting", "listener", binding.name, "address", binding.server.Addr)
+		go func() {
+			results <- serverResult{name: binding.name, err: binding.server.ListenAndServe()}
+		}()
+	}
+
+	var shutdownOnce sync.Once
+	shutdown := func() {
+		shutdownOnce.Do(func() {
+			if beforeShutdown != nil {
+				beforeShutdown()
+			}
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			var pending sync.WaitGroup
+			for _, binding := range bindings {
+				pending.Add(1)
+				go func() {
+					defer pending.Done()
+					if err := binding.server.Shutdown(shutdownCtx); err != nil && !errors.Is(err, http.ErrServerClosed) {
+						slog.Warn("HTTP server shutdown failed", "listener", binding.name, "error", err)
+					}
+				}()
+			}
+			pending.Wait()
+		})
+	}
+	watchCtx, cancelWatch := context.WithCancel(ctx)
+	defer cancelWatch()
+	go func() {
+		<-watchCtx.Done()
+		shutdown()
+	}()
+
+	var firstErr error
+	for range bindings {
+		result := <-results
+		if result.err != nil && !errors.Is(result.err, http.ErrServerClosed) && firstErr == nil {
+			firstErr = fmt.Errorf("%s listener: %w", result.name, result.err)
+			shutdown()
+		}
+	}
+	shutdown()
+	return firstErr
+}
+
+func consoleOnlyHandler(console http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path := r.URL.Path
+		if path == "/v1" || strings.HasPrefix(path, "/v1/") || path == "/healthz" || path == "/readyz" || path == "/metrics" {
+			http.NotFound(w, r)
+			return
+		}
+		console.ServeHTTP(w, r)
+	})
 }
 
 func registerWeb(mux *http.ServeMux) {
