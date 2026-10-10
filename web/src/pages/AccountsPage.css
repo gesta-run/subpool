@@ -28,44 +28,43 @@
 .account-table__health { width: 20%; }
 .account-table__subscription { width: auto; }
 .account-table__actions { width: 196px; }
-.account-table th { height: 52px; padding-inline: 20px; color: var(--ink-muted); font-size: 12px; font-weight: 650; letter-spacing: .04em; text-transform: uppercase; }
+.account-table th { height: 52px; padding-inline: 20px; color: var(--ink-muted); font-weight: 650; letter-spacing: .04em; text-transform: uppercase; }
 .account-table td { height: 136px; padding: 20px; vertical-align: middle; }
 .account-table th:last-child,
 .account-table td:last-child { padding-inline: 12px; }
 .account-table tbody tr { position: relative; }
 .account-table tbody tr:hover { background: oklch(0.225 0.006 255); }
 .account-table tbody tr:focus-within { background: oklch(0.225 0.01 255); }
-.account-detail-button__avatar { width: 36px; height: 36px; display: inline-grid; place-items: center; border-radius: 50%; color: var(--ink-soft); background: var(--panel-nested); font-size: 13px; font-weight: 700; }
+.account-detail-button__avatar { width: 36px; height: 36px; display: inline-grid; place-items: center; border-radius: 50%; color: var(--ink-soft); background: var(--panel-nested); font-size: inherit; font-weight: 700; }
 .account-detail-button__copy { min-width: 0; display: grid; justify-items: start; }
 .account-detail-button__title { display: flex; align-items: center; gap: 7px; }
 .account-detail-button__title svg { width: 13px; height: 13px; color: var(--ink-muted); opacity: .55; transition: opacity 140ms ease, transform 140ms ease, color 140ms ease; }
-.account-detail-button strong { color: var(--ink); font-size: 15px; transition: color 140ms ease; }
-.account-detail-button small { margin-top: 5px; font-size: 12px; line-height: 1.4; }
+.account-detail-button strong { color: var(--ink); font-size: inherit; transition: color 140ms ease; }
+.account-detail-button small { margin-top: 5px; line-height: 1.4; }
 .account-detail-button:hover strong { color: white; }
 .account-detail-button:hover .account-detail-button__title svg,
 .account-detail-button:focus-visible .account-detail-button__title svg { color: var(--acid-deep); opacity: 1; transform: translateX(2px); }
 .account-detail-button:focus-visible { border-radius: var(--radius-control); }
 .account-health { display: grid; justify-items: start; gap: 7px; }
-.account-health .status { font-size: 11px; }
-.account-health > small { margin: 0; color: var(--ink-muted); font-size: 12px; line-height: 1.4; }
+.account-health > small { margin: 0; color: var(--ink-muted); line-height: 1.4; }
 .account-health .account-health__checked { margin-top: 2px; }
 .account-health .health-error { color: oklch(0.76 0.11 25); }
 .subscription-summary { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr); align-items: start; gap: 16px; }
 .subscription-capacities { display: grid; gap: 14px; }
 .subscription-summary .capacity { width: 100%; max-width: 460px; }
-.subscription-summary .capacity > span { margin-bottom: 7px; font-size: 13px; }
-.subscription-summary .capacity > span strong { font-size: 15px; }
+.subscription-summary .capacity > span { margin-bottom: 7px; font-size: inherit; }
+.subscription-summary .capacity > span strong { font-size: inherit; }
 .subscription-summary .capacity__heading { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 20px; }
 .capacity__label { white-space: nowrap; }
 .capacity__credits { padding-left: 20px; border-left: 1px solid var(--line-strong); color: var(--ink-soft); white-space: nowrap; }
 .capacity__credits strong { margin-inline: 3px; color: var(--ink); font-family: "Geist Mono", "SFMono-Regular", monospace; }
 .subscription-summary .capacity > div { height: 7px; }
-.subscription-summary .capacity small { display: block; margin-top: 7px; font-size: 12px; line-height: 1.4; }
+.subscription-summary .capacity small { display: block; margin-top: 7px; font-size: 11px; line-height: 1.4; }
 .subscription-summary__empty { display: grid; gap: 4px; }
-.subscription-summary__empty strong { color: var(--ink-soft); font-size: 15px; font-weight: 650; }
-.subscription-summary__empty small { margin: 0; color: var(--ink-muted); font-size: 12px; }
+.subscription-summary__empty strong { color: var(--ink-soft); font-size: inherit; font-weight: 650; }
+.subscription-summary__empty small { margin: 0; color: var(--ink-muted); }
 .subscription-summary > .reset-credit { width: 100%; max-width: 460px; }
-.reset-credit { padding: 10px 12px; display: grid; justify-items: start; align-items: start; gap: 8px; border: 1px solid var(--line); border-radius: var(--radius-control); background: var(--panel-nested); }
+.reset-credit { padding: 12px 0 0; display: grid; justify-items: start; align-items: start; gap: 8px; border: 0; border-top: 1px solid var(--line); border-radius: 0; background: transparent; }
 .reset-credit__action { width: 100%; min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px 12px; }
 .reset-credit__summary { min-width: 0; display: flex; align-items: center; gap: 8px; }
 .reset-credit__summary > i { width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; background: var(--acid-deep); }
@@ -73,7 +72,7 @@
 .reset-credit__copy strong { color: var(--ink-soft); font-size: 12px; font-weight: 650; white-space: nowrap; }
 .reset-credit__copy small { margin: 0; color: var(--ink-muted); font-size: 11px; line-height: 1.4; }
 .reset-credit__button,
-.reset-credit--error button { min-height: 32px; padding: 0 12px; border: 1px solid var(--line-strong); border-radius: var(--radius-control); color: var(--ink-soft); background: var(--paper-deep); font-size: 12px; font-weight: 650; white-space: nowrap; transition: color 140ms ease, border-color 140ms ease, background-color 140ms ease, transform 140ms ease; }
+.reset-credit--error button { min-height: 32px; padding: 0 12px; border: 1px solid var(--line-strong); border-radius: var(--radius-control); color: var(--ink-soft); background: var(--paper-deep); font-size: 10px; font-weight: 650; white-space: nowrap; transition: color 140ms ease, border-color 140ms ease, background-color 140ms ease, transform 140ms ease; }
 .reset-credit__button:hover:not(:disabled),
 .reset-credit--error button:hover:not(:disabled) { color: white; border-color: var(--ink-muted); background: var(--panel); transform: translateY(-1px); }
 .reset-credit__button:active:not(:disabled),
