@@ -39,7 +39,7 @@ func normalizeCopilotNativeResponses(raw []byte, model string, allowToolFallback
 	}
 	_ = object.Set("stream", []byte("true"))
 	body, err := object.BytesWithValue("input", func(output *bytes.Buffer, raw []byte) error {
-		return writeCopilotNativeInput(output, raw)
+		return writeCopilotNativeInput(output, raw, model == "grok-4.7")
 	})
 	return body, mappings, err
 }
@@ -151,6 +151,8 @@ func nativeInputType(raw []byte) string {
 		return "custom_tool_call"
 	case `"custom_tool_call_output"`:
 		return "custom_tool_call_output"
+	case `"reasoning"`:
+		return "reasoning"
 	default:
 		if bytes.IndexByte(encoded, '\\') < 0 {
 			return ""
@@ -161,7 +163,7 @@ func nativeInputType(raw []byte) string {
 	return kind
 }
 
-func writeCopilotNativeInput(output *bytes.Buffer, raw []byte) error {
+func writeCopilotNativeInput(output *bytes.Buffer, raw []byte, omitNullReasoningContent bool) error {
 	if raw = bytes.TrimSpace(raw); len(raw) == 0 || raw[0] != '[' {
 		output.Write(raw)
 		return nil
@@ -177,6 +179,9 @@ func writeCopilotNativeInput(output *bytes.Buffer, raw []byte) error {
 			output.WriteByte(',')
 		}
 		written = true
+		if kind == "reasoning" && omitNullReasoningContent {
+			return writeCopilotNativeReasoningHistory(output, rawItem)
+		}
 		if kind != "function_call" && kind != "custom_tool_call" && kind != "custom_tool_call_output" {
 			output.Write(rawItem)
 			return nil
@@ -185,6 +190,23 @@ func writeCopilotNativeInput(output *bytes.Buffer, raw []byte) error {
 	})
 	output.WriteByte(']')
 	return err
+}
+
+func writeCopilotNativeReasoningHistory(output *bytes.Buffer, raw []byte) error {
+	content, _ := jsonobject.Lookup(raw, "content")
+	if !bytes.Equal(content, []byte("null")) {
+		output.Write(raw)
+		return nil
+	}
+	// Copilot grok-4.7 rejects CLI reasoning history with content: null.
+	// Omit only that field; encrypted content and all other history stay native.
+	item, err := jsonobject.Parse(raw)
+	if err != nil {
+		return err
+	}
+	item.Delete("content")
+	item.AppendTo(output)
+	return nil
 }
 
 func writeCopilotNativeToolHistory(output *bytes.Buffer, raw []byte, kind string) error {
