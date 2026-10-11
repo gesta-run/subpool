@@ -117,10 +117,37 @@ func (o *Object) Delete(key string) {
 }
 
 func (o *Object) Bytes() []byte {
+	output, _ := o.BytesWithValue("", nil)
+	return output
+}
+
+// BytesWithValue streams one validated value into the final output buffer.
+// The replacement must write valid JSON; nested values need not be copied first.
+func (o *Object) BytesWithValue(key string, replace func(*bytes.Buffer, []byte) error) ([]byte, error) {
 	var output bytes.Buffer
 	output.Grow(len(o.raw) + 256)
+	if err := o.writeTo(&output, key, replace); err != nil {
+		return nil, err
+	}
+	return output.Bytes(), nil
+}
+
+// AppendTo writes into an existing buffer without allocating a nested payload.
+func (o *Object) AppendTo(output *bytes.Buffer) {
+	_ = o.writeTo(output, "", nil)
+}
+
+func (o *Object) writeTo(output *bytes.Buffer, key string, replace func(*bytes.Buffer, []byte) error) error {
 	output.WriteByte('{')
 	written := false
+	write := func(name string, value []byte) error {
+		if name == key && replace != nil {
+			writeField(output, &written, name, nil)
+			return replace(output, value)
+		}
+		writeField(output, &written, name, value)
+		return nil
+	}
 	for index, field := range o.fields {
 		if o.last[field.key] != index {
 			continue
@@ -132,7 +159,9 @@ func (o *Object) Bytes() []byte {
 		if replacement, set := o.sets[field.key]; set {
 			value = replacement
 		}
-		writeField(&output, &written, field.key, value)
+		if err := write(field.key, value); err != nil {
+			return err
+		}
 	}
 	for _, key := range o.setOrder {
 		if _, existed := o.last[key]; existed {
@@ -141,10 +170,12 @@ func (o *Object) Bytes() []byte {
 		if _, deleted := o.deleted[key]; deleted {
 			continue
 		}
-		writeField(&output, &written, key, o.sets[key])
+		if err := write(key, o.sets[key]); err != nil {
+			return err
+		}
 	}
 	output.WriteByte('}')
-	return output.Bytes()
+	return nil
 }
 
 func writeField(output *bytes.Buffer, written *bool, key string, value []byte) {
@@ -213,9 +244,7 @@ func scanValueEnd(raw []byte, start int) int {
 			inString = true
 		case '{', '[':
 			depth++
-		case ']':
-			depth--
-		case '}':
+		case '}', ']':
 			if depth == 0 {
 				return index
 			}

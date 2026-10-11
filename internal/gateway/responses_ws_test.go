@@ -344,6 +344,49 @@ func TestResponsesWebSocketRestoresCopilotToolNamespace(t *testing.T) {
 	}
 }
 
+func TestResponsesWebSocketRestoresNativeCopilotCustomTools(t *testing.T) {
+	server, st, _, plain := newTestServer(t)
+	st.route.Account = copilotAccountWithCipher(t, server.cipher.(*credential.Cipher), "copilot-account")
+	st.route.Pool.Provider = domain.ProviderCopilot
+	st.sessionSavedSignal = make(chan struct{}, 1)
+	provider := &fakeCopilotProvider{
+		supportedEndpoints: map[string]map[string]bool{"grok-test": {copilot.EndpointResponses: true}},
+		response:           sseResponse(http.StatusOK, nativeCopilotToolResponseFixture()),
+	}
+	server.WithCopilot(provider).WithResponsesWebSocket(true, false, "")
+	client, cleanup := dialResponsesWSTestServer(t, server, plain)
+	defer cleanup()
+	writeResponsesWSMessage(t, client, `{"type":"response.create","model":"grok-test","input":"hello","tools":`+nativeCopilotTestTools+`}`)
+	foundCustom, foundDone, foundTerminal := false, false, false
+	for range 12 {
+		event := readResponsesWSMessage(t, client)
+		if event["type"] == "response.output_item.added" {
+			item, _ := event["item"].(map[string]any)
+			if item["type"] == "custom_tool_call" {
+				foundCustom = item["name"] == "apply_patch" && item["namespace"] == "workspace"
+			}
+		}
+		if event["type"] == "response.custom_tool_call_input.done" {
+			foundDone = event["input"] == "line one\nline two"
+		}
+		if event["type"] == "response.completed" {
+			foundTerminal = true
+			break
+		}
+	}
+	if !foundCustom || !foundDone || !foundTerminal {
+		t.Fatalf("custom=%v done=%v terminal=%v", foundCustom, foundDone, foundTerminal)
+	}
+	select {
+	case <-st.sessionSavedSignal:
+	case <-time.After(time.Second):
+		t.Fatal("native session completion was not recorded")
+	}
+	if st.usageInput != 7 || st.usageOutput != 3 {
+		t.Fatalf("usage=%d/%d", st.usageInput, st.usageOutput)
+	}
+}
+
 func TestResponsesWebSocketCopilotBridgeMarksQuotaExhausted(t *testing.T) {
 	server, st, _, plain := newTestServer(t)
 	cipher := server.cipher.(*credential.Cipher)

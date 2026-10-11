@@ -478,8 +478,13 @@ func (s *Server) attemptAccount(r *http.Request, route domain.KeyRoute, request 
 			return nil, retry, complete
 		}
 		if request.kind == "responses" && endpoints.responses {
+			body, mappings, convertErr := normalizeCopilotNativeResponses(request.body, request.model, route.Pool.Provider == domain.ProviderCopilot)
+			if convertErr != nil {
+				return chatConversionFailure(route.Pool.Provider, convertErr)
+			}
 			request.kind = "copilot_responses"
-			request.body = forceProviderStream(request.body)
+			request.body = body
+			request.copilotTools = mappings
 		} else if request.kind == "responses" {
 			if !endpoints.chat {
 				return nil, retryUnsupported, false
@@ -881,6 +886,9 @@ func (s *Server) providerAccountResponse(ctx context.Context, request upstreamRe
 		if request.kind == "copilot_responses" {
 			resp, err = s.copilot.Responses(ctx, request.body, header, credentials.copilot)
 			responseFormat = "responses"
+			if err == nil && resp != nil && resp.Body != nil {
+				restoreCopilotNativeResponses(resp, request.copilotTools)
+			}
 		} else {
 			resp, err = s.copilot.ChatCompletions(ctx, request.body, header, credentials.copilot)
 			responseFormat = "chat_completions"
