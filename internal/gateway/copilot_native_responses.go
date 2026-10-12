@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/gesta-run/subpool/internal/gateway/copilotstream"
 	"github.com/gesta-run/subpool/internal/gateway/toolschema"
 	"github.com/gesta-run/subpool/internal/jsonobject"
 )
@@ -404,11 +405,14 @@ func copilotNativeToolChoice(value any, omitHosted bool) (any, error) {
 // Restore the client-facing tool protocol before the shared HTTP/WS proxies
 // inspect events, so reasoning, session IDs, usage and failure handling stay native.
 func restoreCopilotNativeResponses(resp *http.Response, mappings map[string]copilotToolInfo) {
-	if len(mappings) == 0 || resp.StatusCode < 200 || resp.StatusCode >= 300 {
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return
+	}
+	contentType := resp.Header.Get("Content-Type")
+	if len(mappings) == 0 && strings.Contains(contentType, "application/json") {
 		return
 	}
 	upstream := resp.Body
-	contentType := resp.Header.Get("Content-Type")
 	reader, writer := io.Pipe()
 	resp.Body = &copilotNativeBody{ReadCloser: reader, upstream: upstream}
 	resp.ContentLength = -1
@@ -455,6 +459,7 @@ type copilotNativeToolStream struct {
 	mappings map[string]copilotToolInfo
 	calls    map[string]*copilotNativeCall
 	sequence int64
+	identity copilotstream.Identity
 }
 
 func (s *copilotNativeToolStream) restoreItem(item map[string]any) error {
@@ -501,6 +506,7 @@ func (s *copilotNativeToolStream) restoreOutput(response map[string]any) error {
 }
 
 func (s *copilotNativeToolStream) restoreEvent(event map[string]any) ([]map[string]any, error) {
+	s.identity.Normalize(event)
 	if response, ok := event["response"].(map[string]any); ok {
 		if err := s.restoreOutput(response); err != nil {
 			return nil, err

@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"errors"
@@ -615,5 +616,180 @@ func BenchmarkCopilotNativePlainHistory(b *testing.B) {
 		if _, _, err := normalizeCopilotNativeResponses(request, "grok-test", true); err != nil {
 			b.Fatal(err)
 		}
+	}
+}
+
+func nativeCopilotChangingIDsFixture() string {
+	return `data: {"type":"response.created","response":{"id":"resp-start","output":[]}}
+
+data: {"type":"response.output_item.added","output_index":0,"item":{"type":"reasoning","id":"reason-start","summary":[],"status":"in_progress"}}
+
+data: {"type":"response.output_item.done","output_index":0,"item":{"type":"reasoning","id":"reason-done","summary":[],"status":"completed","encrypted_content":"illustrative-opaque-data"}}
+
+data: {"type":"response.output_item.added","output_index":1,"item":{"type":"message","id":"msg-start","role":"assistant","status":"in_progress","content":[]}}
+
+data: {"type":"response.content_part.added","output_index":1,"content_index":0,"item_id":"msg-part","part":{"type":"output_text","text":""}}
+
+data: {"type":"response.output_text.delta","output_index":1,"content_index":0,"item_id":"msg-delta","delta":"Hi"}
+
+data: {"type":"response.output_text.done","output_index":1,"content_index":0,"item_id":"msg-text","text":"Hi"}
+
+data: {"type":"response.content_part.done","output_index":1,"content_index":0,"item_id":"msg-content","part":{"type":"output_text","text":"Hi"}}
+
+data: {"type":"response.output_item.done","output_index":1,"item":{"type":"message","id":"msg-done","role":"assistant","status":"completed","content":[{"type":"output_text","text":"Hi"}]}}
+
+data: {"type":"response.completed","response":{"id":"resp-final","status":"completed","output":[{"type":"reasoning","id":"reason-final","summary":[],"status":"completed","encrypted_content":"illustrative-opaque-data"},{"type":"message","id":"msg-final","role":"assistant","status":"completed","content":[{"type":"output_text","text":"Hi"}]}],"usage":{"input_tokens":7,"output_tokens":3}}}
+
+`
+}
+
+func TestCopilotNativeResponsesStableItemIDs(t *testing.T) {
+	for _, transport := range []string{"json", "stream", "websocket"} {
+		t.Run(transport, func(t *testing.T) {
+			server, st, _, key := newTestServer(t)
+			st.route.Account = copilotAccountWithCipher(t, server.cipher.(*credential.Cipher), "copilot-account")
+			st.route.Pool.Provider = domain.ProviderCopilot
+			provider := &fakeCopilotProvider{
+				supportedEndpoints: map[string]map[string]bool{"grok-test": {copilot.EndpointResponses: true}},
+				response:           sseResponse(http.StatusOK, nativeCopilotChangingIDsFixture()),
+			}
+			server.WithCopilot(provider)
+			var events []map[string]any
+			if transport == "websocket" {
+				server.WithResponsesWebSocket(true, false, "")
+				client, cleanup := dialResponsesWSTestServer(t, server, key)
+				defer cleanup()
+				writeResponsesWSMessage(t, client, `{"type":"response.create","model":"grok-test","input":"Hi"}`)
+				for {
+					event := readResponsesWSMessage(t, client)
+					events = append(events, event)
+					if event["type"] == "response.completed" {
+						break
+					}
+				}
+			} else {
+				request := fmt.Sprintf(`{"model":"grok-test","stream":%t,"input":"Hi"}`, transport == "stream")
+				recorder := serveGateway(t, server, key, "/v1/responses", request)
+				if recorder.Code != http.StatusOK {
+					t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+				}
+				if transport == "json" {
+					var response map[string]any
+					if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+						t.Fatal(err)
+					}
+					events = []map[string]any{{"type": "response.completed", "response": response}}
+				} else {
+					events = nativeCopilotParseEvents(t, recorder.Body.String())
+				}
+			}
+			assertNativeCopilotStableIDs(t, events)
+		})
+	}
+}
+
+func nativeCopilotParseEvents(t *testing.T, raw string) []map[string]any {
+	t.Helper()
+	var events []map[string]any
+	for _, line := range strings.Split(raw, "\n") {
+		if !strings.HasPrefix(line, "data:") {
+			continue
+		}
+		var event map[string]any
+		if err := json.Unmarshal([]byte(strings.TrimPrefix(line, "data:")), &event); err != nil {
+			t.Fatal(err)
+		}
+		events = append(events, event)
+	}
+	return events
+}
+
+func assertNativeCopilotStableIDs(t *testing.T, events []map[string]any) {
+	t.Helper()
+	ids := []string{"reason-start", "msg-start"}
+	var terminal map[string]any
+	for _, event := range events {
+		if index, ok := event["output_index"].(float64); ok {
+			want := ids[int(index)]
+			if item, ok := event["item"].(map[string]any); ok && item["id"] != want {
+				t.Fatalf("item identity changed: %#v", event)
+			}
+			if id, ok := event["item_id"].(string); ok && id != want {
+				t.Fatalf("delta identity changed: %#v", event)
+			}
+		}
+		if event["type"] == "response.completed" {
+			terminal = event["response"].(map[string]any)
+		}
+	}
+	if terminal == nil || terminal["id"] != "resp-final" {
+		t.Fatalf("terminal response identity was lost: %#v", terminal)
+	}
+	output := terminal["output"].([]any)
+	if len(output) != 2 {
+		t.Fatalf("unexpected output: %#v", output)
+	}
+	for index, entry := range output {
+		if entry.(map[string]any)["id"] != ids[index] {
+			t.Fatalf("terminal item identity changed: %#v", entry)
+		}
+	}
+	if output[0].(map[string]any)["encrypted_content"] != "illustrative-opaque-data" {
+		t.Fatal("completed reasoning content was lost")
+	}
+}
+
+func TestCopilotNativeResponsesRestoresChangingCustomCallIDs(t *testing.T) {
+	fixture := nativeCopilotToolResponseFixture()
+	for _, kind := range []string{"response.function_call_arguments.delta", "response.function_call_arguments.done", "response.output_item.done", "response.completed"} {
+		lines := strings.Split(fixture, "\n")
+		for index, line := range lines {
+			if strings.Contains(line, `"type":"`+kind+`"`) {
+				lines[index] = strings.ReplaceAll(line, `"fc-1"`, `"fc-changing-`+kind+`"`)
+			}
+		}
+		fixture = strings.Join(lines, "\n")
+	}
+	state := &copilotNativeToolStream{mappings: map[string]copilotToolInfo{
+		stableCopilotNativeToolName("workspace", "apply_patch"): {Name: "apply_patch", Namespace: "workspace", Custom: true},
+	}, calls: make(map[string]*copilotNativeCall)}
+	var output bytes.Buffer
+	if err := state.writeStream(&output, strings.NewReader(fixture)); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(output.String(), "response.function_call_arguments.") || strings.Contains(output.String(), "fc-changing-") ||
+		strings.Count(output.String(), "event: response.custom_tool_call_input.done") != 1 ||
+		!strings.Contains(output.String(), `"input":"line one\nline two"`) || !strings.Contains(output.String(), `"call_id":"call-1"`) {
+		t.Fatalf("custom call identity or protocol was lost: %s", output.String())
+	}
+}
+
+func TestCopilotNativeResponsesStreamsBeforeCompletionWithoutTools(t *testing.T) {
+	upstream, writer := io.Pipe()
+	defer writer.Close()
+	response := &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: upstream}
+	restoreCopilotNativeResponses(response, nil)
+	defer response.Body.Close()
+	go func() {
+		_, _ = io.WriteString(writer, "data: {\"type\":\"response.output_text.delta\",\"output_index\":0,\"item_id\":\"msg-native\",\"delta\":\"Hi\"}\n\n")
+	}()
+	result := make(chan string, 1)
+	go func() {
+		reader := bufio.NewReader(response.Body)
+		for {
+			line, err := reader.ReadString('\n')
+			if err != nil || strings.HasPrefix(line, "data:") {
+				result <- line
+				return
+			}
+		}
+	}()
+	select {
+	case line := <-result:
+		if !strings.Contains(line, `"delta":"Hi"`) {
+			t.Fatalf("first delta was lost: %s", line)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("stream buffered output until completion")
 	}
 }
