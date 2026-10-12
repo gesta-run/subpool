@@ -36,6 +36,8 @@ Subpool is a self-hosted control plane for allocating, governing, and auditing A
 
 ## Architecture
 
+For the internal protocol boundaries and request lifecycle, see [Provider adapters](docs/provider-adapters.md).
+
 ![Subpool architecture](design/architecture/reference-layout.svg)
 
 Subpool is a single Go service with an embedded React console and PostgreSQL persistence.
@@ -94,7 +96,7 @@ Save the file, then restart Codex so the new provider and WebSocket settings are
 
 ## API and networking
 
-Available API endpoints include `GET/POST /v1/responses`, `POST /v1/chat/completions`, `POST /v1/images/generations`, `POST /v1/images/edits`, `GET /v1/models`, `GET /healthz`, `GET /readyz`, and `GET /metrics`.
+Available API endpoints include `GET/POST /v1/responses`, `POST /v1/responses/compact`, `POST /v1/chat/completions`, `POST /v1/images/generations`, `POST /v1/images/edits`, `GET /v1/models`, `GET /healthz`, `GET /readyz`, and `GET /metrics`.
 
 Subpool always serves two listeners. `SUBPOOL_API_LISTEN_ADDRESS` exposes the employee API and operational endpoints, while `SUBPOOL_CONSOLE_LISTEN_ADDRESS` exposes the console and its `/api/v1/*` control API. For Compose deployments, `SUBPOOL_PORT` and `SUBPOOL_CONSOLE_PORT` select their host ports. The pre deployment uses `SUBPOOL_HOST_PORT` (API, default `8082`) and `SUBPOOL_CONSOLE_HOST_PORT` (console, default `8083`).
 

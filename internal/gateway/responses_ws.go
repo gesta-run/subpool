@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/gesta-run/subpool/internal/adapter"
+	"github.com/gesta-run/subpool/internal/adapter/protocol"
 	"github.com/gesta-run/subpool/internal/auth"
 	"github.com/gesta-run/subpool/internal/domain"
 	"github.com/gesta-run/subpool/internal/gateway/responsesws"
@@ -45,7 +47,7 @@ func (b responsesWSBackend) AccountHealthy(account domain.ProviderAccount) bool 
 
 func (b responsesWSBackend) CodexCredentials(account domain.ProviderAccount) (codex.Credentials, error) {
 	credentials, err := b.server.credentials(account)
-	return credentials.codex, err
+	return credentials.Codex, err
 }
 
 func (b responsesWSBackend) RefreshAccount(ctx context.Context, account domain.ProviderAccount) (domain.ProviderAccount, error) {
@@ -70,15 +72,16 @@ func (b responsesWSBackend) AttemptBridge(ctx context.Context, headers http.Head
 		return nil, responsesws.RetryUnavailable, false
 	}
 	request.Header = headers
-	payload = forceProviderStream(payload)
-	response, retry, complete := b.server.attemptAccount(request, route, upstreamRequest{
-		kind: "responses", model: model, body: payload,
+	payload = protocol.ForceStream(payload)
+	response, retry, complete := b.server.attemptAccount(request, route, adapter.Request{
+		Kind: "responses", Model: model, Body: payload,
 	}, account)
-	if complete && response != nil && response.StatusCode >= http.StatusOK && response.StatusCode < http.StatusMultipleChoices &&
-		response.Header.Get(formatHeader) == "chat_completions" {
-		response = b.server.bridgeCopilotResponses(response, model)
+	if response == nil {
+		return nil, responsesws.RetryReason(retry), complete
 	}
-	return response, responsesws.RetryReason(retry), complete
+	upstream := response.StreamHTTP(model, adapter.Observer{Now: b.server.now, NextSequence: func() uint64 { return b.server.eventSeq.Add(1) }})
+	upstream.Header.Del(accountHeader)
+	return upstream, responsesws.RetryReason(retry), complete
 }
 
 func (b responsesWSBackend) CompleteTurn(keyID, poolID, accountID, responseID, model string, input, output int64) {
@@ -102,7 +105,7 @@ func (b responsesWSBackend) NormalizeCodexRequest(body []byte, account domain.Pr
 			Status: http.StatusInternalServerError, Message: "device identity is unavailable", Code: "server_error",
 		}
 	}
-	payload, err := normalizeCodexWebSocketRequest(body, installationID, account.FastModeEnabled)
+	payload, err := protocol.NormalizeCodexWebSocketRequest(body, installationID, account.FastModeEnabled)
 	if err != nil {
 		return nil, &responsesws.RequestError{
 			Status: http.StatusBadRequest, Message: err.Error(), Code: "invalid_request_error",

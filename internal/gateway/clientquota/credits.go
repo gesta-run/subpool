@@ -56,11 +56,13 @@ func ApplyHeaders(header http.Header, account domain.ProviderAccount, now time.T
 	header.Set(balanceHeader, credits.Balance)
 }
 
-func CopyHeaders(dst, src http.Header) {
+// MoveHeaders makes the Gateway the sole emitter of credits before rendering.
+func MoveHeaders(dst, src http.Header) {
 	for _, name := range []string{hasCreditsHeader, unlimitedHeader, balanceHeader} {
 		if value := src.Get(name); value != "" {
 			dst.Set(name, value)
 		}
+		src.Del(name)
 	}
 }
 

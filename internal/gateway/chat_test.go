@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"encoding/json"
+	"github.com/gesta-run/subpool/internal/adapter/protocol"
 	"net/http"
 	"strings"
 	"testing"
@@ -38,7 +39,7 @@ func TestInterruptedChatStreamDoesNotSendDone(t *testing.T) {
 }
 
 func TestChatTranslationMapsMaxTokensAndTools(t *testing.T) {
-	raw, err := chatToResponses([]byte(`{"model":"gpt-test","temperature":0.2,"top_p":0.8,"reasoning_effort":"xhigh","max_tokens":99,"messages":[{"role":"user","content":"hello"}],"tools":[{"type":"function","function":{"name":"lookup","parameters":{"type":"object"}}}]}`))
+	raw, err := protocol.ChatToResponses([]byte(`{"model":"gpt-test","temperature":0.2,"top_p":0.8,"reasoning_effort":"xhigh","max_tokens":99,"messages":[{"role":"user","content":"hello"}],"tools":[{"type":"function","function":{"name":"lookup","parameters":{"type":"object"}}}]}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,11 +48,11 @@ func TestChatTranslationMapsMaxTokensAndTools(t *testing.T) {
 	if value["store"] != false || value["instructions"] != "" {
 		t.Fatalf("Codex compatibility fields = %#v", value)
 	}
-	if _, exists := value["temperature"]; exists {
-		t.Fatalf("temperature was forwarded: %#v", value)
+	if value["temperature"] != 0.2 {
+		t.Fatalf("temperature was lost by the shared codec: %#v", value)
 	}
-	if _, exists := value["top_p"]; exists {
-		t.Fatalf("top_p was forwarded: %#v", value)
+	if value["top_p"] != 0.8 {
+		t.Fatalf("top_p was lost by the shared codec: %#v", value)
 	}
 	reasoning, _ := value["reasoning"].(map[string]any)
 	if reasoning["effort"] != "xhigh" {
@@ -67,7 +68,7 @@ func TestChatTranslationMapsMaxTokensAndTools(t *testing.T) {
 }
 
 func TestChatTranslationConvertsMultimodalContent(t *testing.T) {
-	raw, err := chatToResponses([]byte(`{
+	raw, err := protocol.ChatToResponses([]byte(`{
 		"model":"gpt-test",
 		"messages":[{"role":"user","content":[
 			{"type":"text","text":"describe"},
@@ -92,7 +93,7 @@ func TestChatTranslationConvertsMultimodalContent(t *testing.T) {
 }
 
 func TestChatTranslationSkipsNullAssistantToolContent(t *testing.T) {
-	raw, err := chatToResponses([]byte(`{
+	raw, err := protocol.ChatToResponses([]byte(`{
 		"model":"gpt-test",
 		"messages":[
 			{"role":"assistant","content":null,"tool_calls":[{"id":"call-1","type":"function","function":{"name":"lookup","arguments":"{\"id\":1}"}}]},
@@ -111,7 +112,7 @@ func TestChatTranslationSkipsNullAssistantToolContent(t *testing.T) {
 }
 
 func TestChatTranslationMapsToolChoiceAndResponseFormat(t *testing.T) {
-	raw, err := chatToResponses([]byte(`{
+	raw, err := protocol.ChatToResponses([]byte(`{
 		"model":"gpt-test","messages":[{"role":"user","content":"hello"}],
 		"tools":[{"type":"function","function":{"name":"lookup","parameters":{"type":"object"}}}],
 		"tool_choice":{"type":"function","function":{"name":"lookup"}},
@@ -133,7 +134,7 @@ func TestChatTranslationMapsToolChoiceAndResponseFormat(t *testing.T) {
 }
 
 func TestChatTranslationRejectsMissingFunction(t *testing.T) {
-	if _, err := chatToResponses([]byte(`{"model":"gpt-test","messages":[],"tools":[{"type":"function"}]}`)); err == nil {
+	if _, err := protocol.ChatToResponses([]byte(`{"model":"gpt-test","messages":[],"tools":[{"type":"function"}]}`)); err == nil {
 		t.Fatal("function tool without function was accepted")
 	}
 	server, _, provider, plain := newTestServer(t)
@@ -147,7 +148,7 @@ func TestChatTranslationRejectsMissingFunction(t *testing.T) {
 }
 
 func TestResponsesTranslationMapsMessagesAndTools(t *testing.T) {
-	raw, copilotTools, err := responsesToChat([]byte(`{
+	raw, copilotTools, err := protocol.ResponsesToChat([]byte(`{
 		"model":"gpt-test","stream":true,"instructions":"Be concise","max_output_tokens":99,
 		"reasoning":{"effort":"high"},
 		"input":[
@@ -168,7 +169,7 @@ func TestResponsesTranslationMapsMessagesAndTools(t *testing.T) {
 	if json.Unmarshal(raw, &value) != nil {
 		t.Fatalf("translated request = %s", raw)
 	}
-	if value["max_tokens"] != float64(99) || value["reasoning_effort"] != "high" {
+	if value["max_completion_tokens"] != float64(99) || value["reasoning_effort"] != "high" {
 		t.Fatalf("translated request = %#v", value)
 	}
 	messages := value["messages"].([]any)
@@ -188,7 +189,7 @@ func TestResponsesTranslationMapsMessagesAndTools(t *testing.T) {
 }
 
 func TestResponsesTranslationExpandsNamespacesAndSkipsToolSearch(t *testing.T) {
-	raw, copilotTools, err := responsesToChat([]byte(`{
+	raw, copilotTools, err := protocol.ResponsesToChat([]byte(`{
 		"model":"gpt-test",
 		"input":[
 			{"type":"function_call","call_id":"call-1","name":"read_file","namespace":"workspace","arguments":"{\"path\":\"README.md\"}"},
@@ -217,7 +218,7 @@ func TestResponsesTranslationExpandsNamespacesAndSkipsToolSearch(t *testing.T) {
 	namespaced := tools[1].(map[string]any)["function"].(map[string]any)
 	upstreamName, _ := namespaced["name"].(string)
 	info, ok := copilotTools[upstreamName]
-	if !ok || info.Name != "read_file" || info.Namespace != "workspace" || upstreamName == "workspace__read_file" || len(upstreamName) > maxCopilotToolNameLength {
+	if !ok || info.Name != "read_file" || info.Namespace != "workspace" || upstreamName == "workspace__read_file" || len(upstreamName) > protocol.MaxCopilotToolNameLength {
 		t.Fatalf("namespaced tool = %#v mappings=%#v", namespaced, copilotTools)
 	}
 	if namespaced["defer_loading"] != nil || namespaced["strict"] != true {
@@ -236,7 +237,7 @@ func TestResponsesTranslationExpandsNamespacesAndSkipsToolSearch(t *testing.T) {
 
 func TestResponsesTranslationRejectsUnknownToolSearchExecution(t *testing.T) {
 	for _, execution := range []string{`"future"`, `1`} {
-		_, _, err := responsesToChat([]byte(`{"model":"gpt-test","input":"hello","tools":[{"type":"tool_search","execution":`+execution+`}]}`), true)
+		_, _, err := protocol.ResponsesToChat([]byte(`{"model":"gpt-test","input":"hello","tools":[{"type":"tool_search","execution":`+execution+`}]}`), true)
 		if err == nil || !strings.Contains(err.Error(), "tool_search execution") {
 			t.Fatalf("execution %s: error = %v", execution, err)
 		}
@@ -244,7 +245,7 @@ func TestResponsesTranslationRejectsUnknownToolSearchExecution(t *testing.T) {
 }
 
 func TestResponsesTranslationEagerLoadsDeferredFunctionForClientToolSearch(t *testing.T) {
-	raw, _, err := responsesToChat([]byte(`{"model":"gpt-test","input":"hello","tools":[{"type":"function","name":"lookup","defer_loading":true,"parameters":{"type":"object"}},{"type":"tool_search","execution":"client"}]}`), true)
+	raw, _, err := protocol.ResponsesToChat([]byte(`{"model":"gpt-test","input":"hello","tools":[{"type":"function","name":"lookup","defer_loading":true,"parameters":{"type":"object"}},{"type":"tool_search","execution":"client"}]}`), true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -259,25 +260,25 @@ func TestResponsesTranslationClassifiesOmittableTools(t *testing.T) {
 		"computer", "computer_use_preview", "image_generation", "code_interpreter",
 	} {
 		request := []byte(`{"model":"gpt-test","input":"hello","tools":[{"type":"` + toolType + `"}]}`)
-		raw, _, err := responsesToChat(request, true)
+		raw, _, err := protocol.ResponsesToChat(request, true)
 		if err != nil || strings.Contains(string(raw), `"tools"`) {
 			t.Fatalf("fallback %s: request=%s error=%v", toolType, raw, err)
 		}
-		if _, _, err = responsesToChat(request, false); err == nil || !strings.Contains(err.Error(), toolType) {
+		if _, _, err = protocol.ResponsesToChat(request, false); err == nil || !strings.Contains(err.Error(), toolType) {
 			t.Fatalf("strict %s: error=%v", toolType, err)
 		}
 	}
 }
 
 func TestResponsesTranslationOmitsDeferredMCPToolSearch(t *testing.T) {
-	raw, _, err := responsesToChat([]byte(`{"model":"gpt-test","input":"hello","tools":[{"type":"tool_search","execution":"client"},{"type":"mcp","server_label":"example","defer_loading":true}],"tool_choice":{"type":"tool_search"}}`), true)
+	raw, _, err := protocol.ResponsesToChat([]byte(`{"model":"gpt-test","input":"hello","tools":[{"type":"tool_search","execution":"client"},{"type":"mcp","server_label":"example","defer_loading":true}],"tool_choice":{"type":"tool_search"}}`), true)
 	if err != nil || strings.Contains(string(raw), `"tools"`) || strings.Contains(string(raw), `"tool_choice"`) {
 		t.Fatalf("translated request=%s error=%v", raw, err)
 	}
 }
 
 func TestResponsesTranslationMergesAdditionalTools(t *testing.T) {
-	raw, copilotTools, err := responsesToChat([]byte(`{
+	raw, copilotTools, err := protocol.ResponsesToChat([]byte(`{
 		"model":"gpt-test",
 		"input":[
 			{"type":"additional_tools","role":"developer","tools":[
@@ -317,7 +318,7 @@ func TestResponsesTranslationMergesAdditionalTools(t *testing.T) {
 }
 
 func TestResponsesTranslationMapsNamespacedCustomTools(t *testing.T) {
-	raw, copilotTools, err := responsesToChat([]byte(`{
+	raw, copilotTools, err := protocol.ResponsesToChat([]byte(`{
 		"model":"gpt-test",
 		"input":[
 			{"type":"additional_tools","role":"developer","tools":[
@@ -352,23 +353,12 @@ func TestResponsesTranslationMapsNamespacedCustomTools(t *testing.T) {
 	}
 }
 
-func TestCopilotToolHeadersPreserveNamespacedCustomTools(t *testing.T) {
-	header := make(http.Header)
-	setCopilotToolHeaders(header, map[string]copilotToolInfo{
-		"container__exec_command": {Name: "exec_command", Namespace: "container", Custom: true},
-	})
-	info := copilotToolsFromHeaders(header)["container__exec_command"]
-	if info.Name != "exec_command" || info.Namespace != "container" || !info.Custom {
-		t.Fatalf("tool info = %#v headers=%#v", info, header)
-	}
-}
-
 func TestResponsesTranslationRejectsInvalidAdditionalTools(t *testing.T) {
 	for _, input := range []string{
 		`{"type":"additional_tools","role":"user","tools":[]}`,
 		`{"type":"additional_tools","role":"developer","tools":{}}`,
 	} {
-		_, _, err := responsesToChat([]byte(`{"model":"gpt-test","input":[`+input+`]}`), true)
+		_, _, err := protocol.ResponsesToChat([]byte(`{"model":"gpt-test","input":[`+input+`]}`), true)
 		if err == nil || !strings.Contains(err.Error(), "additional_tools") {
 			t.Fatalf("input=%s error=%v", input, err)
 		}
@@ -386,7 +376,7 @@ func TestChatCompletionTranslationMapsToolCalls(t *testing.T) {
 		}},
 		"usage": map[string]any{"prompt_tokens": float64(8), "completion_tokens": float64(3)},
 	}
-	response, input, output, err := chatCompletionToResponse(completion, "fallback", "fallback-id", nil)
+	response, input, output, err := protocol.ChatCompletionToResponse(completion, "fallback", "fallback-id", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -410,7 +400,7 @@ func TestChatCompletionTranslationRestoresCustomToolCall(t *testing.T) {
 			}}},
 		}},
 	}
-	response, _, _, err := chatCompletionToResponse(completion, "gpt-test", "fallback-id", map[string]copilotToolInfo{
+	response, _, _, err := protocol.ChatCompletionToResponse(completion, "gpt-test", "fallback-id", map[string]protocol.ToolInfo{
 		"apply_patch": {Name: "apply_patch", Namespace: "workspace", Custom: true},
 	})
 	if err != nil {
@@ -432,7 +422,7 @@ func TestChatCompletionTranslationRestoresNamespace(t *testing.T) {
 			}}},
 		}},
 	}
-	response, _, _, err := chatCompletionToResponse(completion, "gpt-test", "fallback-id", map[string]copilotToolInfo{
+	response, _, _, err := protocol.ChatCompletionToResponse(completion, "gpt-test", "fallback-id", map[string]protocol.ToolInfo{
 		"workspace__read_file": {Name: "read_file", Namespace: "workspace"},
 	})
 	if err != nil {

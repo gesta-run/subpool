@@ -14,8 +14,8 @@ import (
 	"github.com/coder/websocket"
 	"github.com/gesta-run/subpool/internal/domain"
 	"github.com/gesta-run/subpool/internal/gateway/clientquota"
-	"github.com/gesta-run/subpool/internal/gateway/responseevent"
 	"github.com/gesta-run/subpool/internal/jsonobject"
+	"github.com/gesta-run/subpool/internal/protocol/responseevent"
 	"github.com/gesta-run/subpool/internal/provider/codex"
 	"github.com/gesta-run/subpool/internal/store"
 )

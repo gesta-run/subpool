@@ -60,6 +60,10 @@ func (c *Client) Responses(ctx context.Context, body []byte, downstream http.Hea
 	return c.postJSON(ctx, "/responses", body, downstream, credentials, "text/event-stream")
 }
 
+func (c *Client) Compact(ctx context.Context, body []byte, downstream http.Header, credentials Credentials) (*http.Response, error) {
+	return c.postJSON(ctx, "/responses/compact", body, downstream, credentials, "application/json")
+}
+
 func (c *Client) ImageGenerations(ctx context.Context, body []byte, downstream http.Header, credentials Credentials) (*http.Response, error) {
 	return c.postJSON(ctx, "/images/generations", body, downstream, credentials, "application/json")
 }

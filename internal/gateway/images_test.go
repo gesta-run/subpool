@@ -60,7 +60,7 @@ func TestImageGenerationsUseBoundCodexSubscription(t *testing.T) {
 	if recorder.Header().Get("Content-Type") != "application/json" || recorder.Header().Get("X-Upstream") != "codex" {
 		t.Fatalf("headers = %#v", recorder.Header())
 	}
-	if recorder.Header().Get(accountHeader) != "" || recorder.Header().Get(formatHeader) != "" {
+	if recorder.Header().Get(accountHeader) != "" || recorder.Header().Get("X-Subpool-Internal-Response-Format") != "" {
 		t.Fatalf("internal headers leaked: %#v", recorder.Header())
 	}
 	if len(provider.imageGenerationBodies) != 1 || string(provider.imageGenerationBodies[0]) != requestBody || len(provider.imageEditBodies) != 0 {

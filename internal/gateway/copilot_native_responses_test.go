@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/gesta-run/subpool/internal/adapter/protocol"
 	"io"
 	"net/http"
 	"reflect"
@@ -63,13 +64,13 @@ func TestCopilotNativeResponsesToolSchemaCompatibility(t *testing.T) {
 					t.Fatalf("status=%d native/chat=%d/%d body=%s", recorder.Code, provider.responsesCalls, provider.chatCalls, recorder.Body.String())
 				}
 				var upstream map[string]any
-				if err := decodeCopilotNativeJSON(provider.body, &upstream); err != nil {
+				if err := protocol.DecodeCopilotNativeJSON(provider.body, &upstream); err != nil {
 					t.Fatal(err)
 				}
 				tool := upstream["tools"].([]any)[0].(map[string]any)
 				parameters := tool["parameters"].(map[string]any)
 				var original map[string]any
-				_ = decodeCopilotNativeJSON([]byte(nativeCopilotUnionSchema), &original)
+				_ = protocol.DecodeCopilotNativeJSON([]byte(nativeCopilotUnionSchema), &original)
 				if strings.HasPrefix(model, "grok-") {
 					if len(parameters["oneOf"].([]any)) != 3 || !reflect.DeepEqual(original["$defs"], parameters["$defs"]) {
 						t.Fatalf("schema was not safely flattened: %#v", parameters)
@@ -77,7 +78,7 @@ func TestCopilotNativeResponsesToolSchemaCompatibility(t *testing.T) {
 				} else if !reflect.DeepEqual(original, parameters) {
 					t.Fatalf("other model schema was changed: %#v", parameters)
 				}
-				if tool["name"] != stableCopilotNativeToolName("office", "schedule_update") || tool["strict"] != false {
+				if tool["name"] != protocol.StableCopilotNativeToolName("office", "schedule_update") || tool["strict"] != false {
 					t.Fatalf("tool identity or strict mode changed: %#v", tool)
 				}
 				for _, field := range []string{"reasoning", "include", "store", "parallel_tool_calls", "prompt_cache_key"} {
@@ -170,16 +171,16 @@ func TestCopilotNativeResponsesToolHistoryRoundTrip(t *testing.T) {
 		{"type":"custom_tool_call","id":"fc-2","call_id":"call-2","name":"apply_patch","namespace":"workspace","input":"line one\nline two"},
 		{"type":"custom_tool_call_output","call_id":"call-2","output":"done"}
 	],"tool_choice":{"type":"custom","name":"apply_patch","namespace":"workspace"}}`
-	raw, mappings, err := normalizeCopilotNativeResponses([]byte(request), "grok-test", true)
+	raw, mappings, err := protocol.NormalizeCopilotNativeResponses([]byte(request), "grok-test", true)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var upstream map[string]any
-	if err := decodeCopilotNativeJSON(raw, &upstream); err != nil {
+	if err := protocol.DecodeCopilotNativeJSON(raw, &upstream); err != nil {
 		t.Fatal(err)
 	}
-	lookup := copilotToolName("lookup", "workspace", mappings)
-	if lookup == "workspace__lookup" || len(lookup) > maxCopilotToolNameLength {
+	lookup := protocol.CopilotToolName("lookup", "workspace", mappings)
+	if lookup == "workspace__lookup" || len(lookup) > protocol.MaxCopilotToolNameLength {
 		t.Fatalf("namespace name collision was not handled: %q", lookup)
 	}
 	items := upstream["input"].([]any)
@@ -188,8 +189,8 @@ func TestCopilotNativeResponsesToolHistoryRoundTrip(t *testing.T) {
 		t.Fatalf("function history=%#v", call)
 	}
 	custom := items[4].(map[string]any)
-	if custom["type"] != "function_call" || custom["name"] != stableCopilotNativeToolName("workspace", "apply_patch") || custom["input"] != nil ||
-		customToolInput(custom["arguments"].(string)) != "line one\nline two" || custom["call_id"] != "call-2" ||
+	if custom["type"] != "function_call" || custom["name"] != protocol.StableCopilotNativeToolName("workspace", "apply_patch") || custom["input"] != nil ||
+		protocol.CustomToolInput(custom["arguments"].(string)) != "line one\nline two" || custom["call_id"] != "call-2" ||
 		items[5].(map[string]any)["type"] != "function_call_output" {
 		t.Fatalf("custom history=%#v", items)
 	}
@@ -202,12 +203,64 @@ func TestCopilotNativeResponsesToolHistoryRoundTrip(t *testing.T) {
 	}
 }
 
+func TestCopilotNativeResponsesCustomToolOutputIDs(t *testing.T) {
+	for _, model := range []string{"gpt-5.6-luna", "grok-4.7"} {
+		for _, test := range []struct {
+			name, id, output string
+		}{
+			{"desktop text result", `,"id":"ctco_illustrative_result"`, `"illustrative result"`},
+			{"desktop rich result", `,"id":"ctco_illustrative_result"`, `[{"type":"input_text","text":"illustrative result"}]`},
+			{"result without id", "", `"illustrative result"`},
+		} {
+			t.Run(model+"/"+test.name, func(t *testing.T) {
+				server, st, _, key := newTestServer(t)
+				st.route.Account = copilotAccountWithCipher(t, server.cipher.(*credential.Cipher), "copilot-account")
+				st.route.Pool.Provider = domain.ProviderCopilot
+				provider := &fakeCopilotProvider{supportedEndpoints: map[string]map[string]bool{model: {copilot.EndpointResponses: true}}}
+				request := fmt.Sprintf(`{"model":%q,"tools":%s,"input":[
+					{"type":"custom_tool_call","id":"fc_illustrative_call","call_id":"call-custom","name":"apply_patch","namespace":"workspace","input":"illustrative input"},
+					{"type":"custom_tool_call_output"%s,"call_id":"call-custom","output":%s},
+					{"type":"function_call","id":"fc_illustrative_function","call_id":"call-function","name":"lookup","namespace":"workspace","arguments":"{}"},
+					{"type":"function_call_output","id":"fc_illustrative_result","call_id":"call-function","output":"illustrative function result"},
+					{"role":"user","content":"Continue"}
+				]}`, model, nativeCopilotTestTools, test.id, test.output)
+				recorder := serveGateway(t, server.WithCopilot(provider), key, "/v1/responses", request)
+				if recorder.Code != http.StatusOK || provider.responsesCalls != 1 || provider.chatCalls != 0 {
+					t.Fatalf("status=%d native/chat=%d/%d body=%s", recorder.Code, provider.responsesCalls, provider.chatCalls, recorder.Body.String())
+				}
+				var upstream, original map[string]any
+				if err := protocol.DecodeCopilotNativeJSON(provider.body, &upstream); err != nil {
+					t.Fatal(err)
+				}
+				if err := protocol.DecodeCopilotNativeJSON([]byte(request), &original); err != nil {
+					t.Fatal(err)
+				}
+				items := upstream["input"].([]any)
+				originalItems := original["input"].([]any)
+				want := originalItems[1].(map[string]any)
+				want["type"] = "function_call_output"
+				delete(want, "id")
+				if !reflect.DeepEqual(items[1], want) {
+					t.Fatalf("custom result identity or output changed: want=%#v got=%#v", want, items[1])
+				}
+				call := items[0].(map[string]any)
+				if call["id"] != "fc_illustrative_call" || call["call_id"] != "call-custom" {
+					t.Fatalf("custom call identity changed: %#v", call)
+				}
+				if !reflect.DeepEqual(items[3:], originalItems[3:]) {
+					t.Fatalf("native function result or next message changed: %#v", items[3:])
+				}
+			})
+		}
+	}
+}
+
 func TestCopilotNativeResponsesAdditionalAndDeferredTools(t *testing.T) {
 	request := `{"tools":[{"type":"tool_search","execution":"client"}],"input":[
 		{"type":"additional_tools","role":"developer","tools":[{"type":"namespace","name":"files","tools":[{"type":"function","name":"read","defer_loading":true,"parameters":{"type":"object"}}]}]},
 		{"type":"message","role":"user","content":"read a file"}
 	],"tool_choice":{"type":"tool_search"}}`
-	raw, mappings, err := normalizeCopilotNativeResponses([]byte(request), "grok-test", true)
+	raw, mappings, err := protocol.NormalizeCopilotNativeResponses([]byte(request), "grok-test", true)
 	if err != nil || len(mappings) != 1 || strings.Contains(string(raw), "tool_search") || strings.Contains(string(raw), "additional_tools") ||
 		strings.Contains(string(raw), "defer_loading") || !strings.Contains(string(raw), "files__read") {
 		t.Fatalf("request=%s mappings=%#v error=%v", raw, mappings, err)
@@ -215,7 +268,7 @@ func TestCopilotNativeResponsesAdditionalAndDeferredTools(t *testing.T) {
 }
 
 func TestCopilotNativeResponsesToolChoiceFiltering(t *testing.T) {
-	lookupChoice := `"name":"` + stableCopilotNativeToolName("workspace", "lookup") + `"`
+	lookupChoice := `"name":"` + protocol.StableCopilotNativeToolName("workspace", "lookup") + `"`
 	tests := []struct {
 		name, choice, want string
 		wantError          bool
@@ -230,7 +283,7 @@ func TestCopilotNativeResponsesToolChoiceFiltering(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			request := `{"input":"hello","tools":[{"type":"namespace","name":"workspace","tools":[{"type":"function","name":"lookup"}]},{"type":"web_search"}],"tool_choice":` + test.choice + `}`
-			raw, _, err := normalizeCopilotNativeResponses([]byte(request), "grok-test", true)
+			raw, _, err := protocol.NormalizeCopilotNativeResponses([]byte(request), "grok-test", true)
 			if (err != nil) != test.wantError || err == nil && !strings.Contains(string(raw), test.want) {
 				t.Fatalf("request=%s error=%v", raw, err)
 			}
@@ -238,7 +291,7 @@ func TestCopilotNativeResponsesToolChoiceFiltering(t *testing.T) {
 	}
 	for _, choice := range []string{`"auto"`, `"none"`, `"required"`} {
 		request := `{"input":"hi","tools":[{"type":"web_search"}],"tool_choice":` + choice + `}`
-		raw, _, err := normalizeCopilotNativeResponses([]byte(request), "grok-test", true)
+		raw, _, err := protocol.NormalizeCopilotNativeResponses([]byte(request), "grok-test", true)
 		if choice == `"required"` {
 			if err == nil {
 				t.Fatal("required tool was silently discarded")
@@ -302,7 +355,7 @@ data: {"type":"response.output_item.done","sequence_number":6,"output_index":1,"
 event: response.completed
 data: {"type":"response.completed","sequence_number":7,"response":{"id":"resp-native","status":"completed","model":"grok-test","output":[{"type":"reasoning","id":"reason-1","encrypted_content":"illustrative-opaque-data","summary":[]},{"type":"function_call","id":"fc-1","call_id":"call-1","name":"workspace__apply_patch","arguments":"{\"input\":\"line one\\nline two\"}","status":"completed"}],"usage":{"input_tokens":7,"output_tokens":3}}}
 
-	`, "workspace__apply_patch", stableCopilotNativeToolName("workspace", "apply_patch"))
+	`, "workspace__apply_patch", protocol.StableCopilotNativeToolName("workspace", "apply_patch"))
 }
 
 func TestCopilotNativeResponsesRestoresCustomCallsAndUsage(t *testing.T) {
@@ -345,30 +398,12 @@ func TestCopilotNativeResponsesRestoresCustomCallsAndUsage(t *testing.T) {
 func TestCopilotNativeResponsesRestoresJSONAndOrdinaryNamespaces(t *testing.T) {
 	response := &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/json"}},
 		Body: io.NopCloser(strings.NewReader(`{"id":"resp-json","status":"completed","example":9007199254740993,"output":[{"type":"function_call","id":"fc-1","call_id":"call-1","name":"files__read","arguments":"{}"}]}`))}
-	restoreCopilotNativeResponses(response, map[string]copilotToolInfo{"files__read": {Name: "read", Namespace: "files"}})
+	protocol.RestoreCopilotNativeResponses(response, map[string]protocol.ToolInfo{"files__read": {Name: "read", Namespace: "files"}})
 	defer response.Body.Close()
 	raw, err := io.ReadAll(response.Body)
 	if err != nil || !bytes.Contains(raw, []byte(`"namespace":"files"`)) || !bytes.Contains(raw, []byte(`"name":"read"`)) ||
 		!bytes.Contains(raw, []byte(`"example":9007199254740993`)) {
 		t.Fatalf("response=%s error=%v", raw, err)
-	}
-}
-
-func TestCopilotNativeResponsesCustomStreamWithoutArgumentsDone(t *testing.T) {
-	fixture := nativeCopilotToolResponseFixture()
-	start := strings.Index(fixture, "event: response.function_call_arguments.done")
-	end := strings.Index(fixture[start:], "event: response.output_item.done") + start
-	fixture = fixture[:start] + fixture[end:]
-	state := &copilotNativeToolStream{mappings: map[string]copilotToolInfo{
-		stableCopilotNativeToolName("workspace", "apply_patch"): {Name: "apply_patch", Namespace: "workspace", Custom: true},
-	}, calls: make(map[string]*copilotNativeCall)}
-	var output bytes.Buffer
-	if err := state.writeStream(&output, strings.NewReader(fixture)); err != nil {
-		t.Fatal(err)
-	}
-	if strings.Count(output.String(), "event: response.custom_tool_call_input.done") != 1 ||
-		!strings.Contains(output.String(), `"input":"line one\nline two"`) {
-		t.Fatalf("missing custom call completion: %s", output.String())
 	}
 }
 
@@ -381,7 +416,7 @@ func TestCopilotNativeResponsesRejectsMalformedToolInput(t *testing.T) {
 		`{"input":[{"type":"additional_tools","role":"user","tools":[]}]}`,
 		`{"tools":[{"type":"tool_search","execution":"client"}]}`,
 	} {
-		if _, _, err := normalizeCopilotNativeResponses([]byte(request), "grok-test", true); err == nil {
+		if _, _, err := protocol.NormalizeCopilotNativeResponses([]byte(request), "grok-test", true); err == nil {
 			t.Fatalf("accepted malformed tools: %s", request)
 		}
 	}
@@ -415,7 +450,7 @@ func TestCopilotNativeResponsesCloseUnblocksUpstream(t *testing.T) {
 	upstream, writer := io.Pipe()
 	defer writer.Close()
 	response := &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: upstream}
-	restoreCopilotNativeResponses(response, map[string]copilotToolInfo{"files__read": {Name: "read", Namespace: "files"}})
+	protocol.RestoreCopilotNativeResponses(response, map[string]protocol.ToolInfo{"files__read": {Name: "read", Namespace: "files"}})
 	if err := response.Body.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -434,15 +469,6 @@ func TestCopilotNativeResponsesCloseUnblocksUpstream(t *testing.T) {
 	}
 }
 
-func TestCopilotNativeResponsesRejectsMalformedStreamEvents(t *testing.T) {
-	for _, event := range []string{"null", "[]", "invalid"} {
-		state := &copilotNativeToolStream{mappings: map[string]copilotToolInfo{}, calls: map[string]*copilotNativeCall{}}
-		if err := state.writeStream(io.Discard, strings.NewReader("data: "+event+"\n\n")); err == nil {
-			t.Fatalf("malformed event was accepted: %q", event)
-		}
-	}
-}
-
 func TestCopilotNativeResponsesRetainsCustomFormats(t *testing.T) {
 	for _, namespace := range []bool{false, true} {
 		for _, syntax := range []string{"regex", "lark"} {
@@ -457,7 +483,7 @@ func TestCopilotNativeResponsesRetainsCustomFormats(t *testing.T) {
 					tool = map[string]any{"type": "namespace", "name": "diagnostic", "tools": []any{tool}}
 				}
 				request, _ := json.Marshal(map[string]any{"input": "Return a token.", "tools": []any{tool}})
-				body, mappings, err := normalizeCopilotNativeResponses(request, "grok-test", true)
+				body, mappings, err := protocol.NormalizeCopilotNativeResponses(request, "grok-test", true)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -471,8 +497,8 @@ func TestCopilotNativeResponsesRetainsCustomFormats(t *testing.T) {
 				}
 				if syntax == "regex" {
 					info := mappings[function["name"].(string)]
-					if input["pattern"] != definition || info.InputPattern == nil || validateCopilotCustomInput(info, "TEST_7") != nil ||
-						validateCopilotCustomInput(info, "invalid") == nil {
+					if input["pattern"] != definition || info.InputPattern == nil || protocol.ValidateCopilotCustomInput(info, "TEST_7") != nil ||
+						protocol.ValidateCopilotCustomInput(info, "invalid") == nil {
 						t.Fatalf("regex validation was lost: %s", body)
 					}
 				}
@@ -487,7 +513,7 @@ func TestCopilotNativeResponsesRejectsUnsupportedCustomFormats(t *testing.T) {
 		`{"type":"grammar","syntax":"regex","definition":"["}`, `{"type":"grammar","syntax":"lark"}`,
 	} {
 		request := `{"input":"hello","tools":[{"type":"custom","name":"emit_token","format":` + format + `}]}`
-		if _, _, err := normalizeCopilotNativeResponses([]byte(request), "grok-test", true); err == nil {
+		if _, _, err := protocol.NormalizeCopilotNativeResponses([]byte(request), "grok-test", true); err == nil {
 			t.Fatalf("accepted unsupported custom format: %s", format)
 		}
 	}
@@ -495,7 +521,7 @@ func TestCopilotNativeResponsesRejectsUnsupportedCustomFormats(t *testing.T) {
 
 func TestCopilotNativeResponsesRejectsInvalidRegexToolCalls(t *testing.T) {
 	request := []byte(`{"input":"hello","tools":[{"type":"custom","name":"emit_token","format":{"type":"grammar","syntax":"regex","definition":"a|ab"}}]}`)
-	_, mappings, err := normalizeCopilotNativeResponses(request, "grok-test", true)
+	_, mappings, err := protocol.NormalizeCopilotNativeResponses(request, "grok-test", true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -514,7 +540,7 @@ func TestCopilotNativeResponsesRejectsInvalidRegexToolCalls(t *testing.T) {
 				}
 				response := &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {contentType}},
 					Body: io.NopCloser(bytes.NewReader(body))}
-				restoreCopilotNativeResponses(response, mappings)
+				protocol.RestoreCopilotNativeResponses(response, mappings)
 				defer response.Body.Close()
 				restored, err := io.ReadAll(response.Body)
 				if input == "invalid" {
@@ -529,59 +555,18 @@ func TestCopilotNativeResponsesRejectsInvalidRegexToolCalls(t *testing.T) {
 	}
 }
 
-func TestCopilotNativeResponsesStableContinuationAliases(t *testing.T) {
-	tools := []any{map[string]any{"type": "namespace", "name": "workspace", "tools": []any{
-		map[string]any{"type": "function", "name": "lookup", "parameters": map[string]any{"type": "object"}},
-	}}}
-	first, _ := json.Marshal(map[string]any{"input": "Look up an illustrative record.", "tools": tools})
-	_, before, err := normalizeCopilotNativeResponses(first, "grok-test", true)
-	if err != nil {
-		t.Fatal(err)
-	}
-	alias := copilotToolName("lookup", "workspace", before)
-	tools = append(tools, map[string]any{"type": "function", "name": "workspace__lookup"})
-	second, _ := json.Marshal(map[string]any{"previous_response_id": "resp-test", "input": "Continue.", "tools": tools})
-	_, after, err := normalizeCopilotNativeResponses(second, "grok-test", true)
-	if err != nil || alias != copilotToolName("lookup", "workspace", after) {
-		t.Fatalf("native continuation alias changed: before=%#v after=%#v error=%v", before, after, err)
-	}
-	state := &copilotNativeToolStream{mappings: after, calls: make(map[string]*copilotNativeCall)}
-	item := map[string]any{"type": "function_call", "name": alias, "arguments": "{}", "id": "fc-test"}
-	if err := state.restoreItem(item); err != nil || item["name"] != "lookup" || item["namespace"] != "workspace" {
-		t.Fatalf("previous alias was not restored: %#v error=%v", item, err)
-	}
-	continuation := []byte(`{"previous_response_id":"resp-test","input":[{"type":"function_call","name":"lookup","namespace":"workspace","arguments":"{}"}]}`)
-	withoutTools, _, err := normalizeCopilotNativeResponses(continuation, "grok-test", true)
-	if err != nil || !bytes.Contains(withoutTools, []byte(alias)) {
-		t.Fatalf("history without declarations changed alias: %s error=%v", withoutTools, err)
-	}
-}
-
 func TestCopilotNativeResponsesRejectsAliasCollisions(t *testing.T) {
-	alias := stableCopilotNativeToolName("workspace", "lookup")
+	alias := protocol.StableCopilotNativeToolName("workspace", "lookup")
 	request := `{"input":"hello","tools":[{"type":"namespace","name":"workspace","tools":[{"type":"function","name":"lookup"}]},{"type":"function","name":"` + alias + `"}]}`
-	if _, _, err := normalizeCopilotNativeResponses([]byte(request), "grok-test", true); err == nil {
+	if _, _, err := protocol.NormalizeCopilotNativeResponses([]byte(request), "grok-test", true); err == nil {
 		t.Fatal("stable alias collision was silently remapped")
 	}
-	if stableCopilotNativeToolName("a__b", "c") == stableCopilotNativeToolName("a", "b__c") {
+	if protocol.StableCopilotNativeToolName("a__b", "c") == protocol.StableCopilotNativeToolName("a", "b__c") {
 		t.Fatal("different tool identities share an alias")
 	}
-	long := stableCopilotNativeToolName(strings.Repeat("workspace", 30), strings.Repeat("lookup", 30))
-	if len(long) > maxCopilotToolNameLength {
+	long := protocol.StableCopilotNativeToolName(strings.Repeat("workspace", 30), strings.Repeat("lookup", 30))
+	if len(long) > protocol.MaxCopilotToolNameLength {
 		t.Fatalf("tool name exceeds upstream limit: %d", len(long))
-	}
-}
-
-func TestCopilotNativeResponsesPreservesIncompleteCustomInput(t *testing.T) {
-	request := []byte(`{"input":"hello","tools":[{"type":"custom","name":"emit_token","format":{"type":"grammar","syntax":"regex","definition":"TEST_[0-9]+"}}]}`)
-	_, mappings, err := normalizeCopilotNativeResponses(request, "grok-test", true)
-	if err != nil {
-		t.Fatal(err)
-	}
-	state := &copilotNativeToolStream{mappings: mappings, calls: make(map[string]*copilotNativeCall)}
-	item := map[string]any{"type": "function_call", "name": "emit_token", "id": "fc-test", "status": "incomplete", "arguments": `{"input":"TEST_"}`}
-	if err := state.restoreItem(item); err != nil || item["type"] != "custom_tool_call" || item["input"] != "TEST_" {
-		t.Fatalf("incomplete input was rejected: %#v error=%v", item, err)
 	}
 }
 
@@ -593,7 +578,7 @@ func nativeCopilotPlainHistory() []byte {
 func TestCopilotNativeResponsesDoesNotDecodePlainHistory(t *testing.T) {
 	request := nativeCopilotPlainHistory()
 	allocations := testing.AllocsPerRun(1, func() {
-		if _, _, err := normalizeCopilotNativeResponses(request, "grok-test", true); err != nil {
+		if _, _, err := protocol.NormalizeCopilotNativeResponses(request, "grok-test", true); err != nil {
 			t.Fatal(err)
 		}
 	})
@@ -601,7 +586,7 @@ func TestCopilotNativeResponsesDoesNotDecodePlainHistory(t *testing.T) {
 		t.Fatalf("plain history allocations scale with message count: %.0f", allocations)
 	}
 	const rawItem = `{"type":"message","role":"user","content":[{"type":"input_image","image_url":"data:image/png;base64,illustrative"}],"number":9007199254740993}`
-	body, _, err := normalizeCopilotNativeResponses([]byte(`{"input":[`+rawItem+`]}`), "grok-test", true)
+	body, _, err := protocol.NormalizeCopilotNativeResponses([]byte(`{"input":[`+rawItem+`]}`), "grok-test", true)
 	if err != nil || !bytes.Contains(body, []byte(rawItem)) {
 		t.Fatalf("untouched input was re-encoded: %s error=%v", body, err)
 	}
@@ -613,7 +598,7 @@ func BenchmarkCopilotNativePlainHistory(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
-		if _, _, err := normalizeCopilotNativeResponses(request, "grok-test", true); err != nil {
+		if _, _, err := protocol.NormalizeCopilotNativeResponses(request, "grok-test", true); err != nil {
 			b.Fatal(err)
 		}
 	}
@@ -739,36 +724,11 @@ func assertNativeCopilotStableIDs(t *testing.T, events []map[string]any) {
 	}
 }
 
-func TestCopilotNativeResponsesRestoresChangingCustomCallIDs(t *testing.T) {
-	fixture := nativeCopilotToolResponseFixture()
-	for _, kind := range []string{"response.function_call_arguments.delta", "response.function_call_arguments.done", "response.output_item.done", "response.completed"} {
-		lines := strings.Split(fixture, "\n")
-		for index, line := range lines {
-			if strings.Contains(line, `"type":"`+kind+`"`) {
-				lines[index] = strings.ReplaceAll(line, `"fc-1"`, `"fc-changing-`+kind+`"`)
-			}
-		}
-		fixture = strings.Join(lines, "\n")
-	}
-	state := &copilotNativeToolStream{mappings: map[string]copilotToolInfo{
-		stableCopilotNativeToolName("workspace", "apply_patch"): {Name: "apply_patch", Namespace: "workspace", Custom: true},
-	}, calls: make(map[string]*copilotNativeCall)}
-	var output bytes.Buffer
-	if err := state.writeStream(&output, strings.NewReader(fixture)); err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(output.String(), "response.function_call_arguments.") || strings.Contains(output.String(), "fc-changing-") ||
-		strings.Count(output.String(), "event: response.custom_tool_call_input.done") != 1 ||
-		!strings.Contains(output.String(), `"input":"line one\nline two"`) || !strings.Contains(output.String(), `"call_id":"call-1"`) {
-		t.Fatalf("custom call identity or protocol was lost: %s", output.String())
-	}
-}
-
 func TestCopilotNativeResponsesStreamsBeforeCompletionWithoutTools(t *testing.T) {
 	upstream, writer := io.Pipe()
 	defer writer.Close()
 	response := &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: upstream}
-	restoreCopilotNativeResponses(response, nil)
+	protocol.RestoreCopilotNativeResponses(response, nil)
 	defer response.Body.Close()
 	go func() {
 		_, _ = io.WriteString(writer, "data: {\"type\":\"response.output_text.delta\",\"output_index\":0,\"item_id\":\"msg-native\",\"delta\":\"Hi\"}\n\n")

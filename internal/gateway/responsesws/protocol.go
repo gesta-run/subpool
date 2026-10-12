@@ -10,8 +10,8 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/gesta-run/subpool/internal/gateway/responseevent"
 	"github.com/gesta-run/subpool/internal/jsonobject"
+	"github.com/gesta-run/subpool/internal/protocol/responseevent"
 )
 
 const (

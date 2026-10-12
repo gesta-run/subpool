@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/gesta-run/subpool/internal/adapter/protocol"
 	"net/http"
 	"reflect"
 	"strings"
@@ -24,7 +25,7 @@ func TestCopilotNativeReasoningNullContentIsModelScoped(t *testing.T) {
 		t.Run(model, func(t *testing.T) {
 			request := []byte(`{"input":[` + nativeReasoningNullItem + `],"reasoning":{"effort":"high"}}`)
 			original := bytes.Clone(request)
-			body, _, err := normalizeCopilotNativeResponses(request, model, true)
+			body, _, err := protocol.NormalizeCopilotNativeResponses(request, model, true)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -50,14 +51,14 @@ func TestCopilotNativeReasoningPreservesOtherContent(t *testing.T) {
 		`{"type":"message","role":"assistant","content":null}`,
 		`{"type":"message","role":"user","content":[{"type":"input_image","image_url":"data:image/png;base64,illustrative"}],"example":9007199254740993}`,
 	} {
-		body, _, err := normalizeCopilotNativeResponses([]byte(`{"input":[`+item+`]}`), "grok-4.7", true)
+		body, _, err := protocol.NormalizeCopilotNativeResponses([]byte(`{"input":[`+item+`]}`), "grok-4.7", true)
 		input, _ := jsonobject.Lookup(body, "input")
 		if err != nil || string(input) != "["+item+"]" {
 			t.Fatalf("untouched history was changed: %s error=%v", body, err)
 		}
 	}
 	request := `{"input":[{"type":"reas\u006fning","c\u006fntent": null,"summary":[],"encrypted_content":"illustrative"}]}`
-	body, _, err := normalizeCopilotNativeResponses([]byte(request), "grok-4.7", true)
+	body, _, err := protocol.NormalizeCopilotNativeResponses([]byte(request), "grok-4.7", true)
 	if err != nil || !bytes.Contains(body, []byte(`"type":"reas\u006fning"`)) || bytes.Contains(body, []byte(`c\u006fntent`)) {
 		t.Fatalf("escaped reasoning fields were not normalized: %s error=%v", body, err)
 	}
@@ -203,7 +204,7 @@ func nativeReasoningTestOutput(round int) []any {
 		"summary": []any{}, "encrypted_content": "illustrative-opaque-data", "status": "completed"}
 	if round == 0 {
 		return []any{reasoning, map[string]any{"type": "function_call", "id": "fc-test", "call_id": "call-test",
-			"name": stableCopilotNativeToolName("workspace", "lookup"), "arguments": "{}", "status": "completed"}}
+			"name": protocol.StableCopilotNativeToolName("workspace", "lookup"), "arguments": "{}", "status": "completed"}}
 	}
 	return []any{reasoning, map[string]any{"type": "message", "id": fmt.Sprintf("msg-test-%d", round), "role": "assistant",
 		"content": []any{map[string]any{"type": "output_text", "text": "Illustrative reply", "annotations": []any{}}}}}
@@ -258,7 +259,7 @@ func assertNativeReasoningRequest(t *testing.T, body []byte, history []any) {
 		} else if item["type"] == "function_call" {
 			name, _ := item["name"].(string)
 			namespace, _ := item["namespace"].(string)
-			item["name"] = nativeCopilotToolName(name, namespace)
+			item["name"] = protocol.NativeCopilotToolName(name, namespace)
 			delete(item, "namespace")
 		}
 	}
@@ -283,7 +284,7 @@ func TestCopilotNativeReasoningDoesNotDecodeUntouchedHistory(t *testing.T) {
 	history.WriteString(`]}`)
 	for _, request := range [][]byte{nativeCopilotPlainHistory(), history.Bytes()} {
 		allocations := testing.AllocsPerRun(1, func() {
-			if _, _, err := normalizeCopilotNativeResponses(request, "grok-4.7", true); err != nil {
+			if _, _, err := protocol.NormalizeCopilotNativeResponses(request, "grok-4.7", true); err != nil {
 				t.Fatal(err)
 			}
 		})

@@ -1,4 +1,4 @@
-package gateway
+package protocol
 
 import (
 	"bufio"
@@ -6,18 +6,15 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"github.com/gesta-run/subpool/internal/adapter/copilotstream"
+	"github.com/gesta-run/subpool/internal/adapter/toolschema"
+	"github.com/gesta-run/subpool/internal/jsonobject"
 	"io"
 	"net/http"
 	"strings"
-
-	"github.com/gesta-run/subpool/internal/gateway/copilotstream"
-	"github.com/gesta-run/subpool/internal/gateway/toolschema"
-	"github.com/gesta-run/subpool/internal/jsonobject"
 )
 
-// An advertised Responses endpoint does not imply support for all OpenAI tools.
-// In particular, Copilot's Grok endpoint rejects hosted tools and tool namespaces.
-func normalizeCopilotNativeResponses(raw []byte, model string, allowToolFallback bool) ([]byte, map[string]copilotToolInfo, error) {
+func NormalizeCopilotNativeResponses(raw []byte, model string, allowToolFallback bool) ([]byte, map[string]ToolInfo, error) {
 	object, err := jsonobject.Parse(raw)
 	if err != nil {
 		return nil, nil, fmt.Errorf("invalid JSON request")
@@ -74,7 +71,7 @@ func copilotNativeDeclaredTools(object *jsonobject.Object) ([]any, error) {
 	var tools []any
 	if raw, exists := object.Value("tools"); exists {
 		var value any
-		if err := decodeCopilotNativeJSON(raw, &value); err != nil {
+		if err := DecodeCopilotNativeJSON(raw, &value); err != nil {
 			return nil, err
 		}
 		var ok bool
@@ -91,7 +88,7 @@ func copilotNativeDeclaredTools(object *jsonobject.Object) ([]any, error) {
 			return nil
 		}
 		var additional map[string]any
-		if err := decodeCopilotNativeJSON(item, &additional); err != nil {
+		if err := DecodeCopilotNativeJSON(item, &additional); err != nil {
 			return err
 		}
 		declared, err := responseToolsWithAdditional(nil, false, []any{additional})
@@ -101,7 +98,7 @@ func copilotNativeDeclaredTools(object *jsonobject.Object) ([]any, error) {
 	return tools, err
 }
 
-func copilotNativeTools(tools []any, omitHosted, allowToolFallback bool) ([]any, map[string]copilotToolInfo, error) {
+func copilotNativeTools(tools []any, omitHosted, allowToolFallback bool) ([]any, map[string]ToolInfo, error) {
 	var callable, hosted []any
 	for _, entry := range tools {
 		tool, ok := entry.(map[string]any)
@@ -142,7 +139,7 @@ func copilotNativeTools(tools []any, omitHosted, allowToolFallback bool) ([]any,
 func normalizeCopilotNativeChoice(object *jsonobject.Object, count int, omitHosted, allowToolFallback bool) error {
 	if encoded, exists := object.Value("tool_choice"); exists {
 		var choice any
-		if err := decodeCopilotNativeJSON(encoded, &choice); err != nil {
+		if err := DecodeCopilotNativeJSON(encoded, &choice); err != nil {
 			return err
 		}
 		if forced, ok := choice.(map[string]any); ok && omitHosted {
@@ -251,7 +248,7 @@ func writeCopilotNativeToolHistory(output *bytes.Buffer, raw []byte, kind string
 		if json.Unmarshal(encoded, &namespace) == nil && namespace != "" {
 			encodedName, _ := item.Value("name")
 			_ = json.Unmarshal(encodedName, &name)
-			_ = setCopilotNativeJSON(item, "name", nativeCopilotToolName(name, namespace))
+			_ = setCopilotNativeJSON(item, "name", NativeCopilotToolName(name, namespace))
 			item.Delete("namespace")
 		}
 	}
@@ -267,6 +264,8 @@ func writeCopilotNativeToolHistory(output *bytes.Buffer, raw []byte, kind string
 		item.Delete("input")
 	} else if kind == "custom_tool_call_output" {
 		_ = setCopilotNativeJSON(item, "type", "function_call_output")
+		// Custom output IDs are incompatible with function outputs; call_id links the result.
+		item.Delete("id")
 	}
 	item.AppendTo(output)
 	return nil
@@ -274,8 +273,8 @@ func writeCopilotNativeToolHistory(output *bytes.Buffer, raw []byte, kind string
 
 // Native previous_response_id history keeps upstream names across requests.
 // Never change an alias to make room for a new declaration: reject collisions.
-func stableCopilotNativeToolNames(flat []any, previous map[string]copilotToolInfo) (map[string]copilotToolInfo, error) {
-	mappings := make(map[string]copilotToolInfo, len(previous))
+func stableCopilotNativeToolNames(flat []any, previous map[string]ToolInfo) (map[string]ToolInfo, error) {
+	mappings := make(map[string]ToolInfo, len(previous))
 	used := make(map[string]struct{}, len(flat))
 	for _, entry := range flat {
 		function := entry.(map[string]any)["function"].(map[string]any)
@@ -292,7 +291,7 @@ func stableCopilotNativeToolNames(flat []any, previous map[string]copilotToolInf
 		name, _ := function["name"].(string)
 		info, mapped := previous[name]
 		if info.Namespace != "" {
-			name = stableCopilotNativeToolName(info.Namespace, info.Name)
+			name = StableCopilotNativeToolName(info.Namespace, info.Name)
 			if _, exists := used[name]; exists {
 				return nil, fmt.Errorf("tool name %q conflicts with a stable namespace alias", name)
 			}
@@ -318,11 +317,11 @@ func stableCopilotNativeToolNames(flat []any, previous map[string]copilotToolInf
 	return mappings, nil
 }
 
-func stableCopilotNativeToolName(namespace, name string) string {
+func StableCopilotNativeToolName(namespace, name string) string {
 	digest := fmt.Sprintf("%x", sha256.Sum256([]byte(namespace+"\x00"+name)))
 	var prefix strings.Builder
 	for _, char := range namespace + "__" + name {
-		if prefix.Len() == maxCopilotToolNameLength-18 {
+		if prefix.Len() == MaxCopilotToolNameLength-18 {
 			break
 		}
 		if char >= 'a' && char <= 'z' || char >= 'A' && char <= 'Z' || char >= '0' && char <= '9' || char == '_' || char == '-' {
@@ -334,14 +333,14 @@ func stableCopilotNativeToolName(namespace, name string) string {
 	return prefix.String() + "__" + digest[:16]
 }
 
-func nativeCopilotToolName(name, namespace string) string {
+func NativeCopilotToolName(name, namespace string) string {
 	if namespace == "" {
 		return name
 	}
-	return stableCopilotNativeToolName(namespace, name)
+	return StableCopilotNativeToolName(namespace, name)
 }
 
-func decodeCopilotNativeJSON(raw []byte, value any) error {
+func DecodeCopilotNativeJSON(raw []byte, value any) error {
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.UseNumber()
 	return decoder.Decode(value)
@@ -367,7 +366,7 @@ func copilotNativeToolChoice(value any, omitHosted bool) (any, error) {
 			return nil, fmt.Errorf("function tool_choice requires name")
 		}
 		namespace, _ := choice["namespace"].(string)
-		return map[string]any{"type": "function", "name": nativeCopilotToolName(name, namespace)}, nil
+		return map[string]any{"type": "function", "name": NativeCopilotToolName(name, namespace)}, nil
 	case "allowed_tools":
 		tools, ok := choice["tools"].([]any)
 		if !ok {
@@ -404,7 +403,7 @@ func copilotNativeToolChoice(value any, omitHosted bool) (any, error) {
 
 // Restore the client-facing tool protocol before the shared HTTP/WS proxies
 // inspect events, so reasoning, session IDs, usage and failure handling stay native.
-func restoreCopilotNativeResponses(resp *http.Response, mappings map[string]copilotToolInfo) {
+func RestoreCopilotNativeResponses(resp *http.Response, mappings map[string]ToolInfo) {
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return
 	}
@@ -450,13 +449,13 @@ func (b *copilotNativeBody) Close() error {
 }
 
 type copilotNativeCall struct {
-	info      copilotToolInfo
+	info      ToolInfo
 	arguments strings.Builder
 	done      bool
 }
 
 type copilotNativeToolStream struct {
-	mappings map[string]copilotToolInfo
+	mappings map[string]ToolInfo
 	calls    map[string]*copilotNativeCall
 	sequence int64
 	identity copilotstream.Identity
@@ -481,9 +480,9 @@ func (s *copilotNativeToolStream) restoreItem(item map[string]any) error {
 	}
 	if info.Custom {
 		arguments, _ := item["arguments"].(string)
-		input := customToolInput(arguments)
+		input := CustomToolInput(arguments)
 		if arguments != "" && item["status"] != "in_progress" && item["status"] != "incomplete" {
-			if err := validateCopilotCustomInput(info, input); err != nil {
+			if err := ValidateCopilotCustomInput(info, input); err != nil {
 				return err
 			}
 		}
@@ -554,7 +553,7 @@ func (s *copilotNativeToolStream) finishCustomCall(call *copilotNativeCall, id s
 		return nil, nil
 	}
 	call.done = true
-	input := customToolInput(arguments)
+	input := CustomToolInput(arguments)
 	// Validate when the completed item arrives, not while it may be incomplete.
 	call.arguments.Reset()
 	return []map[string]any{
@@ -563,7 +562,7 @@ func (s *copilotNativeToolStream) finishCustomCall(call *copilotNativeCall, id s
 	}, nil
 }
 
-func validateCopilotCustomInput(info copilotToolInfo, input string) error {
+func ValidateCopilotCustomInput(info ToolInfo, input string) error {
 	if info.InputPattern != nil {
 		if !info.InputPattern.MatchString(input) {
 			return fmt.Errorf("Copilot custom tool %q input does not match its regex grammar", info.Name)
@@ -589,7 +588,7 @@ func (s *copilotNativeToolStream) writeStream(w io.Writer, upstream io.Reader) e
 			return err
 		}
 		var event map[string]any
-		if err := decodeCopilotNativeJSON([]byte(raw), &event); err != nil {
+		if err := DecodeCopilotNativeJSON([]byte(raw), &event); err != nil {
 			return err
 		}
 		if event == nil {

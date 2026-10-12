@@ -1,17 +1,159 @@
-package gateway
+package protocol
 
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"net/http"
+	"github.com/gesta-run/subpool/internal/jsonobject"
+	"regexp"
 	"strconv"
 	"unicode/utf8"
-
-	"github.com/gesta-run/subpool/internal/domain"
-	"github.com/gesta-run/subpool/internal/jsonobject"
 )
+
+const MaxCopilotToolNameLength = 64
+
+type ToolInfo struct {
+	Name         string         `json:"name"`
+	Namespace    string         `json:"namespace,omitempty"`
+	Custom       bool           `json:"custom,omitempty"`
+	InputPattern *regexp.Regexp `json:"-"`
+}
+
+// isCopilotOmittableTool lists Responses tools that Copilot Chat Completions cannot represent.
+func isCopilotOmittableTool(toolType string) bool {
+	switch toolType {
+	case "web_search", "web_search_preview", "file_search", "mcp",
+		"shell", "local_shell", "computer", "computer_use_preview",
+		"image_generation", "code_interpreter":
+		return true
+	default:
+		return false
+	}
+}
+
+func responseToolsWithAdditional(value any, hasTools bool, input any) ([]any, error) {
+	var tools []any
+	if hasTools {
+		declared, ok := value.([]any)
+		if !ok {
+			return nil, fmt.Errorf("tools must be an array")
+		}
+		tools = append(tools, declared...)
+	}
+	items, ok := input.([]any)
+	if !ok {
+		return tools, nil
+	}
+	for _, rawItem := range items {
+		item, valid := rawItem.(map[string]any)
+		if !valid || item["type"] != "additional_tools" {
+			continue
+		}
+		role, _ := item["role"].(string)
+		if role != "developer" {
+			return nil, fmt.Errorf("additional_tools requires developer role")
+		}
+		additional, valid := item["tools"].([]any)
+		if !valid {
+			return nil, fmt.Errorf("additional_tools requires tools")
+		}
+		tools = append(tools, additional...)
+	}
+	return tools, nil
+}
+
+func responseCustomToolToChat(tool map[string]any, name string) (map[string]any, error) {
+	originalName, _ := tool["name"].(string)
+	if originalName == "" {
+		return nil, fmt.Errorf("custom tool requires name")
+	}
+	if name == "" {
+		name = originalName
+	}
+	function := map[string]any{"name": name}
+	if description, ok := tool["description"].(string); ok && description != "" {
+		function["description"] = description
+	}
+	input, err := copilotCustomInputSchema(tool["format"])
+	if err != nil {
+		return nil, err
+	}
+	function["parameters"] = map[string]any{
+		"type": "object", "properties": map[string]any{"input": input},
+		"required": []string{"input"}, "additionalProperties": false,
+	}
+	return function, nil
+}
+
+func copilotCustomInputSchema(value any) (map[string]any, error) {
+	input := map[string]any{"type": "string"}
+	if value == nil {
+		return input, nil
+	}
+	format, ok := value.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("custom tool format must be an object")
+	}
+	switch format["type"] {
+	case "text":
+		return input, nil
+	case "grammar":
+		definition, _ := format["definition"].(string)
+		if definition == "" {
+			return nil, fmt.Errorf("custom tool grammar requires a definition")
+		}
+		syntax, _ := format["syntax"].(string)
+		switch syntax {
+		case "regex":
+			if _, err := compileCopilotRegexGrammar(definition); err != nil {
+				return nil, fmt.Errorf("custom tool regex is not supported: %w", err)
+			}
+			input["pattern"] = definition
+		case "lark":
+			// Function wrapping cannot enforce CFG sampling. Retain the grammar
+			// as explicit guidance; the client tool still validates its input.
+		default:
+			return nil, fmt.Errorf("custom tool grammar syntax %q is not supported", syntax)
+		}
+		input["description"] = "Return input conforming to this " + syntax + " grammar, without Markdown fences:\n" + definition
+		return input, nil
+	default:
+		return nil, fmt.Errorf("custom tool format type is not supported")
+	}
+}
+
+func compileCopilotRegexGrammar(pattern string) (*regexp.Regexp, error) {
+	return regexp.Compile("\\A(?:" + pattern + ")\\z")
+}
+
+func responseToolChoiceToChat(value any, copilotTools map[string]ToolInfo, allowToolFallback bool) (any, error) {
+	if choice, ok := value.(string); ok {
+		switch choice {
+		case "auto", "none", "required":
+			return choice, nil
+		default:
+			return nil, fmt.Errorf("tool_choice %q is not supported for GitHub Copilot", choice)
+		}
+	}
+	choice, ok := value.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("tool_choice is not supported for GitHub Copilot")
+	}
+	choiceType, _ := choice["type"].(string)
+	if allowToolFallback && (choiceType == "tool_search" || isCopilotOmittableTool(choiceType)) {
+		return nil, nil
+	}
+	if choiceType != "function" && choiceType != "custom" {
+		return nil, fmt.Errorf("tool_choice is not supported for GitHub Copilot")
+	}
+	name, _ := choice["name"].(string)
+	if name == "" {
+		return nil, fmt.Errorf("function tool_choice requires name")
+	}
+	namespace, _ := choice["namespace"].(string)
+	name = CopilotToolName(name, namespace, copilotTools)
+	return map[string]any{"type": "function", "function": map[string]any{"name": name}}, nil
+}
 
 func copilotOmitsNullReasoningContent(model string) bool {
 	return model == "grok-4.7" || model == "grok-4.6"
@@ -21,14 +163,14 @@ func copilotUsesStringAssistantHistory(model string) bool {
 	return model == "claude-sonnet-5.5" || model == "claude-haiku-4.5"
 }
 
-type copilotRequestError struct {
-	code    string
-	message string
+type RequestError struct {
+	Code    string
+	Message string
 }
 
-func (e *copilotRequestError) Error() string { return e.message }
+func (e *RequestError) Error() string { return e.Message }
 
-func validateCopilotRequest(kind, model string, raw []byte) error {
+func ValidateCopilotRequest(kind, model string, raw []byte) error {
 	if kind != "responses" && kind != "chat_completions" {
 		return nil
 	}
@@ -40,7 +182,7 @@ func validateCopilotRequest(kind, model string, raw []byte) error {
 				return fmt.Errorf("invalid tool_choice")
 			}
 			if copilotForcesFunctionChoice(choice) {
-				return &copilotRequestError{code: "unsupported_tool_choice", message: "GitHub Copilot claude-sonnet-5.5 does not support required or named function/custom tool_choice; use auto or none, or select a model that supports forced tool calls"}
+				return &RequestError{Code: "unsupported_tool_choice", Message: "GitHub Copilot claude-sonnet-5.5 does not support required or named function/custom tool_choice; use auto or none, or select a model that supports forced tool calls"}
 			}
 		}
 	}
@@ -52,7 +194,7 @@ func validateCopilotRequest(kind, model string, raw []byte) error {
 		}
 		var value string
 		if json.Unmarshal(effort, &value) == nil && value == "xhigh" {
-			return &copilotRequestError{code: "invalid_reasoning_effort", message: "GitHub Copilot gemini-3.8-flash does not support xhigh reasoning effort; use a supported effort such as high or omit it"}
+			return &RequestError{Code: "invalid_reasoning_effort", Message: "GitHub Copilot gemini-3.8-flash does not support xhigh reasoning effort; use a supported effort such as high or omit it"}
 		}
 	}
 	return nil
@@ -70,18 +212,7 @@ func copilotForcesFunctionChoice(value any) bool {
 	return kind == "function" || kind == "custom" || (kind == "allowed_tools" && choice["mode"] == "required")
 }
 
-func copilotRequestFailure(poolProvider string, err error) (*http.Response, retryReason, bool) {
-	if poolProvider == domain.ProviderMixed {
-		return nil, retryUnsupported, false
-	}
-	var invalid *copilotRequestError
-	if errors.As(err, &invalid) {
-		return openAIErrorResponse(http.StatusBadRequest, invalid.message, invalid.code), "", true
-	}
-	return chatConversionFailure(poolProvider, err)
-}
-
-func normalizeCopilotChatHistory(raw []byte, model string) ([]byte, error) {
+func NormalizeCopilotChatHistory(raw []byte, model string) ([]byte, error) {
 	if !copilotUsesStringAssistantHistory(model) {
 		return raw, nil
 	}

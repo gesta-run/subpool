@@ -30,6 +30,12 @@ func (c *Client) Responses(ctx context.Context, body []byte, source http.Header,
 	return c.post(ctx, "/responses", body, source, credentials)
 }
 
+func (c *Client) Compact(ctx context.Context, body []byte, source http.Header, credentials Credentials) (*http.Response, error) {
+	headers := make(http.Header)
+	headers.Set("Accept", "application/json")
+	return c.post(ctx, "/responses/compact", body, headers, credentials)
+}
+
 func (c *Client) ChatCompletions(ctx context.Context, body []byte, source http.Header, credentials Credentials) (*http.Response, error) {
 	return c.post(ctx, "/chat/completions", body, source, credentials)
 }

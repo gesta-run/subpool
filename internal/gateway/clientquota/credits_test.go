@@ -68,3 +68,45 @@ func TestCopilotCreditsRejectStaleOrFailedQuotaChecks(t *testing.T) {
 		t.Fatal("failed quota check produced credits")
 	}
 }
+
+func TestMoveHeadersSeparatesCreditsFromProviderHeaders(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		credits http.Header
+	}{
+		{"available", http.Header{hasCreditsHeader: {"true"}, unlimitedHeader: {"false"}, balanceHeader: {"75"}}},
+		{"unlimited", http.Header{hasCreditsHeader: {"false"}, unlimitedHeader: {"true"}}},
+		{"exhausted", http.Header{hasCreditsHeader: {"false"}, unlimitedHeader: {"false"}}},
+		{"missing", make(http.Header)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			source := test.credits.Clone()
+			source.Set("Content-Type", "text/event-stream")
+			source.Add("Set-Cookie", "illustrative-first=1")
+			source.Add("Set-Cookie", "illustrative-second=2")
+			destination := http.Header{"X-Trace": {"illustrative"}}
+			for name := range test.credits {
+				destination[name] = []string{"stale", "stale"}
+			}
+			MoveHeaders(destination, source)
+			for _, name := range []string{hasCreditsHeader, unlimitedHeader, balanceHeader} {
+				want := test.credits.Get(name)
+				values := destination.Values(name)
+				if want == "" {
+					if len(values) != 0 {
+						t.Errorf("unexpected %s values: %q", name, values)
+					}
+				} else if len(values) != 1 || values[0] != want {
+					t.Errorf("%s values = %q, want exactly [%q]", name, values, want)
+				}
+				if len(source.Values(name)) != 0 {
+					t.Errorf("%s remains available for duplicate forwarding", name)
+				}
+			}
+			if source.Get("Content-Type") != "text/event-stream" || len(source.Values("Set-Cookie")) != 2 ||
+				destination.Get("X-Trace") != "illustrative" || destination.Get("Content-Type") != "" {
+				t.Fatalf("unrelated headers changed: source=%#v destination=%#v", source, destination)
+			}
+		})
+	}
+}

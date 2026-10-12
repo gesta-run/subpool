@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/gesta-run/subpool/internal/adapter/protocol"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -549,7 +550,7 @@ func TestCopilotTokenRejectionDisablesAccount(t *testing.T) {
 }
 
 func TestNormalizeCodexRequestConvertsStringInput(t *testing.T) {
-	body, err := normalizeCodexRequest([]byte(`{"model":"gpt-5.6-sol","input":"Reply with OK"}`), "11111111-1111-4111-8111-111111111111", false)
+	body, err := protocol.NormalizeCodexRequest([]byte(`{"model":"gpt-5.6-sol","input":"Reply with OK"}`), "11111111-1111-4111-8111-111111111111", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -582,7 +583,7 @@ func TestNormalizeCodexRequestEnforcesAccountFastMode(t *testing.T) {
 		{name: "disabled", enabled: false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			body, err := normalizeCodexRequest([]byte(`{"model":"gpt-test","service_tier":"flex","input":"hello"}`), "11111111-1111-4111-8111-111111111111", test.enabled)
+			body, err := protocol.NormalizeCodexRequest([]byte(`{"model":"gpt-test","service_tier":"flex","input":"hello"}`), "11111111-1111-4111-8111-111111111111", test.enabled)
 			if err != nil {
 				t.Fatal(err)
 			}

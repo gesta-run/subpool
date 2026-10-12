@@ -15,26 +15,22 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/gesta-run/subpool/internal/adapter"
 	"github.com/gesta-run/subpool/internal/auth"
 	"github.com/gesta-run/subpool/internal/catalog"
 	"github.com/gesta-run/subpool/internal/credential"
 	"github.com/gesta-run/subpool/internal/domain"
 	"github.com/gesta-run/subpool/internal/gateway/clientquota"
-	"github.com/gesta-run/subpool/internal/gateway/responseevent"
 	"github.com/gesta-run/subpool/internal/gateway/responsesws"
-	"github.com/gesta-run/subpool/internal/jsonobject"
+	"github.com/gesta-run/subpool/internal/protocol/responseevent"
 	"github.com/gesta-run/subpool/internal/provider/codex"
 	"github.com/gesta-run/subpool/internal/provider/copilot"
-	"github.com/gesta-run/subpool/internal/provider/openaicompat"
 	"github.com/gesta-run/subpool/internal/store"
 )
 
 const (
 	maxProviderAttempts = 8
 	accountHeader       = "X-Subpool-Internal-Account-Id"
-	formatHeader        = "X-Subpool-Internal-Response-Format"
-	customToolHeader    = "X-Subpool-Internal-Copilot-Custom-Tool"
-	namespaceToolHeader = "X-Subpool-Internal-Copilot-Namespace-Tool"
 	// Retry-After can point at the next quota window, days away, while quota may
 	// return sooner (manual reset, top-up); static keys have no quota probe.
 	maxRateLimitCooldown = 15 * time.Minute
@@ -60,22 +56,11 @@ type Cipher interface {
 	Decrypt([]byte) ([]byte, error)
 }
 
-type CodexClient interface {
-	Responses(context.Context, []byte, http.Header, codex.Credentials) (*http.Response, error)
-	ImageGenerations(context.Context, []byte, http.Header, codex.Credentials) (*http.Response, error)
-	ImageEdits(context.Context, []byte, http.Header, codex.Credentials) (*http.Response, error)
-}
+type CodexClient = adapter.CodexClient
 
-type OpenAICompatibleClient interface {
-	Responses(context.Context, []byte, http.Header, openaicompat.Credentials) (*http.Response, error)
-	ChatCompletions(context.Context, []byte, http.Header, openaicompat.Credentials) (*http.Response, error)
-}
+type OpenAICompatibleClient = adapter.CompatibleClient
 
-type CopilotClient interface {
-	ChatCompletions(context.Context, []byte, http.Header, copilot.Credentials) (*http.Response, error)
-	Responses(context.Context, []byte, http.Header, copilot.Credentials) (*http.Response, error)
-	SupportsEndpoint(context.Context, string, string, copilot.Credentials) (bool, error)
-}
+type CopilotClient = adapter.CopilotClient
 
 type Server struct {
 	store               store.Store
@@ -136,6 +121,7 @@ func (s *Server) WithResponsesWebSocket(enabled, forceHTTPBridge bool, codexUpst
 
 func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/responses", s.handleResponses)
+	mux.HandleFunc("POST /v1/responses/compact", s.handleCompact)
 	if s.responsesWS.Enabled() {
 		mux.HandleFunc("GET /v1/responses", s.responsesWS.Handle)
 	}
@@ -145,17 +131,43 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/models", s.handleModels)
 }
 
+func (s *Server) handleCompact(w http.ResponseWriter, r *http.Request) {
+	route, ok := s.authorize(w, r, "responses")
+	if !ok {
+		return
+	}
+	body, meta, releaseBody, ok := s.readRequest(w, r)
+	if !ok {
+		return
+	}
+	defer releaseBody()
+	if meta.Stream || meta.PreviousResponseID != "" {
+		writeOpenAIError(w, http.StatusBadRequest, "standalone compaction requires full input and does not support streaming or previous_response_id", "invalid_request_error")
+		return
+	}
+	response, ok := s.call(w, r, route, adapter.Request{Kind: "responses_compact", Model: meta.Model, Body: body}, "")
+	releaseBody()
+	if !ok {
+		return
+	}
+	defer response.Body.Close()
+	accountID := response.Header.Get(accountHeader)
+	response.Header.Del(accountHeader)
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		s.proxyUpstreamError(w, response.Response)
+		return
+	}
+	clientquota.MoveHeaders(w.Header(), response.Header)
+	response.Render(w, false, adapter.Request{Kind: "responses_compact", Model: meta.Model}, s.responseObserver(route.Key.ID, "", accountID))
+}
+
 type requestMeta struct {
 	Model              string `json:"model"`
 	Stream             bool   `json:"stream"`
 	PreviousResponseID string `json:"previous_response_id"`
-}
-
-type upstreamRequest struct {
-	kind         string
-	model        string
-	body         []byte
-	copilotTools map[string]copilotToolInfo
+	StreamOptions      struct {
+		IncludeUsage bool `json:"include_usage"`
+	} `json:"stream_options"`
 }
 
 func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
@@ -168,36 +180,21 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer releaseBody()
-	resp, ok := s.call(w, r, route, upstreamRequest{kind: "responses", model: meta.Model, body: body}, meta.PreviousResponseID)
+	response, ok := s.call(w, r, route, adapter.Request{Kind: "responses", Model: meta.Model, Body: body}, meta.PreviousResponseID)
 	releaseBody()
 	if !ok {
 		return
 	}
-	defer resp.Body.Close()
-	accountID := resp.Header.Get(accountHeader)
-	format := resp.Header.Get(formatHeader)
-	copilotTools := copilotToolsFromHeaders(resp.Header)
-	resp.Header.Del(accountHeader)
-	resp.Header.Del(formatHeader)
-	resp.Header.Del(customToolHeader)
-	resp.Header.Del(namespaceToolHeader)
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		s.proxyUpstreamError(w, resp)
+	defer response.Body.Close()
+	accountID := response.Header.Get(accountHeader)
+	response.Header.Del(accountHeader)
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		s.proxyUpstreamError(w, response.Response)
 		return
 	}
-	if meta.Stream {
-		if format == "chat_completions" {
-			s.proxyCopilotResponsesStream(w, route.Key.ID, route.Pool.ID, accountID, meta.Model, copilotTools, resp)
-			return
-		}
-		s.proxyResponsesStream(w, r, route.Key.ID, route.Pool.ID, accountID, meta.Model, resp)
-		return
-	}
-	if format == "chat_completions" {
-		s.proxyCopilotResponsesJSON(w, route.Key.ID, route.Pool.ID, accountID, meta.Model, copilotTools, resp)
-		return
-	}
-	s.proxyResponsesJSON(w, r, route.Key.ID, route.Pool.ID, accountID, meta.Model, resp)
+	clientquota.MoveHeaders(w.Header(), response.Header)
+	response.Render(w, meta.Stream, adapter.Request{Kind: "responses", Model: meta.Model},
+		s.responseObserver(route.Key.ID, route.Pool.ID, accountID))
 }
 
 func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
@@ -210,33 +207,20 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer releaseBody()
-	resp, ok := s.call(w, r, route, upstreamRequest{kind: "chat_completions", model: meta.Model, body: body}, "")
+	response, ok := s.call(w, r, route, adapter.Request{Kind: "chat_completions", Model: meta.Model, Body: body}, "")
 	releaseBody()
 	if !ok {
 		return
 	}
-	defer resp.Body.Close()
-	accountID := resp.Header.Get(accountHeader)
-	format := resp.Header.Get(formatHeader)
-	resp.Header.Del(accountHeader)
-	resp.Header.Del(formatHeader)
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		s.proxyUpstreamError(w, resp)
+	defer response.Body.Close()
+	accountID := response.Header.Get(accountHeader)
+	response.Header.Del(accountHeader)
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		s.proxyUpstreamError(w, response.Response)
 		return
 	}
-	if meta.Stream {
-		if format == "chat_completions" {
-			s.proxyCompatibleChatStream(w, route.Key.ID, accountID, meta.Model, resp)
-			return
-		}
-		s.proxyChatStream(w, route.Key.ID, accountID, meta.Model, resp)
-		return
-	}
-	if format == "chat_completions" {
-		s.proxyCompatibleChatJSON(w, route.Key.ID, meta.Model, resp)
-		return
-	}
-	s.proxyChatJSON(w, route.Key.ID, accountID, meta.Model, resp)
+	response.Render(w, meta.Stream, adapter.Request{Kind: "chat_completions", Model: meta.Model, IncludeUsage: meta.StreamOptions.IncludeUsage},
+		s.responseObserver(route.Key.ID, "", accountID))
 }
 
 func (s *Server) handleImageGenerations(w http.ResponseWriter, r *http.Request) {
@@ -259,15 +243,14 @@ func (s *Server) handleImages(w http.ResponseWriter, r *http.Request, kind strin
 		return
 	}
 	defer releaseBody()
-	resp, ok := s.call(w, r, route, upstreamRequest{kind: kind, model: meta.Model, body: body}, "")
+	resp, ok := s.call(w, r, route, adapter.Request{Kind: kind, Model: meta.Model, Body: body}, "")
 	releaseBody()
 	if !ok {
 		return
 	}
 	defer resp.Body.Close()
 	resp.Header.Del(accountHeader)
-	resp.Header.Del(formatHeader)
-	s.proxyImageJSON(w, route.Key.ID, meta.Model, resp)
+	s.proxyImageJSON(w, route.Key.ID, meta.Model, resp.Response)
 }
 
 func (s *Server) authorize(w http.ResponseWriter, r *http.Request, requiredScope string) (domain.KeyRoute, bool) {
@@ -327,76 +310,7 @@ func scopeAllowed(scopes []string, required string) bool {
 	return false
 }
 
-func normalizeCodexRequest(body []byte, installationID string, fastMode bool) ([]byte, error) {
-	return normalizeCodexPayload(body, installationID, fastMode, false)
-}
-
-func normalizeCodexWebSocketRequest(body []byte, installationID string, fastMode bool) ([]byte, error) {
-	return normalizeCodexPayload(body, installationID, fastMode, true)
-}
-
-func normalizeCodexPayload(body []byte, installationID string, fastMode, webSocket bool) ([]byte, error) {
-	value, err := jsonobject.Parse(body)
-	if err != nil {
-		return nil, fmt.Errorf("decode Codex request: %w", err)
-	}
-	if webSocket {
-		value.Delete("stream")
-	} else {
-		_ = value.Set("stream", []byte("true"))
-	}
-	_ = value.Set("store", []byte("false"))
-	if fastMode {
-		_ = value.Set("service_tier", []byte(`"priority"`))
-	} else {
-		value.Delete("service_tier")
-	}
-	for _, unsupported := range []string{"temperature", "top_p", "logprobs", "top_logprobs"} {
-		value.Delete(unsupported)
-	}
-	if instructions, ok := value.Value("instructions"); !ok || bytes.Equal(bytes.TrimSpace(instructions), []byte("null")) {
-		_ = value.Set("instructions", []byte(`""`))
-	}
-	if input, ok := value.Value("input"); ok && len(input) > 0 && input[0] == '"' {
-		wrapped := make([]byte, 0, len(input)+80)
-		wrapped = append(wrapped, `[{"role":"user","content":[{"type":"input_text","text":`...)
-		wrapped = append(wrapped, input...)
-		wrapped = append(wrapped, `}]}]`...)
-		_ = value.Set("input", wrapped)
-	}
-	metadata, exists := value.Value("client_metadata")
-	rewrittenMetadata, err := rewriteClientMetadata(metadata, exists, installationID)
-	if err != nil {
-		return nil, err
-	}
-	_ = value.Set("client_metadata", rewrittenMetadata)
-	return value.Bytes(), nil
-}
-
-func forceProviderStream(body []byte) []byte {
-	value, err := jsonobject.Parse(body)
-	if err != nil {
-		return body
-	}
-	_ = value.Set("stream", []byte("true"))
-	return value.Bytes()
-}
-
-func rewriteClientMetadata(raw []byte, exists bool, installationID string) ([]byte, error) {
-	metadata := make(map[string]any)
-	if exists && !bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
-		if err := json.Unmarshal(raw, &metadata); err != nil || metadata == nil {
-			return nil, codex.ErrInvalidClientMetadata
-		}
-	}
-	request := map[string]any{"client_metadata": metadata}
-	if err := codex.ApplyDeviceIdentity(request, installationID); err != nil {
-		return nil, err
-	}
-	return json.Marshal(request["client_metadata"])
-}
-
-func (s *Server) call(w http.ResponseWriter, r *http.Request, route domain.KeyRoute, request upstreamRequest, previousResponseID string) (*http.Response, bool) {
+func (s *Server) call(w http.ResponseWriter, r *http.Request, route domain.KeyRoute, request adapter.Request, previousResponseID string) (*adapter.Response, bool) {
 	account := route.Account
 	var err error
 	continuation := previousResponseID != ""
@@ -407,7 +321,7 @@ func (s *Server) call(w http.ResponseWriter, r *http.Request, route domain.KeyRo
 			return nil, false
 		}
 	}
-	if !continuation && !isImageRequest(request.kind) && route.Pool.Provider == domain.ProviderMixed && account.CredentialType == domain.CredentialAPIKey {
+	if !continuation && !isImageRequest(request.Kind) && route.Pool.Provider == domain.ProviderMixed && account.CredentialType == domain.CredentialAPIKey {
 		if preferred, reassignErr := s.store.ReassignAPIKey(r.Context(), route.Key.ID, route.Pool.ID, nil); reassignErr == nil {
 			account = preferred
 		}
@@ -458,8 +372,8 @@ func (s *Server) call(w http.ResponseWriter, r *http.Request, route domain.KeyRo
 	return nil, false
 }
 
-func (s *Server) attemptAccount(r *http.Request, route domain.KeyRoute, request upstreamRequest, account domain.ProviderAccount) (*http.Response, retryReason, bool) {
-	if isImageRequest(request.kind) && !isCodexSubscriptionAccount(account) {
+func (s *Server) attemptAccount(r *http.Request, route domain.KeyRoute, request adapter.Request, account domain.ProviderAccount) (*adapter.Response, retryReason, bool) {
+	if isImageRequest(request.Kind) && !isCodexSubscriptionAccount(account) {
 		return nil, retryUnsupported, false
 	}
 	credentials, err := s.credentials(account)
@@ -467,73 +381,25 @@ func (s *Server) attemptAccount(r *http.Request, route domain.KeyRoute, request 
 		s.recordHealthFailure(r.Context(), account.ID, "credential_unavailable")
 		return nil, retryUnavailable, false
 	}
-	if (account.Provider == "" || account.Provider == domain.ProviderCodex) && request.kind == "chat_completions" {
-		if convertErr := prepareChatResponsesRequest(&request); convertErr != nil {
-			return chatConversionFailure(route.Pool.Provider, convertErr)
-		}
-	}
-	if account.Provider == domain.ProviderCopilot && s.copilot != nil {
-		endpoints, retry, complete, ready := s.copilotEndpoints(r.Context(), account.ID, request.model, credentials.copilot)
-		if !ready {
-			return nil, retry, complete
-		}
-		if err := validateCopilotRequest(request.kind, request.model, request.body); err != nil {
-			return copilotRequestFailure(route.Pool.Provider, err)
-		}
-		if request.kind == "chat_completions" {
-			body, err := normalizeCopilotChatHistory(request.body, request.model)
-			if err != nil {
-				return copilotRequestFailure(route.Pool.Provider, err)
-			}
-			request.body = body
-		}
-		if request.kind == "responses" && endpoints.responses {
-			body, mappings, convertErr := normalizeCopilotNativeResponses(request.body, request.model, route.Pool.Provider == domain.ProviderCopilot)
-			if convertErr != nil {
-				return chatConversionFailure(route.Pool.Provider, convertErr)
-			}
-			request.kind = "copilot_responses"
-			request.body = body
-			request.copilotTools = mappings
-		} else if request.kind == "responses" {
-			if !endpoints.chat {
-				return nil, retryUnsupported, false
-			}
-			body, copilotTools, convertErr := responsesToChat(request.body, route.Pool.Provider == domain.ProviderCopilot)
-			if convertErr != nil {
-				if route.Pool.Provider == domain.ProviderMixed {
-					return nil, retryUnsupported, false
-				}
-				return openAIErrorResponse(http.StatusBadRequest, convertErr.Error(), "unsupported_request"), "", true
-			}
-			request.body = body
-			request.copilotTools = copilotTools
-		} else if request.kind == "chat_completions" && !endpoints.chat {
-			if !endpoints.responses {
-				return nil, retryUnsupported, false
-			}
-			if convertErr := prepareChatResponsesRequest(&request); convertErr != nil {
-				return chatConversionFailure(route.Pool.Provider, convertErr)
-			}
-			request.kind = "copilot_responses"
-		}
-		if request.kind == "responses" {
-			body, err := normalizeCopilotChatHistory(request.body, request.model)
-			if err != nil {
-				return copilotRequestFailure(route.Pool.Provider, err)
-			}
-			request.body = body
-		}
-	}
-	resp, err := s.providerAccountResponse(r.Context(), request, r.Header, credentials, account)
+	response, err := s.providerAccountResponse(r.Context(), request, r.Header, credentials, account, route.Pool.Provider)
 	if err != nil {
+		if errors.Is(err, adapter.ErrUnsupported) {
+			return nil, retryUnsupported, false
+		}
+		var requestError *adapter.RequestError
+		if errors.As(err, &requestError) {
+			if route.Pool.Provider == domain.ProviderMixed {
+				return nil, retryUnsupported, false
+			}
+			return &adapter.Response{Response: openAIErrorResponse(http.StatusBadRequest, requestError.Message, requestError.Code)}, "", true
+		}
 		retry, complete := s.evaluateProviderError(r.Context(), account.ID, err)
 		return nil, retry, complete
 	}
-	if !isAuthenticationStatus(account.Provider, resp.StatusCode) {
-		return s.evaluateResponse(r.Context(), route.Key.ID, account.ID, resp)
+	if !isAuthenticationStatus(account.Provider, response.StatusCode) {
+		return s.evaluateResponse(r.Context(), route.Key.ID, account.ID, response)
 	}
-	drainAndClose(resp)
+	drainAndClose(response.Response)
 	if !refreshableCredentials(account) {
 		_ = s.store.UpdateProviderStatus(r.Context(), account.ID, domain.AccountAuthFailed, nil)
 		return nil, retryAuth, false
@@ -541,42 +407,7 @@ func (s *Server) attemptAccount(r *http.Request, route domain.KeyRoute, request 
 	return s.retryRefreshedAccount(r, route, request, account)
 }
 
-func prepareChatResponsesRequest(request *upstreamRequest) error {
-	body, err := chatToResponses(request.body)
-	if err != nil {
-		return err
-	}
-	request.body = forceProviderStream(body)
-	return nil
-}
-
-func chatConversionFailure(poolProvider string, err error) (*http.Response, retryReason, bool) {
-	if poolProvider == domain.ProviderMixed {
-		return nil, retryUnsupported, false
-	}
-	return openAIErrorResponse(http.StatusBadRequest, err.Error(), "unsupported_request"), "", true
-}
-
-type copilotEndpointSupport struct {
-	responses bool
-	chat      bool
-}
-
-func (s *Server) copilotEndpoints(ctx context.Context, accountID, model string, credentials copilot.Credentials) (copilotEndpointSupport, retryReason, bool, bool) {
-	responsesSupported, err := s.copilot.SupportsEndpoint(ctx, model, copilot.EndpointResponses, credentials)
-	if err != nil {
-		retry, complete := s.evaluateProviderError(ctx, accountID, err)
-		return copilotEndpointSupport{}, retry, complete, false
-	}
-	chatSupported, err := s.copilot.SupportsEndpoint(ctx, model, copilot.EndpointChatCompletions, credentials)
-	if err != nil {
-		retry, complete := s.evaluateProviderError(ctx, accountID, err)
-		return copilotEndpointSupport{}, retry, complete, false
-	}
-	return copilotEndpointSupport{responses: responsesSupported, chat: chatSupported}, "", false, true
-}
-
-func (s *Server) retryRefreshedAccount(r *http.Request, route domain.KeyRoute, request upstreamRequest, account domain.ProviderAccount) (*http.Response, retryReason, bool) {
+func (s *Server) retryRefreshedAccount(r *http.Request, route domain.KeyRoute, request adapter.Request, account domain.ProviderAccount) (*adapter.Response, retryReason, bool) {
 	refreshed, err := s.refresh(r.Context(), account)
 	if err != nil {
 		if s.recordRefreshFailure(r.Context(), account.ID, err) {
@@ -589,28 +420,28 @@ func (s *Server) retryRefreshedAccount(r *http.Request, route domain.KeyRoute, r
 		s.recordHealthFailure(r.Context(), refreshed.ID, "credential_unavailable")
 		return nil, retryUnavailable, false
 	}
-	resp, err := s.providerAccountResponse(r.Context(), request, r.Header, credentials, refreshed)
+	resp, err := s.providerAccountResponse(r.Context(), request, r.Header, credentials, refreshed, route.Pool.Provider)
 	if err != nil {
 		retry, complete := s.evaluateProviderError(r.Context(), refreshed.ID, err)
 		return nil, retry, complete
 	}
 	if isAuthenticationStatus(refreshed.Provider, resp.StatusCode) {
-		drainAndClose(resp)
+		drainAndClose(resp.Response)
 		_ = s.store.UpdateProviderStatus(r.Context(), refreshed.ID, domain.AccountAuthFailed, nil)
 		return nil, retryAuth, false
 	}
 	return s.evaluateResponse(r.Context(), route.Key.ID, refreshed.ID, resp)
 }
 
-func (s *Server) evaluateResponse(ctx context.Context, keyID, accountID string, resp *http.Response) (*http.Response, retryReason, bool) {
+func (s *Server) evaluateResponse(ctx context.Context, keyID, accountID string, resp *adapter.Response) (*adapter.Response, retryReason, bool) {
 	if resp.StatusCode == http.StatusTooManyRequests {
 		retryAt := retryAfter(resp.Header, s.now())
-		drainAndClose(resp)
+		drainAndClose(resp.Response)
 		_ = s.store.UpdateProviderStatus(ctx, accountID, domain.AccountCoolingDown, &retryAt)
 		return nil, retryRateLimit, false
 	}
-	if unsupportedModelResponse(resp) {
-		drainAndClose(resp)
+	if unsupportedModelResponse(resp.Response) {
+		drainAndClose(resp.Response)
 		return nil, retryUnsupported, false
 	}
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
@@ -622,7 +453,7 @@ func (s *Server) evaluateResponse(ctx context.Context, keyID, accountID string, 
 	}
 	if resp.StatusCode >= 500 {
 		s.recordHealthFailure(ctx, accountID, "provider_5xx")
-		drainAndClose(resp)
+		drainAndClose(resp.Response)
 		return nil, retryProvider5xx, false
 	}
 	resp.Header.Set(accountHeader, accountID)
@@ -773,30 +604,24 @@ func unsupportedModelResponse(resp *http.Response) bool {
 	return strings.Contains(message, "model") && strings.Contains(message, "not available for this endpoint")
 }
 
-type providerCredentials struct {
-	codex      codex.Credentials
-	copilot    copilot.Credentials
-	compatible openaicompat.Credentials
-}
-
-func (s *Server) credentials(account domain.ProviderAccount) (providerCredentials, error) {
+func (s *Server) credentials(account domain.ProviderAccount) (adapter.Credentials, error) {
 	plaintext, err := s.cipher.Decrypt(account.CredentialCiphertext)
 	if err != nil {
-		return providerCredentials{}, err
+		return adapter.Credentials{}, err
 	}
-	var credentials providerCredentials
+	var credentials adapter.Credentials
 	switch account.Provider {
 	case "", domain.ProviderCodex:
-		err = json.Unmarshal(plaintext, &credentials.codex)
+		err = json.Unmarshal(plaintext, &credentials.Codex)
 	case domain.ProviderOpenAICompatible:
-		err = json.Unmarshal(plaintext, &credentials.compatible)
+		err = json.Unmarshal(plaintext, &credentials.Compatible)
 	case domain.ProviderCopilot:
-		err = json.Unmarshal(plaintext, &credentials.copilot)
+		err = json.Unmarshal(plaintext, &credentials.Copilot)
 	default:
 		err = fmt.Errorf("unsupported provider %q", account.Provider)
 	}
 	if err != nil {
-		return providerCredentials{}, err
+		return adapter.Credentials{}, err
 	}
 	return credentials, nil
 }
@@ -855,74 +680,24 @@ func drainAndClose(resp *http.Response) {
 	_ = resp.Body.Close()
 }
 
-func (s *Server) providerAccountResponse(ctx context.Context, request upstreamRequest, header http.Header, credentials providerCredentials, account domain.ProviderAccount) (*http.Response, error) {
-	var (
-		resp           *http.Response
-		err            error
-		responseFormat = request.kind
-	)
-	switch account.Provider {
-	case "", domain.ProviderCodex:
-		installationID, identityErr := codex.InstallationID(account.ID)
-		if identityErr != nil {
-			err = identityErr
-			break
-		}
-		upstreamHeaders := codex.DeviceIdentityHeaders(header, installationID)
-		if isImageRequest(request.kind) {
-			if request.kind == "image_edits" {
-				resp, err = s.codex.ImageEdits(ctx, request.body, upstreamHeaders, credentials.codex)
-			} else {
-				resp, err = s.codex.ImageGenerations(ctx, request.body, upstreamHeaders, credentials.codex)
-			}
-			break
-		}
-		normalizedBody, normalizeErr := normalizeCodexRequest(request.body, installationID, account.FastModeEnabled)
-		if normalizeErr != nil {
-			err = normalizeErr
-			break
-		}
-		codex.SetRoutingHint(upstreamHeaders, request.model, account.FastModeEnabled)
-		resp, err = s.codex.Responses(ctx, normalizedBody, upstreamHeaders, credentials.codex)
-		responseFormat = "responses"
-	case domain.ProviderOpenAICompatible:
-		if s.compatible == nil {
-			err = errors.New("OpenAI-compatible provider client is unavailable")
-			break
-		}
-		if request.kind == "chat_completions" {
-			resp, err = s.compatible.ChatCompletions(ctx, request.body, header, credentials.compatible)
-		} else {
-			resp, err = s.compatible.Responses(ctx, forceProviderStream(request.body), header, credentials.compatible)
-		}
-	case domain.ProviderCopilot:
-		if s.copilot == nil {
-			err = errors.New("Copilot provider client is unavailable")
-			break
-		}
-		if request.kind == "copilot_responses" {
-			resp, err = s.copilot.Responses(ctx, request.body, header, credentials.copilot)
-			responseFormat = "responses"
-			if err == nil && resp != nil && resp.Body != nil {
-				restoreCopilotNativeResponses(resp, request.copilotTools)
-			}
-		} else {
-			resp, err = s.copilot.ChatCompletions(ctx, request.body, header, credentials.copilot)
-			responseFormat = "chat_completions"
-		}
-	default:
-		err = fmt.Errorf("unsupported provider %q", account.Provider)
-	}
+func (s *Server) providerAccountResponse(ctx context.Context, request adapter.Request, header http.Header, credentials adapter.Credentials, account domain.ProviderAccount, poolProvider string) (*adapter.Response, error) {
+	provider, err := adapter.For(account.Provider, adapter.Clients{Codex: s.codex, Compatible: s.compatible, Copilot: s.copilot})
 	if err != nil {
 		return nil, err
 	}
-	if resp == nil || resp.Body == nil {
+	response, err := provider.RoundTrip(ctx, request,
+		header, credentials, adapter.Options{AccountID: account.ID, FastMode: account.FastModeEnabled, AllowToolFallback: poolProvider == domain.ProviderCopilot})
+	if err != nil {
+		return nil, err
+	}
+	if response == nil || response.Response == nil || response.Body == nil {
 		return nil, errors.New("provider returned an empty response")
 	}
-	resp.Header.Set(formatHeader, responseFormat)
-	clientquota.ApplyHeaders(resp.Header, account, s.now())
-	setCopilotToolHeaders(resp.Header, request.copilotTools)
-	return resp, nil
+	if response.Header == nil {
+		response.Header = make(http.Header)
+	}
+	clientquota.ApplyHeaders(response.Header, account, s.now())
+	return response, nil
 }
 
 func writeOpenAIError(w http.ResponseWriter, status int, message, code string) {

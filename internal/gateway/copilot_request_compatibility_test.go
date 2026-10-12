@@ -3,6 +3,7 @@ package gateway
 import (
 	"bytes"
 	"encoding/json"
+	"github.com/gesta-run/subpool/internal/adapter/protocol"
 	"net/http"
 	"runtime"
 	"strings"
@@ -28,9 +29,9 @@ func TestCopilotAssistantHistoryIsModelScoped(t *testing.T) {
 				var normalized []byte
 				var err error
 				if native {
-					normalized, _, err = normalizeCopilotNativeResponses(raw, model, true)
+					normalized, _, err = protocol.NormalizeCopilotNativeResponses(raw, model, true)
 				} else {
-					normalized, err = normalizeCopilotChatHistory(raw, model)
+					normalized, err = protocol.NormalizeCopilotChatHistory(raw, model)
 				}
 				if err != nil || !bytes.Equal(raw, original) {
 					t.Fatalf("normalization error=%v or mutated original", err)
@@ -67,11 +68,11 @@ func TestCopilotAssistantHistoryPreservesNonTextAndOtherRoles(t *testing.T) {
 	} {
 		t.Run(item, func(t *testing.T) {
 			raw := []byte(`{"messages":[` + item + `]}`)
-			got, err := normalizeCopilotChatHistory(raw, "claude-haiku-4.5")
+			got, err := protocol.NormalizeCopilotChatHistory(raw, "claude-haiku-4.5")
 			if err != nil || !bytes.Equal(got, raw) {
 				t.Fatalf("untouched history changed: %s error=%v", got, err)
 			}
-			got, _, err = normalizeCopilotNativeResponses([]byte(`{"input":[`+item+`]}`), "claude-sonnet-5.5", true)
+			got, _, err = protocol.NormalizeCopilotNativeResponses([]byte(`{"input":[`+item+`]}`), "claude-sonnet-5.5", true)
 			input, _ := jsonobject.Lookup(got, "input")
 			if err != nil || string(input) != "["+item+"]" {
 				t.Fatalf("native history changed: %s error=%v", got, err)
@@ -82,7 +83,7 @@ func TestCopilotAssistantHistoryPreservesNonTextAndOtherRoles(t *testing.T) {
 
 func TestCopilotAssistantHistoryPreservesTextOrderAndToolCalls(t *testing.T) {
 	const message = `{"type":"message","r\u006fle":"assistant","content":[{"type":"text","text":"FIRST\n"},{"type":"output_text","text":"SECOND \"DEMO\""}],"tool_calls":[{"id":"call-demo","type":"function","function":{"name":"echo","arguments":"{}"}}]}`
-	got, err := normalizeCopilotChatHistory([]byte(`{"messages":[`+message+`]}`), "claude-sonnet-5.5")
+	got, err := protocol.NormalizeCopilotChatHistory([]byte(`{"messages":[`+message+`]}`), "claude-sonnet-5.5")
 	if err != nil || !bytes.Contains(got, []byte(`"content":"FIRST\nSECOND \"DEMO\""`)) ||
 		!bytes.Contains(got, []byte(`"tool_calls":[{"id":"call-demo","type":"function","function":{"name":"echo","arguments":"{}"}}]`)) {
 		t.Fatalf("text order or tool calls changed: %s error=%v", got, err)
@@ -116,9 +117,9 @@ func TestCopilotAssistantHistoryPreservesJSONTextSemantics(t *testing.T) {
 			var body []byte
 			var err error
 			if native {
-				body, _, err = normalizeCopilotNativeResponses(raw, "claude-sonnet-5.5", true)
+				body, _, err = protocol.NormalizeCopilotNativeResponses(raw, "claude-sonnet-5.5", true)
 			} else {
-				body, err = normalizeCopilotChatHistory(raw, "claude-haiku-4.5")
+				body, err = protocol.NormalizeCopilotChatHistory(raw, "claude-haiku-4.5")
 			}
 			messages, _ := jsonobject.Lookup(body, field)
 			var got []struct{ Content string }
@@ -144,9 +145,9 @@ func TestCopilotAssistantHistoryLargeTextUsesOneOutputCopy(t *testing.T) {
 			var body []byte
 			var err error
 			if native {
-				body, _, err = normalizeCopilotNativeResponses(raw, model, true)
+				body, _, err = protocol.NormalizeCopilotNativeResponses(raw, model, true)
 			} else {
-				body, err = normalizeCopilotChatHistory(raw, model)
+				body, err = protocol.NormalizeCopilotChatHistory(raw, model)
 			}
 			runtime.ReadMemStats(&after)
 			allocated := after.TotalAlloc - before.TotalAlloc
@@ -208,7 +209,7 @@ func TestCopilotSupportedAndOtherModelOptionsRemainUnchanged(t *testing.T) {
 	} {
 		raw := []byte(`{` + test.option + `}`)
 		original := bytes.Clone(raw)
-		if err := validateCopilotRequest(test.kind, test.model, raw); err != nil || !bytes.Equal(raw, original) {
+		if err := protocol.ValidateCopilotRequest(test.kind, test.model, raw); err != nil || !bytes.Equal(raw, original) {
 			t.Fatalf("unexpected option rejection or mutation for %s: %v", test.model, err)
 		}
 	}

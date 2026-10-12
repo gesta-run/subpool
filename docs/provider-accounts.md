@@ -43,6 +43,23 @@ Subpool reads GitHub's AI credit entitlement separately for subscription capacit
 
 On chat-only models, stateful `previous_response_id` continuation and provider-hosted tools such as web search remain unavailable. Mixed pools can fail over those requests to another compatible provider.
 
+Image and file **tool results** require native Responses support. Chat-only
+conversion rejects them with `unsupported_tool_output`; ordinary user image
+messages remain supported. In-band `context_management` compaction cannot be
+translated to Chat. Standalone `/v1/responses/compact` is forwarded only to
+providers that implement native compaction; Copilot returns
+`unsupported_compaction` instead of an endpoint-not-found error.
+
+### GitHub Copilot CLI as a client
+
+When connecting GitHub Copilot CLI to Subpool, use
+`COPILOT_PROVIDER_TYPE=openai` and a `COPILOT_PROVIDER_BASE_URL` ending in `/v1`.
+The client defaults to Chat Completions; `COPILOT_PROVIDER_WIRE_API=responses`
+selects Responses. Choose the wire API and upstream model according to their
+actual capabilities. Do not switch the client provider type to `anthropic` just
+because the selected upstream model is Claude: Subpool does not expose an
+Anthropic Messages endpoint.
+
 ### Model-specific compatibility
 
 Subpool applies the following rules only when routing to a Copilot account and only for the exact model IDs listed:
