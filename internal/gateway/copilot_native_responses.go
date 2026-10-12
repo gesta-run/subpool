@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/gesta-run/subpool/internal/gateway/toolschema"
 	"github.com/gesta-run/subpool/internal/jsonobject"
 )
 
@@ -29,6 +30,11 @@ func normalizeCopilotNativeResponses(raw []byte, model string, allowToolFallback
 	if err != nil {
 		return nil, nil, err
 	}
+	if omitHosted {
+		if err := normalizeCopilotGrokSchemas(nativeTools); err != nil {
+			return nil, nil, err
+		}
+	}
 	if len(nativeTools) == 0 {
 		object.Delete("tools")
 	} else if err := setCopilotNativeJSON(object, "tools", nativeTools); err != nil {
@@ -42,6 +48,25 @@ func normalizeCopilotNativeResponses(raw []byte, model string, allowToolFallback
 		return writeCopilotNativeInput(output, raw, model)
 	})
 	return body, mappings, err
+}
+
+func normalizeCopilotGrokSchemas(tools []any) error {
+	for _, entry := range tools {
+		tool, ok := entry.(map[string]any)
+		if !ok || tool["type"] != "function" {
+			continue
+		}
+		parameters, exists := tool["parameters"]
+		if !exists {
+			continue
+		}
+		parameters, err := toolschema.FlattenRootObjectUnion(parameters)
+		if err != nil {
+			return fmt.Errorf("tool %q parameters are not supported by this GitHub Copilot model: %w", tool["name"], err)
+		}
+		tool["parameters"] = parameters
+	}
+	return nil
 }
 
 func copilotNativeDeclaredTools(object *jsonobject.Object) ([]any, error) {

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -24,6 +25,109 @@ const nativeCopilotTestTools = `[
 	]},
 	{"type":"web_search"}
 ]`
+
+const nativeCopilotUnionSchema = `{
+  "type":"object","properties":{},"oneOf":[{"$ref":"#/$defs/manage"},{"$ref":"#/$defs/remove"}],
+  "$defs":{
+    "manage":{"oneOf":[
+      {"type":"object","properties":{"mode":{"enum":["view"]},"id":{"type":"string"}},"required":["mode","id"],"additionalProperties":false},
+      {"type":"object","properties":{"mode":{"enum":["create"]}},"required":["mode"],"additionalProperties":false}
+    ]},
+    "remove":{"type":"object","properties":{"mode":{"enum":["delete"]},"id":{"type":"string"}},"required":["mode","id"],"additionalProperties":false}
+  }
+}`
+
+func TestCopilotNativeResponsesToolSchemaCompatibility(t *testing.T) {
+	for _, model := range []string{"grok-4.7", "grok-4.6", "gpt-6-luna", "claude-sonnet-5.5", "gemini-3.8-flash"} {
+		for _, additional := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/additional=%t", model, additional), func(t *testing.T) {
+				server, st, _, key := newTestServer(t)
+				st.route.Account = copilotAccountWithCipher(t, server.cipher.(*credential.Cipher), "copilot-account")
+				st.route.Pool.Provider = domain.ProviderCopilot
+				provider := &fakeCopilotProvider{supportedEndpoints: map[string]map[string]bool{model: {copilot.EndpointResponses: true}}}
+				tools := []any{map[string]any{"type": "namespace", "name": "office", "tools": []any{
+					map[string]any{"type": "function", "name": "schedule_update", "strict": false, "parameters": json.RawMessage(nativeCopilotUnionSchema)},
+				}}}
+				message := map[string]any{"type": "message", "id": "msg-illustrative", "role": "user", "content": "Hi"}
+				request := map[string]any{"model": model, "stream": true, "input": []any{message}, "tools": tools,
+					"reasoning": map[string]any{"effort": "low", "summary": "detailed"}, "include": []string{"reasoning.encrypted_content"},
+					"store": false, "parallel_tool_calls": true, "prompt_cache_key": "illustrative-cache-key"}
+				if additional {
+					delete(request, "tools")
+					request["input"] = []any{map[string]any{"type": "additional_tools", "role": "developer", "tools": tools}, message}
+				}
+				encoded, _ := json.Marshal(request)
+				recorder := serveGateway(t, server.WithCopilot(provider), key, "/v1/responses", string(encoded))
+				if recorder.Code != http.StatusOK || provider.responsesCalls != 1 || provider.chatCalls != 0 {
+					t.Fatalf("status=%d native/chat=%d/%d body=%s", recorder.Code, provider.responsesCalls, provider.chatCalls, recorder.Body.String())
+				}
+				var upstream map[string]any
+				if err := decodeCopilotNativeJSON(provider.body, &upstream); err != nil {
+					t.Fatal(err)
+				}
+				tool := upstream["tools"].([]any)[0].(map[string]any)
+				parameters := tool["parameters"].(map[string]any)
+				var original map[string]any
+				_ = decodeCopilotNativeJSON([]byte(nativeCopilotUnionSchema), &original)
+				if strings.HasPrefix(model, "grok-") {
+					if len(parameters["oneOf"].([]any)) != 3 || !reflect.DeepEqual(original["$defs"], parameters["$defs"]) {
+						t.Fatalf("schema was not safely flattened: %#v", parameters)
+					}
+				} else if !reflect.DeepEqual(original, parameters) {
+					t.Fatalf("other model schema was changed: %#v", parameters)
+				}
+				if tool["name"] != stableCopilotNativeToolName("office", "schedule_update") || tool["strict"] != false {
+					t.Fatalf("tool identity or strict mode changed: %#v", tool)
+				}
+				for _, field := range []string{"reasoning", "include", "store", "parallel_tool_calls", "prompt_cache_key"} {
+					want, _ := json.Marshal(request[field])
+					got, _ := json.Marshal(upstream[field])
+					if !bytes.Equal(want, got) {
+						t.Fatalf("native %s was changed: want=%s got=%s", field, want, got)
+					}
+				}
+				if len(upstream["input"].([]any)) != 1 || !reflect.DeepEqual(upstream["input"].([]any)[0], message) {
+					t.Fatalf("message history was changed: %#v", upstream["input"])
+				}
+			})
+		}
+	}
+}
+
+func TestCopilotUnsafeToolSchemaPreservesFallbackOriginal(t *testing.T) {
+	for _, test := range []struct{ name, parameters, message string }{
+		{"overlapping union", `{"oneOf":[{"oneOf":[{"type":"object"},{"type":"object"}]}]}`, "overlapping oneOf"},
+		{"scoped reference sibling", `{"oneOf":[{"$ref":"#/$defs/base","additionalProperties":false}],"$defs":{"base":{"type":"object","properties":{"id":{"type":"string"}}}}}`, `sibling \"additionalProperties\" validation constraint`},
+	} {
+		for _, mixed := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/mixed=%t", test.name, mixed), func(t *testing.T) {
+				server, st, _, key := newTestServer(t)
+				cipher := server.cipher.(*credential.Cipher)
+				st.route.Account = copilotAccountWithCipher(t, cipher, "copilot-account")
+				st.route.Pool.Provider = domain.ProviderCopilot
+				compatible := &fakeCompatibleProvider{}
+				if mixed {
+					st.route.Pool.Provider = domain.ProviderMixed
+					st.reassigned = compatibleAccountWithCipher(t, cipher, "compatible-account")
+					server.compatible = compatible
+				}
+				provider := &fakeCopilotProvider{supportedEndpoints: map[string]map[string]bool{"grok-4.7": {copilot.EndpointResponses: true}}}
+				request := fmt.Sprintf(`{"model":"grok-4.7","stream":true,"input":"Hi","tools":[{"type":"function","name":"illustrative","parameters":%s}]}`, test.parameters)
+				recorder := serveGateway(t, server.WithCopilot(provider), key, "/v1/responses", request)
+				if provider.responsesCalls != 0 || provider.chatCalls != 0 {
+					t.Fatal("unsafe schema was forwarded to Copilot")
+				}
+				if mixed {
+					if recorder.Code != http.StatusOK || string(compatible.responsesBody) != request {
+						t.Fatalf("fallback original changed: status=%d request=%s", recorder.Code, compatible.responsesBody)
+					}
+				} else if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), test.message) {
+					t.Fatalf("unsafe conversion did not return a clear error: status=%d body=%s", recorder.Code, recorder.Body.String())
+				}
+			})
+		}
+	}
+}
 
 func TestCopilotNativeResponsesNormalizesCLITools(t *testing.T) {
 	server, st, _, plain := newTestServer(t)
