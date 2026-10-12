@@ -477,6 +477,16 @@ func (s *Server) attemptAccount(r *http.Request, route domain.KeyRoute, request 
 		if !ready {
 			return nil, retry, complete
 		}
+		if err := validateCopilotRequest(request.kind, request.model, request.body); err != nil {
+			return copilotRequestFailure(route.Pool.Provider, err)
+		}
+		if request.kind == "chat_completions" {
+			body, err := normalizeCopilotChatHistory(request.body, request.model)
+			if err != nil {
+				return copilotRequestFailure(route.Pool.Provider, err)
+			}
+			request.body = body
+		}
 		if request.kind == "responses" && endpoints.responses {
 			body, mappings, convertErr := normalizeCopilotNativeResponses(request.body, request.model, route.Pool.Provider == domain.ProviderCopilot)
 			if convertErr != nil {
@@ -506,6 +516,13 @@ func (s *Server) attemptAccount(r *http.Request, route domain.KeyRoute, request 
 				return chatConversionFailure(route.Pool.Provider, convertErr)
 			}
 			request.kind = "copilot_responses"
+		}
+		if request.kind == "responses" {
+			body, err := normalizeCopilotChatHistory(request.body, request.model)
+			if err != nil {
+				return copilotRequestFailure(route.Pool.Provider, err)
+			}
+			request.body = body
 		}
 	}
 	resp, err := s.providerAccountResponse(r.Context(), request, r.Header, credentials, account)

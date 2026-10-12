@@ -39,7 +39,7 @@ func normalizeCopilotNativeResponses(raw []byte, model string, allowToolFallback
 	}
 	_ = object.Set("stream", []byte("true"))
 	body, err := object.BytesWithValue("input", func(output *bytes.Buffer, raw []byte) error {
-		return writeCopilotNativeInput(output, raw, model == "grok-4.7")
+		return writeCopilotNativeInput(output, raw, model)
 	})
 	return body, mappings, err
 }
@@ -153,6 +153,8 @@ func nativeInputType(raw []byte) string {
 		return "custom_tool_call_output"
 	case `"reasoning"`:
 		return "reasoning"
+	case `"message"`:
+		return "message"
 	default:
 		if bytes.IndexByte(encoded, '\\') < 0 {
 			return ""
@@ -163,7 +165,7 @@ func nativeInputType(raw []byte) string {
 	return kind
 }
 
-func writeCopilotNativeInput(output *bytes.Buffer, raw []byte, omitNullReasoningContent bool) error {
+func writeCopilotNativeInput(output *bytes.Buffer, raw []byte, model string) error {
 	if raw = bytes.TrimSpace(raw); len(raw) == 0 || raw[0] != '[' {
 		output.Write(raw)
 		return nil
@@ -179,8 +181,11 @@ func writeCopilotNativeInput(output *bytes.Buffer, raw []byte, omitNullReasoning
 			output.WriteByte(',')
 		}
 		written = true
-		if kind == "reasoning" && omitNullReasoningContent {
+		if kind == "reasoning" && copilotOmitsNullReasoningContent(model) {
 			return writeCopilotNativeReasoningHistory(output, rawItem)
+		}
+		if (kind == "message" || kind == "") && copilotUsesStringAssistantHistory(model) {
+			return writeCopilotStringAssistantHistory(output, rawItem)
 		}
 		if kind != "function_call" && kind != "custom_tool_call" && kind != "custom_tool_call_output" {
 			output.Write(rawItem)
@@ -198,7 +203,7 @@ func writeCopilotNativeReasoningHistory(output *bytes.Buffer, raw []byte) error 
 		output.Write(raw)
 		return nil
 	}
-	// Copilot grok-4.7 rejects CLI reasoning history with content: null.
+	// Copilot grok-4.6 and grok-4.7 reject CLI reasoning history with content: null.
 	// Omit only that field; encrypted content and all other history stay native.
 	item, err := jsonobject.Parse(raw)
 	if err != nil {

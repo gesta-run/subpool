@@ -20,7 +20,7 @@ import (
 const nativeReasoningNullItem = `{"type":"reasoning","id":"reason-test","summary":[],"content":null,"encrypted_content":"illustrative-opaque-data","status":"completed","example":9007199254740993,"extra":null}`
 
 func TestCopilotNativeReasoningNullContentIsModelScoped(t *testing.T) {
-	for _, model := range []string{"grok-4.7", "grok-4.7-fast", "grok-test", "gpt-test", "gemini-test"} {
+	for _, model := range []string{"grok-4.6", "grok-4.7", "grok-4.6-fast", "grok-4.7-fast", "grok-test", "gpt-test", "gemini-test"} {
 		t.Run(model, func(t *testing.T) {
 			request := []byte(`{"input":[` + nativeReasoningNullItem + `],"reasoning":{"effort":"high"}}`)
 			original := bytes.Clone(request)
@@ -29,7 +29,7 @@ func TestCopilotNativeReasoningNullContentIsModelScoped(t *testing.T) {
 				t.Fatal(err)
 			}
 			want := nativeReasoningNullItem
-			if model == "grok-4.7" {
+			if model == "grok-4.7" || model == "grok-4.6" {
 				want = strings.Replace(want, `,"content":null`, "", 1)
 			}
 			input, _ := jsonobject.Lookup(body, "input")
@@ -64,6 +64,13 @@ func TestCopilotNativeReasoningPreservesOtherContent(t *testing.T) {
 }
 
 func TestCopilotNativeReasoningPreservesOtherProvidersAndFallback(t *testing.T) {
+	for _, model := range []string{"grok-4.6", "grok-4.7"} {
+		t.Run(model, func(t *testing.T) { testCopilotNativeReasoningFallback(t, model) })
+	}
+}
+
+func testCopilotNativeReasoningFallback(t *testing.T, model string) {
+	t.Helper()
 	for _, providerKind := range []string{domain.ProviderCodex, domain.ProviderOpenAICompatible, domain.ProviderMixed} {
 		t.Run(providerKind, func(t *testing.T) {
 			server, st, codexProvider, plain := newTestServer(t)
@@ -71,7 +78,7 @@ func TestCopilotNativeReasoningPreservesOtherProvidersAndFallback(t *testing.T) 
 			compatible := &fakeCompatibleProvider{}
 			server.compatible = compatible
 			copilotProvider := &fakeCopilotProvider{
-				supportedEndpoints: map[string]map[string]bool{"grok-4.7": {copilot.EndpointResponses: true}},
+				supportedEndpoints: map[string]map[string]bool{model: {copilot.EndpointResponses: true}},
 				status:             http.StatusServiceUnavailable,
 			}
 			server.WithCopilot(copilotProvider)
@@ -86,7 +93,7 @@ func TestCopilotNativeReasoningPreservesOtherProvidersAndFallback(t *testing.T) 
 				st.route.Account = copilotAccountWithCipher(t, cipher, "copilot-account")
 				st.reassigned = compatibleAccountWithCipher(t, cipher, "compatible-account")
 			}
-			request := `{"model":"grok-4.7","input":[` + nativeReasoningNullItem + `],"reasoning":{"effort":"high"}}`
+			request := `{"model":"` + model + `","input":[` + nativeReasoningNullItem + `],"reasoning":{"effort":"high"}}`
 			recorder := serveGateway(t, server, plain, "/v1/responses", request)
 			if recorder.Code != http.StatusOK {
 				t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
@@ -123,6 +130,13 @@ func (p *nativeReasoningTestProvider) Responses(_ context.Context, body []byte, 
 }
 
 func TestCopilotNativeReasoningMultiTurnHTTPAndWebSocket(t *testing.T) {
+	for _, model := range []string{"grok-4.6", "grok-4.7"} {
+		t.Run(model, func(t *testing.T) { testCopilotNativeReasoningMultiTurn(t, model) })
+	}
+}
+
+func testCopilotNativeReasoningMultiTurn(t *testing.T, model string) {
+	t.Helper()
 	for _, useWebSocket := range []bool{false, true} {
 		t.Run(map[bool]string{false: "http", true: "websocket"}[useWebSocket], func(t *testing.T) {
 			server, st, _, plain := newTestServer(t)
@@ -131,7 +145,7 @@ func TestCopilotNativeReasoningMultiTurnHTTPAndWebSocket(t *testing.T) {
 			st.sessionSavedSignal = make(chan struct{}, 1)
 			provider := &nativeReasoningTestProvider{
 				fakeCopilotProvider: fakeCopilotProvider{supportedEndpoints: map[string]map[string]bool{
-					"grok-4.7": {copilot.EndpointResponses: true},
+					model: {copilot.EndpointResponses: true},
 				}},
 				requests: make(chan []byte, 1), responses: make(chan string, 1),
 			}
@@ -146,14 +160,14 @@ func TestCopilotNativeReasoningMultiTurnHTTPAndWebSocket(t *testing.T) {
 					history = append(history, map[string]any{"type": "message", "role": "user", "content": "Continue"})
 				}
 				fixture, err := json.Marshal(map[string]any{"type": "response.completed", "response": map[string]any{
-					"id": fmt.Sprintf("resp-test-%d", round), "model": "grok-4.7", "status": "completed",
+					"id": fmt.Sprintf("resp-test-%d", round), "model": model, "status": "completed",
 					"output": nativeReasoningTestOutput(round), "usage": map[string]any{"input_tokens": 7, "output_tokens": 3},
 				}})
 				if err != nil {
 					t.Fatal(err)
 				}
 				provider.responses <- "data: " + string(fixture) + "\n\n"
-				request := map[string]any{"model": "grok-4.7", "input": history, "reasoning": map[string]any{"effort": "high"},
+				request := map[string]any{"model": model, "input": history, "reasoning": map[string]any{"effort": "high"},
 					"store": false, "include": []string{"reasoning.encrypted_content"},
 					"tools": json.RawMessage(`[{"type":"namespace","name":"workspace","tools":[{"type":"function","name":"lookup","parameters":{"type":"object"}}]}]`)}
 				if useWebSocket {

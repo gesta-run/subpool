@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"slices"
 )
 
 type field struct {
@@ -85,6 +86,21 @@ func (o *Object) Duplicate(key string) bool {
 	return o.counts[key] > 1
 }
 
+// HasOnlyFields checks field names without decoding or copying their values.
+func (o *Object) HasOnlyFields(keys ...string) bool {
+	for key := range o.last {
+		if _, deleted := o.deleted[key]; !deleted && !slices.Contains(keys, key) {
+			return false
+		}
+	}
+	for key := range o.sets {
+		if !slices.Contains(keys, key) {
+			return false
+		}
+	}
+	return true
+}
+
 func (o *Object) Value(key string) ([]byte, bool) {
 	if _, deleted := o.deleted[key]; deleted {
 		return nil, false
@@ -124,9 +140,10 @@ func (o *Object) Bytes() []byte {
 // BytesWithValue streams one validated value into the final output buffer.
 // The replacement must write valid JSON; nested values need not be copied first.
 func (o *Object) BytesWithValue(key string, replace func(*bytes.Buffer, []byte) error) ([]byte, error) {
-	var output bytes.Buffer
-	output.Grow(len(o.raw) + 256)
-	if err := o.writeTo(&output, key, replace); err != nil {
+	// Allocate the final buffer explicitly so Buffer.Grow cannot create an
+	// additional request-sized temporary under instrumented builds.
+	output := bytes.NewBuffer(make([]byte, 0, len(o.raw)+256))
+	if err := o.writeTo(output, key, replace); err != nil {
 		return nil, err
 	}
 	return output.Bytes(), nil
@@ -135,6 +152,11 @@ func (o *Object) BytesWithValue(key string, replace func(*bytes.Buffer, []byte) 
 // AppendTo writes into an existing buffer without allocating a nested payload.
 func (o *Object) AppendTo(output *bytes.Buffer) {
 	_ = o.writeTo(output, "", nil)
+}
+
+// AppendWithValue streams a replacement into an existing output buffer.
+func (o *Object) AppendWithValue(output *bytes.Buffer, key string, replace func(*bytes.Buffer, []byte) error) error {
+	return o.writeTo(output, key, replace)
 }
 
 func (o *Object) writeTo(output *bytes.Buffer, key string, replace func(*bytes.Buffer, []byte) error) error {

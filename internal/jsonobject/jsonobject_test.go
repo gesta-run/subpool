@@ -76,6 +76,54 @@ func TestLookupUsesLastEscapedKeyWithoutDecodingContents(t *testing.T) {
 	}
 }
 
+func TestHasOnlyFieldsTracksEscapedDuplicateAndChangedFields(t *testing.T) {
+	object, err := Parse([]byte(`{"text":"first","te\u0078t":"last","extra":{"large":"keep raw"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if object.HasOnlyFields("text") || !object.HasOnlyFields("text", "extra") {
+		t.Fatal("field whitelist did not include decoded field names")
+	}
+	object.Delete("extra")
+	if !object.HasOnlyFields("text") {
+		t.Fatal("deleted field was included")
+	}
+	if err := object.Set("new", []byte("true")); err != nil {
+		t.Fatal(err)
+	}
+	if object.HasOnlyFields("text") || !object.HasOnlyFields("text", "new") {
+		t.Fatal("new field was not included")
+	}
+	object.Delete("new")
+	if !object.HasOnlyFields("text") {
+		t.Fatal("deleted new field was included")
+	}
+}
+
+func TestAppendWithValueUsesExistingBufferAndPropagatesErrors(t *testing.T) {
+	object, err := Parse([]byte(`{"content":["first","second"],"keep":9007199254740993}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	output.WriteByte('[')
+	err = object.AppendWithValue(&output, "content", func(output *bytes.Buffer, raw []byte) error {
+		if string(raw) != `["first","second"]` {
+			t.Fatalf("unexpected original value: %s", raw)
+		}
+		output.WriteString(`"firstsecond"`)
+		return nil
+	})
+	output.WriteByte(']')
+	if err != nil || output.String() != `[{"content":"firstsecond","keep":9007199254740993}]` {
+		t.Fatalf("appended value=%s error=%v", output.Bytes(), err)
+	}
+	wantErr := errors.New("stop")
+	if err := object.AppendWithValue(&output, "content", func(*bytes.Buffer, []byte) error { return wantErr }); !errors.Is(err, wantErr) {
+		t.Fatalf("replacement error was lost: %v", err)
+	}
+}
+
 func TestBytesWithValueRewritesExistingAndNewFields(t *testing.T) {
 	for _, raw := range []string{`{"input":[1],"keep":true}`, `{"keep":true}`} {
 		object, err := Parse([]byte(raw))

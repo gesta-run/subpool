@@ -43,6 +43,21 @@ Subpool reads GitHub's AI credit entitlement separately for subscription capacit
 
 On chat-only models, stateful `previous_response_id` continuation and provider-hosted tools such as web search remain unavailable. Mixed pools can fail over those requests to another compatible provider.
 
+### Model-specific compatibility
+
+Subpool applies the following rules only when routing to a Copilot account and only for the exact model IDs listed:
+
+| Model | Compatibility rule |
+| --- | --- |
+| `grok-4.6`, `grok-4.7` | Omit a reasoning history item's `content` only when its value is JSON `null`. Preserve encrypted reasoning, other fields, and history order. |
+| `claude-sonnet-5.5`, `claude-haiku-4.5` | Serialize plain-text assistant history as strings for both native Responses and Chat routes. Preserve other roles, tool calls, rich content, and nonempty output metadata. |
+| `claude-sonnet-5.5` | Reject required or named function/custom tool choices with `unsupported_tool_choice`. Automatic function calling remains supported; forced choices are not silently changed to automatic selection. |
+| `gemini-3.8-flash` | Reject `xhigh` with `invalid_reasoning_effort`. Other effort values are forwarded without silent downgrade. |
+
+In mixed pools, a known incompatible request can try another eligible provider with the original history and parameters. These model rules do not apply to Codex or OpenAI-compatible accounts, including accounts serving models with the same names.
+
+Protocol completion does not guarantee that a model follows the latest instruction. Claude Haiku can still interpret conflict-framed formatting tests as suspicious even with correctly serialized history. These compatibility rules do not add instructions or remove earlier turns to influence model behavior.
+
 ## OpenAI-compatible API
 
 OpenAI-compatible accounts use an upstream API key and a Base URL that includes the API version path, such as `https://api.example.com/v1`. Subpool appends the appropriate `/chat/completions` or `/responses` path when forwarding requests.
