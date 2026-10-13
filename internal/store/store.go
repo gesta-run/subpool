@@ -13,6 +13,7 @@ var (
 	ErrNoEligibleAccount = errors.New("no eligible account")
 	ErrConflict          = errors.New("conflict")
 	ErrPinnedUnavailable = errors.New("pinned provider account is unavailable")
+	ErrInvalidSettings   = errors.New("invalid settings")
 )
 
 type Store interface {
@@ -40,6 +41,7 @@ type Store interface {
 	ReleaseProviderResetCreditRefresh(context.Context, string) error
 	GetSettings(context.Context) (domain.Settings, error)
 	UpdateSettings(context.Context, domain.Settings) error
+	PatchSettings(context.Context, domain.SettingsUpdate, domain.Settings) (domain.Settings, error)
 	RecordAdminLoginAttempt(context.Context, []string, bool, time.Time) (bool, error)
 	CreateAdminSession(context.Context, []byte, time.Time) error
 	AdminSessionActive(context.Context, []byte, time.Time) (bool, error)

@@ -680,10 +680,11 @@ describe('Subpool console', () => {
   })
 
   it('updates the employee key capacity setting', async () => {
+    const limits = { max_request_body_bytes: 256 * 1024 * 1024, max_inflight_request_body_bytes: 1024 * 1024 * 1024 }
     vi.mocked(fetch).mockImplementation(async (input, init) => {
       const path = String(input)
-      if (path === '/api/v1/settings' && init?.method === 'PUT') return json({ max_api_keys_per_account: 5 })
-      if (path === '/api/v1/settings') return json({ max_api_keys_per_account: 2 })
+      if (path === '/api/v1/settings' && init?.method === 'PUT') return json({ max_api_keys_per_account: 5, ...limits })
+      if (path === '/api/v1/settings') return json({ max_api_keys_per_account: 2, ...limits })
       throw new Error(`Unexpected request: ${path}`)
     })
 
@@ -694,7 +695,7 @@ describe('Subpool console', () => {
     await user.type(input, '5')
     await user.click(screen.getByRole('button', { name: 'Save setting' }))
 
-    expect(await screen.findByRole('status')).toHaveTextContent('Global routing setting saved.')
+    expect(await screen.findByRole('status')).toHaveTextContent('Global settings saved.')
     const update = vi.mocked(fetch).mock.calls.find(([path, init]) => String(path) === '/api/v1/settings' && init?.method === 'PUT')
     expect(JSON.parse(String(update?.[1]?.body))).toEqual({ max_api_keys_per_account: 5 })
   })

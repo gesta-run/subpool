@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -10,11 +11,13 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"github.com/gesta-run/subpool/internal/domain"
 )
 
 const (
-	defaultMaxRequestBodyBytes         int64 = 256 << 20
-	defaultMaxInflightRequestBodyBytes int64 = 1 << 30
+	defaultMaxRequestBodyBytes         int64 = domain.DefaultMaxRequestBodyBytes
+	defaultMaxInflightRequestBodyBytes int64 = domain.DefaultMaxInflightRequestBodyBytes
 	responsesHTTPRequestBodyCopies     int64 = 2
 	chatHTTPRequestBodyCopies          int64 = 4
 	responsesWSRequestBodyCopies       int64 = 4
@@ -38,12 +41,16 @@ func newByteBudget(limit int64) *byteBudget {
 }
 
 func (b *byteBudget) tryAcquire(bytes int64) bool {
-	if bytes < 0 || bytes > b.limit {
+	return b.tryAcquireWithin(bytes, b.limit)
+}
+
+func (b *byteBudget) tryAcquireWithin(bytes, limit int64) bool {
+	if bytes < 0 || bytes > limit {
 		return false
 	}
 	for {
 		used := b.used.Load()
-		if bytes > b.limit-used {
+		if bytes > limit-used {
 			return false
 		}
 		if b.used.CompareAndSwap(used, used+bytes) {
@@ -63,6 +70,7 @@ func (b *byteBudget) release(bytes int64) {
 
 type bodyReservation struct {
 	budget   *byteBudget
+	limit    int64
 	bytes    int64
 	released atomic.Bool
 }
@@ -79,7 +87,7 @@ func (r *bodyReservation) grow(bytes int64) bool {
 	if bytes <= r.bytes {
 		return true
 	}
-	if !r.budget.tryAcquire(bytes - r.bytes) {
+	if !r.budget.tryAcquireWithin(bytes-r.bytes, r.limit) {
 		return false
 	}
 	r.bytes = bytes
@@ -100,19 +108,26 @@ func requestBodyCost(bytes, copies int64) (int64, bool) {
 }
 
 func (s *Server) readRequest(w http.ResponseWriter, r *http.Request) ([]byte, requestMeta, func(), bool) {
+	limits, err := s.requestBodyLimits(r.Context())
+	if err != nil {
+		slog.Error("request body settings unavailable", "error", err)
+		writeOpenAIError(w, http.StatusServiceUnavailable, "request body settings are temporarily unavailable", "subpool_settings_unavailable")
+		return nil, requestMeta{}, nil, false
+	}
 	copies := responsesHTTPRequestBodyCopies
 	if r.URL.Path == "/v1/chat/completions" {
 		copies = chatHTTPRequestBodyCopies
 	}
-	body, reservation, err := s.readBufferedBody(r.Body, r.ContentLength, copies)
+	body, reservation, err := s.readBufferedBodyWithLimits(r.Body, r.ContentLength, copies, limits)
 	if errors.Is(err, errRequestBodyTooLarge) {
-		slog.Warn("request body rejected", "reason", "too_large", "path", r.URL.Path, "content_length", r.ContentLength, "max_bytes", s.maxRequestBodyBytes)
+		slog.Warn("request body rejected", "reason", "too_large", "path", r.URL.Path, "content_length", r.ContentLength, "max_bytes", limits.MaxRequestBodyBytes)
+		w.Header().Set("X-Subpool-Error-Source", "subpool")
 		writeOpenAIError(w, http.StatusRequestEntityTooLarge, "request body is too large", "invalid_request_error")
 		return nil, requestMeta{}, nil, false
 	}
 	if errors.Is(err, errRequestBodyCapacity) {
 		slog.Warn("request body rejected", "reason", "capacity", "path", r.URL.Path, "content_length", r.ContentLength,
-			"inflight_buffer_bytes", s.requestBodyBudget.used.Load(), "max_inflight_buffer_bytes", s.requestBodyBudget.limit)
+			"inflight_buffer_bytes", s.requestBodyBudget.used.Load(), "max_inflight_buffer_bytes", limits.MaxInflightRequestBodyBytes)
 		w.Header().Set("Retry-After", "1")
 		writeOpenAIError(w, http.StatusServiceUnavailable, "request body capacity is temporarily unavailable", "subpool_capacity_exceeded")
 		return nil, requestMeta{}, nil, false
@@ -132,23 +147,44 @@ func (s *Server) readRequest(w http.ResponseWriter, r *http.Request) ([]byte, re
 }
 
 func (s *Server) readBufferedBody(reader io.Reader, declaredBytes, copies int64) ([]byte, *bodyReservation, error) {
-	if declaredBytes > s.maxRequestBodyBytes {
+	return s.readBufferedBodyWithLimits(reader, declaredBytes, copies, domain.Settings{
+		MaxRequestBodyBytes: s.maxRequestBodyBytes, MaxInflightRequestBodyBytes: s.requestBodyBudget.limit,
+	})
+}
+
+func (s *Server) requestBodyLimits(ctx context.Context) (domain.Settings, error) {
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	settings, err := s.store.GetSettings(ctx)
+	if err != nil {
+		return domain.Settings{}, err
+	}
+	settings = settings.WithRequestBodyDefaults(s.maxRequestBodyBytes, s.requestBodyBudget.limit)
+	if err := domain.ValidateRequestBodyLimits(settings.MaxRequestBodyBytes, settings.MaxInflightRequestBodyBytes); err != nil {
+		return domain.Settings{}, err
+	}
+	return settings, nil
+}
+
+// Snapshot limits per request while sharing accounting with older reservations.
+func (s *Server) readBufferedBodyWithLimits(reader io.Reader, declaredBytes, copies int64, limits domain.Settings) ([]byte, *bodyReservation, error) {
+	if declaredBytes > limits.MaxRequestBodyBytes {
 		return nil, nil, errRequestBodyTooLarge
 	}
 	reservedCost := int64(0)
 	if declaredBytes >= 0 {
 		var valid bool
 		reservedCost, valid = requestBodyCost(declaredBytes, copies)
-		if !valid || !s.requestBodyBudget.tryAcquire(reservedCost) {
+		if !valid || !s.requestBodyBudget.tryAcquireWithin(reservedCost, limits.MaxInflightRequestBodyBytes) {
 			return nil, nil, errRequestBodyCapacity
 		}
 	}
-	reservation := &bodyReservation{budget: s.requestBodyBudget, bytes: reservedCost}
+	reservation := &bodyReservation{budget: s.requestBodyBudget, limit: limits.MaxInflightRequestBodyBytes, bytes: reservedCost}
 	body := make([]byte, 0)
 	buffer := make([]byte, 64<<10)
 	emptyReads := 0
 	for {
-		remaining := s.maxRequestBodyBytes - int64(len(body))
+		remaining := limits.MaxRequestBodyBytes - int64(len(body))
 		if remaining == 0 {
 			var extra [1]byte
 			count, err := reader.Read(extra[:])

@@ -221,11 +221,16 @@ func (p *Postgres) UpdateProviderAccount(ctx context.Context, id string, update 
 
 func (p *Postgres) GetSettings(ctx context.Context) (domain.Settings, error) {
 	row, err := p.queries.GetSettings(ctx)
-	return domain.Settings{MaxAPIKeysPerAccount: int(row.MaxApiKeysPerAccount), UpdatedAt: row.UpdatedAt.Time}, wrapDB("get settings", err)
+	return domain.Settings{MaxAPIKeysPerAccount: int(row.MaxApiKeysPerAccount),
+		MaxRequestBodyBytes: row.MaxRequestBodyBytes, MaxInflightRequestBodyBytes: row.MaxInflightRequestBodyBytes,
+		UpdatedAt: row.UpdatedAt.Time}, wrapDB("get settings", err)
 }
 
 func (p *Postgres) UpdateSettings(ctx context.Context, settings domain.Settings) error {
-	affected, err := p.queries.UpdateSettings(ctx, int32(settings.MaxAPIKeysPerAccount))
+	affected, err := p.queries.UpdateSettings(ctx, storedb.UpdateSettingsParams{
+		MaxApiKeysPerAccount: int32(settings.MaxAPIKeysPerAccount),
+		MaxRequestBodyBytes:  settings.MaxRequestBodyBytes, MaxInflightRequestBodyBytes: settings.MaxInflightRequestBodyBytes,
+	})
 	return wrapMutation("update settings", affected, err)
 }
 

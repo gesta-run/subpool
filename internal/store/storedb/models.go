@@ -74,9 +74,11 @@ type Employee struct {
 }
 
 type GlobalSetting struct {
-	Singleton            bool
-	MaxApiKeysPerAccount int32
-	UpdatedAt            pgtype.Timestamptz
+	Singleton                   bool
+	MaxApiKeysPerAccount        int32
+	UpdatedAt                   pgtype.Timestamptz
+	MaxRequestBodyBytes         int64
+	MaxInflightRequestBodyBytes int64
 }
 
 type Pool struct {

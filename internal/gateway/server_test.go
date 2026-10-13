@@ -23,32 +23,6 @@ import (
 	"github.com/gesta-run/subpool/internal/store"
 )
 
-type fakeStore struct {
-	store.Store
-	route                   domain.KeyRoute
-	sessionAccount          domain.ProviderAccount
-	sessionErr              error
-	reassigned              domain.ProviderAccount
-	reassignedAccounts      []domain.ProviderAccount
-	poolAccounts            []domain.ProviderAccount
-	reassignExcludes        [][]string
-	usageInput, usageOutput int64
-	sessionSaved            bool
-	savedAccount            string
-	status                  []string
-	cooldownUntil           *time.Time
-	usageFailures           int
-	sessionFailures         int
-	usageCalls              int
-	sessionCalls            int
-	allowCalls              int
-	usageCommitUncertain    bool
-	usageEvents             map[string]struct{}
-	healthFailureCodes      []string
-	availabilityUpdates     []providerAvailabilityUpdate
-	sessionSavedSignal      chan struct{}
-}
-
 type providerAvailabilityUpdate struct {
 	accountID string
 	allowed   bool

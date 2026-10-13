@@ -80,6 +80,7 @@ func main() {
 		WithModelProviders(resetCredits, compatibleProvider, copilotClient).
 		WithResponsesWebSocket(cfg.ResponsesWSEnabled, cfg.ResponsesWSForceHTTPBridge, cfg.CodexUpstreamURL)
 	controlServer := control.New(database, sessions, keys, cipher, deviceAuth, refreshManager, sources, healthChecker).
+		WithRequestBodyDefaults(cfg.MaxRequestBodyBytes, cfg.MaxInflightRequestBodyBytes).
 		WithCopilotDeviceAuth(copilotDeviceAuth).
 		WithResetCredits(resetCredits).
 		WithModelProviders(resetCredits, compatibleProvider, copilotClient).

@@ -30,7 +30,7 @@ export function PageSkeleton({ metrics = 0, variant }: PageSkeletonProps) {
         <span className="skeleton-list__action skeleton-line" />
       </div>)}</div> : null}
       {variant === 'dashboard' ? <div className="skeleton-dashboard">{Array.from({ length: 2 }, (_, index) => <section key={index}><Line size="medium" /><Line size="long" />{Array.from({ length: 4 }, (_, row) => <div key={row}><Line size="medium" /><Line size="short" /></div>)}</section>)}</div> : null}
-      {variant === 'settings' ? <div className="skeleton-settings"><Line size="short" /><Line size="medium" /><Line size="long" /><div className="skeleton-field" /><Line size="long" /><div className="skeleton-button" /></div> : null}
+      {variant === 'settings' ? <div className="skeleton-settings"><Line size="medium" /><Line size="long" /><div className="skeleton-field" /><Line size="medium" /><Line size="long" /><div className="skeleton-field" /><Line size="long" /><div className="skeleton-field" /><Line size="long" /><div className="skeleton-button" /></div> : null}
       <span className="sr-only">Loading…</span>
     </div>
   )

@@ -94,6 +94,8 @@ export interface CodexResetConsumeResponse {
 
 export interface GlobalSettings {
   max_api_keys_per_account: number
+  max_request_body_bytes: number
+  max_inflight_request_body_bytes: number
   updated_at?: string
 }
 

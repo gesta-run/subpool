@@ -72,8 +72,9 @@ func (h *Hub) Handle(w http.ResponseWriter, r *http.Request) {
 		h.releaseConnection(route.Key.ID)
 		return
 	}
-	bodyState := h.backend.RequestBodyState()
-	conn.SetReadLimit(bodyState.MaxBytes)
+	// The bounded body reader snapshots the latest settings for every message.
+	// A connection-wide limit would keep old limits on already-open connections.
+	conn.SetReadLimit(-1)
 	ctx, cancel := context.WithTimeout(r.Context(), responsesWSLifetime)
 	session := &responsesWSSession{
 		hub: h, conn: conn, ctx: ctx, cancel: cancel, keyDigest: keyDigest,

@@ -34,20 +34,22 @@ type ResetCredits interface {
 	ConsumeResetCredit(context.Context, codex.Credentials, string, string) (codex.ConsumeResetCreditResult, error)
 }
 type Server struct {
-	store                  store.Store
-	sessions               *auth.AdminSessions
-	keys                   *auth.APIKeys
-	cipher                 Cipher
-	deviceAuth             DeviceAuth
-	copilotDeviceAuth      CopilotDeviceAuth
-	resets                 ResetCredits
-	catalog                *catalog.Service
-	refresher              credential.AccountRefresher
-	sources                *auth.SourceResolver
-	health                 *providerhealth.Checker
-	onAccountRoutingChange func(string)
-	loginMu                sync.Mutex
-	logins                 map[string]*deviceLoginAttempt
+	store                              store.Store
+	sessions                           *auth.AdminSessions
+	keys                               *auth.APIKeys
+	cipher                             Cipher
+	deviceAuth                         DeviceAuth
+	copilotDeviceAuth                  CopilotDeviceAuth
+	resets                             ResetCredits
+	catalog                            *catalog.Service
+	refresher                          credential.AccountRefresher
+	sources                            *auth.SourceResolver
+	health                             *providerhealth.Checker
+	onAccountRoutingChange             func(string)
+	defaultMaxRequestBodyBytes         int64
+	defaultMaxInflightRequestBodyBytes int64
+	loginMu                            sync.Mutex
+	logins                             map[string]*deviceLoginAttempt
 }
 
 func New(st store.Store, sessions *auth.AdminSessions, keys *auth.APIKeys, cipher Cipher, deviceAuth DeviceAuth, refresher credential.AccountRefresher, sources *auth.SourceResolver, healthChecker ...*providerhealth.Checker) *Server {
@@ -55,7 +57,16 @@ func New(st store.Store, sessions *auth.AdminSessions, keys *auth.APIKeys, ciphe
 	if len(healthChecker) > 0 {
 		checker = healthChecker[0]
 	}
-	return &Server{store: st, sessions: sessions, keys: keys, cipher: cipher, deviceAuth: deviceAuth, refresher: refresher, sources: sources, health: checker, logins: make(map[string]*deviceLoginAttempt)}
+	return &Server{store: st, sessions: sessions, keys: keys, cipher: cipher, deviceAuth: deviceAuth, refresher: refresher, sources: sources, health: checker, logins: make(map[string]*deviceLoginAttempt),
+		defaultMaxRequestBodyBytes: domain.DefaultMaxRequestBodyBytes, defaultMaxInflightRequestBodyBytes: domain.DefaultMaxInflightRequestBodyBytes}
+}
+
+func (s *Server) WithRequestBodyDefaults(maxBytes, inflightBytes int64) *Server {
+	if err := domain.ValidateRequestBodyLimits(maxBytes, inflightBytes); err != nil {
+		panic(err)
+	}
+	s.defaultMaxRequestBodyBytes, s.defaultMaxInflightRequestBodyBytes = maxBytes, inflightBytes
+	return s
 }
 
 func (s *Server) WithResetCredits(resets ResetCredits) *Server {
@@ -393,13 +404,11 @@ func (s *Server) getSettings(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, settings)
+	writeJSON(w, http.StatusOK, settings.WithRequestBodyDefaults(s.defaultMaxRequestBodyBytes, s.defaultMaxInflightRequestBodyBytes))
 }
 
 func (s *Server) updateSettings(w http.ResponseWriter, r *http.Request) {
-	var request struct {
-		MaxAPIKeysPerAccount int `json:"max_api_keys_per_account"`
-	}
+	var request domain.SettingsUpdate
 	if !decode(w, r, &request) {
 		return
 	}
@@ -407,18 +416,19 @@ func (s *Server) updateSettings(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "max_api_keys_per_account must be between 1 and 100")
 		return
 	}
-	settings := domain.Settings{MaxAPIKeysPerAccount: request.MaxAPIKeysPerAccount}
-	if err := s.store.UpdateSettings(r.Context(), settings); err != nil {
+	updated, err := s.store.PatchSettings(r.Context(), request, domain.Settings{
+		MaxRequestBodyBytes: s.defaultMaxRequestBodyBytes, MaxInflightRequestBodyBytes: s.defaultMaxInflightRequestBodyBytes,
+	})
+	if err != nil {
+		if errors.Is(err, store.ErrInvalidSettings) {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		writeStoreError(w, err)
 		return
 	}
 	s.audit(r.Context(), "settings.update", "settings", "global", "success")
-	updated, err := s.store.GetSettings(r.Context())
-	if err != nil {
-		writeStoreError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, updated)
+	writeJSON(w, http.StatusOK, updated.WithRequestBodyDefaults(s.defaultMaxRequestBodyBytes, s.defaultMaxInflightRequestBodyBytes))
 }
 
 func (s *Server) deleteProviderAccount(w http.ResponseWriter, r *http.Request) {

@@ -37,9 +37,10 @@ func (provider copilotAdapter) RoundTrip(ctx context.Context, request Request, h
 	if err = protocol.ValidateCopilotRequest(request.Kind, request.Model, request.Body); err != nil {
 		return nil, conversionError(err)
 	}
+	inboundBytes := len(request.Body)
 	if request.Kind == "responses" {
 		if responses {
-			return provider.native(ctx, request, headers, credentials.Copilot, options.AllowToolFallback)
+			return provider.native(ctx, request, headers, credentials.Copilot, options.AllowToolFallback, inboundBytes)
 		}
 		if !chat {
 			return nil, ErrUnsupported
@@ -49,7 +50,7 @@ func (provider copilotAdapter) RoundTrip(ctx context.Context, request Request, h
 			return nil, conversionError(err)
 		}
 		request.Body = body
-		return provider.chat(ctx, request, headers, credentials.Copilot, tools)
+		return provider.chat(ctx, request, headers, credentials.Copilot, tools, inboundBytes)
 	}
 	if !chat {
 		if !responses {
@@ -63,12 +64,12 @@ func (provider copilotAdapter) RoundTrip(ctx context.Context, request Request, h
 		if err != nil {
 			return nil, conversionError(err)
 		}
-		return provider.native(ctx, request, headers, credentials.Copilot, options.AllowToolFallback)
+		return provider.native(ctx, request, headers, credentials.Copilot, options.AllowToolFallback, inboundBytes)
 	}
-	return provider.chat(ctx, request, headers, credentials.Copilot, nil)
+	return provider.chat(ctx, request, headers, credentials.Copilot, nil, inboundBytes)
 }
 
-func (provider copilotAdapter) native(ctx context.Context, request Request, headers http.Header, credentials copilot.Credentials, allowFallback bool) (*Response, error) {
+func (provider copilotAdapter) native(ctx context.Context, request Request, headers http.Header, credentials copilot.Credentials, allowFallback bool, inboundBytes int) (*Response, error) {
 	body, tools, err := protocol.NormalizeCopilotNativeResponses(request.Body, request.Model, allowFallback)
 	if err != nil {
 		return nil, conversionError(err)
@@ -77,13 +78,14 @@ func (provider copilotAdapter) native(ctx context.Context, request Request, head
 	if err != nil {
 		return nil, err
 	}
+	normalizeCopilotPayloadError(response, request, copilot.EndpointResponses, inboundBytes, len(body))
 	if response != nil && response.Body != nil {
 		protocol.RestoreCopilotNativeResponses(response, tools)
 	}
 	return &Response{Response: response, format: "responses", tools: tools}, nil
 }
 
-func (provider copilotAdapter) chat(ctx context.Context, request Request, headers http.Header, credentials copilot.Credentials, tools map[string]protocol.ToolInfo) (*Response, error) {
+func (provider copilotAdapter) chat(ctx context.Context, request Request, headers http.Header, credentials copilot.Credentials, tools map[string]protocol.ToolInfo, inboundBytes int) (*Response, error) {
 	body, err := protocol.NormalizeCopilotChatHistory(request.Body, request.Model)
 	if err != nil {
 		return nil, conversionError(err)
@@ -92,5 +94,6 @@ func (provider copilotAdapter) chat(ctx context.Context, request Request, header
 	if err != nil {
 		return nil, err
 	}
+	normalizeCopilotPayloadError(response, request, copilot.EndpointChatCompletions, inboundBytes, len(body))
 	return &Response{Response: response, format: "chat_completions", tools: tools}, nil
 }

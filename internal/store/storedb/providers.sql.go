@@ -271,20 +271,53 @@ func (q *Queries) GetProviderResetCredits(ctx context.Context, id string) (GetPr
 }
 
 const getSettings = `-- name: GetSettings :one
-SELECT max_api_keys_per_account, updated_at
+SELECT max_api_keys_per_account, max_request_body_bytes, max_inflight_request_body_bytes, updated_at
 FROM global_settings
 WHERE singleton
 `
 
 type GetSettingsRow struct {
-	MaxApiKeysPerAccount int32
-	UpdatedAt            pgtype.Timestamptz
+	MaxApiKeysPerAccount        int32
+	MaxRequestBodyBytes         int64
+	MaxInflightRequestBodyBytes int64
+	UpdatedAt                   pgtype.Timestamptz
 }
 
 func (q *Queries) GetSettings(ctx context.Context) (GetSettingsRow, error) {
 	row := q.db.QueryRow(ctx, getSettings)
 	var i GetSettingsRow
-	err := row.Scan(&i.MaxApiKeysPerAccount, &i.UpdatedAt)
+	err := row.Scan(
+		&i.MaxApiKeysPerAccount,
+		&i.MaxRequestBodyBytes,
+		&i.MaxInflightRequestBodyBytes,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getSettingsForUpdate = `-- name: GetSettingsForUpdate :one
+SELECT max_api_keys_per_account, max_request_body_bytes, max_inflight_request_body_bytes, updated_at
+FROM global_settings
+WHERE singleton
+FOR UPDATE
+`
+
+type GetSettingsForUpdateRow struct {
+	MaxApiKeysPerAccount        int32
+	MaxRequestBodyBytes         int64
+	MaxInflightRequestBodyBytes int64
+	UpdatedAt                   pgtype.Timestamptz
+}
+
+func (q *Queries) GetSettingsForUpdate(ctx context.Context) (GetSettingsForUpdateRow, error) {
+	row := q.db.QueryRow(ctx, getSettingsForUpdate)
+	var i GetSettingsForUpdateRow
+	err := row.Scan(
+		&i.MaxApiKeysPerAccount,
+		&i.MaxRequestBodyBytes,
+		&i.MaxInflightRequestBodyBytes,
+		&i.UpdatedAt,
+	)
 	return i, err
 }
 
@@ -766,12 +799,21 @@ func (q *Queries) UpdateProviderStatus(ctx context.Context, arg UpdateProviderSt
 
 const updateSettings = `-- name: UpdateSettings :execrows
 UPDATE global_settings
-SET max_api_keys_per_account = $1, updated_at = now()
+SET max_api_keys_per_account = $1,
+    max_request_body_bytes = $2,
+    max_inflight_request_body_bytes = $3,
+    updated_at = now()
 WHERE singleton
 `
 
-func (q *Queries) UpdateSettings(ctx context.Context, maxApiKeysPerAccount int32) (int64, error) {
-	result, err := q.db.Exec(ctx, updateSettings, maxApiKeysPerAccount)
+type UpdateSettingsParams struct {
+	MaxApiKeysPerAccount        int32
+	MaxRequestBodyBytes         int64
+	MaxInflightRequestBodyBytes int64
+}
+
+func (q *Queries) UpdateSettings(ctx context.Context, arg UpdateSettingsParams) (int64, error) {
+	result, err := q.db.Exec(ctx, updateSettings, arg.MaxApiKeysPerAccount, arg.MaxRequestBodyBytes, arg.MaxInflightRequestBodyBytes)
 	if err != nil {
 		return 0, err
 	}

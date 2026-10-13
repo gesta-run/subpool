@@ -114,8 +114,10 @@ func (b responsesWSBackend) NormalizeCodexRequest(body []byte, account domain.Pr
 	return payload, nil
 }
 
-func (b responsesWSBackend) ReadRequestBody(reader io.Reader) ([]byte, func(), error) {
-	body, reservation, err := b.server.readBufferedBody(reader, -1, responsesWSRequestBodyCopies)
+func (b responsesWSBackend) ReadRequestBody(reader io.Reader, state responsesws.RequestBodyState) ([]byte, func(), error) {
+	body, reservation, err := b.server.readBufferedBodyWithLimits(reader, -1, responsesWSRequestBodyCopies, domain.Settings{
+		MaxRequestBodyBytes: state.MaxBytes, MaxInflightRequestBodyBytes: state.MaxInflightBytes,
+	})
 	if errors.Is(err, errRequestBodyTooLarge) {
 		return nil, nil, responsesws.ErrRequestBodyTooLarge
 	}
@@ -128,13 +130,17 @@ func (b responsesWSBackend) ReadRequestBody(reader io.Reader) ([]byte, func(), e
 	return body, reservation.release, nil
 }
 
-func (b responsesWSBackend) RequestBodyState() responsesws.RequestBodyState {
+func (b responsesWSBackend) RequestBodyState(ctx context.Context) (responsesws.RequestBodyState, error) {
+	limits, err := b.server.requestBodyLimits(ctx)
+	if err != nil {
+		return responsesws.RequestBodyState{}, err
+	}
 	return responsesws.RequestBodyState{
-		MaxBytes:         b.server.maxRequestBodyBytes,
+		MaxBytes:         limits.MaxRequestBodyBytes,
 		ReadTimeout:      b.server.requestBodyTimeout,
 		InflightBytes:    b.server.requestBodyBudget.used.Load(),
-		MaxInflightBytes: b.server.requestBodyBudget.limit,
-	}
+		MaxInflightBytes: limits.MaxInflightRequestBodyBytes,
+	}, nil
 }
 
 func (s *Server) CloseResponsesWebSockets() { s.responsesWS.CloseAll() }

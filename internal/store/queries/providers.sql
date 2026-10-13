@@ -111,13 +111,22 @@ UPDATE provider_accounts SET
 WHERE id = sqlc.arg(id);
 
 -- name: GetSettings :one
-SELECT max_api_keys_per_account, updated_at
+SELECT max_api_keys_per_account, max_request_body_bytes, max_inflight_request_body_bytes, updated_at
 FROM global_settings
 WHERE singleton;
 
+-- name: GetSettingsForUpdate :one
+SELECT max_api_keys_per_account, max_request_body_bytes, max_inflight_request_body_bytes, updated_at
+FROM global_settings
+WHERE singleton
+FOR UPDATE;
+
 -- name: UpdateSettings :execrows
 UPDATE global_settings
-SET max_api_keys_per_account = sqlc.arg(max_api_keys_per_account), updated_at = now()
+SET max_api_keys_per_account = sqlc.arg(max_api_keys_per_account),
+    max_request_body_bytes = sqlc.arg(max_request_body_bytes),
+    max_inflight_request_body_bytes = sqlc.arg(max_inflight_request_body_bytes),
+    updated_at = now()
 WHERE singleton;
 
 -- name: DeleteProviderAccount :execrows

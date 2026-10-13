@@ -58,8 +58,8 @@ type Backend interface {
 	AttemptBridge(context.Context, http.Header, domain.KeyRoute, domain.ProviderAccount, string, []byte) (*http.Response, RetryReason, bool)
 	CompleteTurn(string, string, string, string, string, int64, int64)
 	NormalizeCodexRequest([]byte, domain.ProviderAccount) ([]byte, *RequestError)
-	ReadRequestBody(io.Reader) ([]byte, func(), error)
-	RequestBodyState() RequestBodyState
+	ReadRequestBody(io.Reader, RequestBodyState) ([]byte, func(), error)
+	RequestBodyState(context.Context) (RequestBodyState, error)
 }
 
 type RoutingStore interface {

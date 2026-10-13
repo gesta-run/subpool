@@ -2,7 +2,7 @@
 
 ## Problem
 
-Subpool rejects HTTP request bodies larger than 32 MiB before routing them to a
+Subpool previously rejected HTTP request bodies larger than 32 MiB before routing them to a
 provider. Responses API requests can embed images as base64 data URLs, and a
 conversation can resend those images with later turns. The resulting JSON can
 therefore exceed Subpool's limit even though the upstream API accepts it.
@@ -24,18 +24,33 @@ raw request size.
 
 ## Configuration
 
-Two byte-valued environment variables control HTTP request buffering:
+Settings provides per-request and concurrent buffer limits in MiB, persisted in
+the shared database. Each HTTP request and WebSocket message snapshots the
+latest limits before reading its body, including messages on existing WebSocket
+connections. No restart is required, and all instances using the same database
+read the saved limits.
+
+The console submits only edited size fields. Saving employee capacity alone
+preserves both saved limits and the environment fallback. Partial updates lock
+the shared settings row, merge into the latest values, and validate the resulting
+pair before committing, so concurrent saves cannot overwrite omitted fields.
+
+Before an administrator saves limits, byte-valued environment variables provide
+the deployment defaults:
 
 - `SUBPOOL_MAX_REQUEST_BODY_BYTES` defaults to 268435456 (256 MiB).
 - `SUBPOOL_MAX_INFLIGHT_REQUEST_BODY_BYTES` defaults to 1073741824 (1 GiB).
 - `SUBPOOL_REQUEST_BODY_READ_TIMEOUT` defaults to five minutes.
 
-All values must be positive. The aggregate limit must be at least four times
-the per-request limit so one maximum-size Chat Completions request can always
+Saved limits override environment defaults; the read timeout remains an
+environment setting. All values must be positive. The aggregate limit must be
+at least four times the per-request limit so one maximum-size Chat Completions request can always
 be admitted while its decoded and rewritten forms coexist.
 
-The per-request default is intentionally below the upstream 512 MB limit.
-Operators with sufficient memory can raise it, while smaller deployments retain
+The per-request default is below OpenAI's documented 512 MB image-input limit.
+These settings control Subpool buffering only, not upstream provider limits.
+GitHub Copilot's payload limit is not assumed to match OpenAI's limit.
+Operators with sufficient memory can raise them, while smaller deployments retain
 a bounded default. Preproduction declares both defaults explicitly so its
 effective behavior is visible in the deployment manifest.
 
@@ -49,8 +64,8 @@ Responses WebSocket messages:
 2. Reserve the estimated number of live body buffers from a process-wide byte
    budget. Responses requests reserve two copies, while WebSocket and Chat
    Completions requests reserve four to cover rewriting, failover, and network
-   writes. For requests without a known length, reserve the per-request maximum
-   until the actual length is known.
+   writes. For requests without a known length, reserve capacity incrementally
+   before each chunk and reduce the estimate to the bytes actually read.
 3. If capacity is unavailable, return HTTP 503 with `Retry-After: 1`, or close a
    WebSocket with status 1013, so clients can retry instead of increasing
    process memory without a bound.
@@ -60,6 +75,11 @@ Responses WebSocket messages:
    remaining reservation until the HTTP upstream request has been issued or the
    WebSocket turn has finished.
 6. Release the reservation on every success and error path.
+
+Settings changes never replace the process-wide usage counter. Accepted requests
+keep their original size and reservation limits. After lowering the aggregate
+budget, new requests can be rejected temporarily while older reservations finish;
+those older requests remain bounded by the budget under which they were accepted.
 
 Large Responses payloads are rewritten one top-level field at a time. Nested
 `input` data remains an opaque slice of the original JSON, avoiding a decoded
@@ -76,6 +96,15 @@ Size rejections log the request path, declared or observed byte count, and the
 configured limit. Capacity rejections log the requested and available limits.
 Request bodies, image data, authorization headers, and prompt text are never
 logged.
+
+Copilot upstream HTTP 413 responses retain their status but use a fixed
+OpenAI-compatible error with code `upstream_payload_too_large` and header
+`X-Subpool-Error-Source: upstream`. Local size rejections use
+`X-Subpool-Error-Source: subpool`. Upstream rejection diagnostics include only
+sanitized correlation identifiers and inbound, adapted, and wire byte counts;
+the upstream error body is neither read nor returned. Rewritten responses remove
+stale encoding, length, digest, and cache-validator headers. Payload rejections
+are not retried unchanged and do not penalize the selected account.
 
 ## Compatibility
 

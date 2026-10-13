@@ -65,8 +65,10 @@ type ProviderModel struct {
 }
 
 type Settings struct {
-	MaxAPIKeysPerAccount int       `json:"max_api_keys_per_account"`
-	UpdatedAt            time.Time `json:"updated_at"`
+	MaxAPIKeysPerAccount        int       `json:"max_api_keys_per_account"`
+	MaxRequestBodyBytes         int64     `json:"max_request_body_bytes"`
+	MaxInflightRequestBodyBytes int64     `json:"max_inflight_request_body_bytes"`
+	UpdatedAt                   time.Time `json:"updated_at"`
 }
 
 type Pool struct {
