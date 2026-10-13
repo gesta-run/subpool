@@ -431,6 +431,22 @@ td small { color: var(--ink-muted); }
 .pool-policy-note { border-color: var(--line); background: var(--panel-nested); }
 .pool-policy-note span { color: var(--ink-muted); }
 .settings-panel { border-color: var(--line); border-radius: var(--radius-panel); background: var(--panel); }
+.settings-panel input[type="number"] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+.settings-panel input[type="number"]::-webkit-inner-spin-button,
+.settings-panel input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+.settings-panel input[type="number"]:focus-visible {
+  outline-offset: 0;
+  box-shadow: none;
+}
+.settings-panel input[type="number"]:focus-visible:not([aria-invalid="true"]) {
+  border-color: var(--acid-deep);
+}
 .settings-section { display: grid; gap: 16px; min-width: 0; margin: 0; padding: 0; border: 0; }
 .settings-section legend { margin-bottom: 12px; padding: 0; color: var(--ink); font-size: 20px; font-weight: 700; }
 .settings-section > p { margin: 0; color: var(--ink-muted); font-size: 16px; line-height: 1.5; }
