@@ -320,7 +320,7 @@ func (s *Server) listProviderAccounts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for i := range accounts {
-		s.describeBailianQuota(&accounts[i])
+		s.describeBailianQuota(r.Context(), &accounts[i])
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"data": accounts})
 }

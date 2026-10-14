@@ -12,8 +12,16 @@ import (
 	"github.com/gesta-run/subpool/internal/provider/openaicompat"
 )
 
-func (s *Server) describeBailianQuota(account *domain.ProviderAccount) {
-	credentials, ok := s.bailianCredentials(*account)
+func (s *Server) describeBailianQuota(ctx context.Context, account *domain.ProviderAccount) {
+	if account.Provider != domain.ProviderOpenAICompatible {
+		return
+	}
+	// ListProviderAccounts deliberately omits credential ciphertext.
+	stored, err := s.store.GetProviderAccount(ctx, account.ID)
+	if err != nil {
+		return
+	}
+	credentials, ok := s.bailianCredentials(stored)
 	if !ok {
 		return
 	}

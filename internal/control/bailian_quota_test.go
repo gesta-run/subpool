@@ -98,3 +98,28 @@ func TestRejectedBailianAuthorizationIsNotStored(t *testing.T) {
 		t.Fatal("rejected authorization was stored")
 	}
 }
+
+func TestAccountListingDiscoversQuotaWithoutListingCredentials(t *testing.T) {
+	cipher, _ := credential.New(make([]byte, 32))
+	raw := []byte(`{"base_url":"https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1","api_key":"illustrative-inference-key","bailian_quota":{"access_key_id":"illustrative-id","access_key_secret":"illustrative-secret"}}`)
+	encrypted, _ := cipher.Encrypt(raw)
+	listed := domain.ProviderAccount{ID: "account", Provider: domain.ProviderOpenAICompatible}
+	stored := listed
+	stored.CredentialCiphertext = encrypted
+	st := &controlStore{accounts: []domain.ProviderAccount{listed}, accountByID: map[string]domain.ProviderAccount{"account": stored}}
+	s := &Server{store: st, cipher: cipher}
+	w := httptest.NewRecorder()
+	s.listProviderAccounts(w, httptest.NewRequest(http.MethodGet, "/", nil))
+	var response struct {
+		Data []domain.ProviderAccount `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if w.Code != 200 || len(response.Data) != 1 || response.Data[0].QuotaProvider != bailian.PlanType || !response.Data[0].QuotaAuthorized {
+		t.Fatalf("quota discovery failed: %d %s", w.Code, w.Body)
+	}
+	if strings.Contains(w.Body.String(), "illustrative-inference-key") || strings.Contains(w.Body.String(), "illustrative-secret") || len(response.Data[0].CredentialCiphertext) > 0 {
+		t.Fatal("listing leaked credentials")
+	}
+}
