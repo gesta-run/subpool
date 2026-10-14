@@ -45,7 +45,7 @@ describe('AccountTable health states', () => {
     expect(screen.getByText('Bailian · Token Plan subscription')).toBeInTheDocument()
     expect(screen.getByText('75%')).toBeInTheDocument()
     expect(screen.getByText('last known weekly capacity')).toBeInTheDocument()
-    expect(screen.getByText('Grant Token Plan access to the RAM user in Bailian')).toBeInTheDocument()
+    expect(screen.getByText('Grant Token Plan access to this console identity in Bailian')).toBeInTheDocument()
     expect(screen.getByText('Routing enabled')).toBeInTheDocument()
     expect(screen.queryByText('Quota is managed upstream')).not.toBeInTheDocument()
   })

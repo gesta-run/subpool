@@ -62,8 +62,9 @@ func (s *Server) configureBailianQuota(w http.ResponseWriter, r *http.Request) {
 		}
 		request.AccessKeyID = strings.TrimSpace(request.AccessKeyID)
 		request.AccessKeySecret = strings.TrimSpace(request.AccessKeySecret)
-		if request.AccessKeyID == "" || request.AccessKeySecret == "" {
-			writeError(w, http.StatusBadRequest, "access_key_id and access_key_secret are required")
+		request.AccessToken = strings.TrimSpace(request.AccessToken)
+		if !request.Valid() {
+			writeError(w, http.StatusBadRequest, "provide an access_token or both access_key_id and access_key_secret")
 			return
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
@@ -73,7 +74,7 @@ func (s *Server) configureBailianQuota(w http.ResponseWriter, r *http.Request) {
 			client = bailian.NewClient(nil)
 		}
 		if snapshot, err = client.Usage(ctx, request); err != nil {
-			writeError(w, http.StatusBadGateway, "quota authorization failed; grant this RAM user Token Plan access in RAM and the Bailian account permissions")
+			writeError(w, http.StatusBadGateway, "quota authorization failed; sign in again with the subscription owner or grant the RAM user Token Plan access")
 			return
 		}
 		credentials.BailianQuota = &request

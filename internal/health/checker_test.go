@@ -76,6 +76,19 @@ func TestBailianQuotaAuthorizationIsIndependentOfInference(t *testing.T) {
 	}
 }
 
+func TestExpiredBrowserQuotaAuthorizationDoesNotDisableInference(t *testing.T) {
+	plaintext, _ := json.Marshal(openaicompat.Credentials{
+		BaseURL: "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1", APIKey: "illustrative-key",
+		BailianQuota: &bailian.Credentials{AccessToken: "illustrative-token"},
+	})
+	checker := NewChecker(nil, testCipher{plaintext: plaintext}, nil, testCompatible{status: 200})
+	checker.bailian = &testBailianUsage{err: bailian.ErrAuthorizationExpired}
+	result := checker.Check(context.Background(), domain.ProviderAccount{Provider: domain.ProviderOpenAICompatible})
+	if result.HealthStatus != domain.HealthHealthy || result.AuthFailed || result.Failure || result.QuotaErrorCode != "quota_authorization_expired" {
+		t.Fatalf("expired quota authorization affected inference: %+v", result)
+	}
+}
+
 func (c testCompatible) Models(context.Context, openaicompat.Credentials) (*http.Response, error) {
 	return &http.Response{StatusCode: c.status, Body: io.NopCloser(strings.NewReader(`{}`))}, nil
 }

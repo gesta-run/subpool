@@ -39,6 +39,27 @@ func (u quotaConfigUsage) Usage(context.Context, bailian.Credentials) (bailian.S
 	return bailian.Snapshot{PlanType: bailian.PlanType, Weekly: &bailian.Window{RemainingPercent: 75}}, u.err
 }
 
+func TestBrowserQuotaTokenIsEncryptedAndPreservesInference(t *testing.T) {
+	cipher, _ := credential.New(make([]byte, 32))
+	raw := []byte(`{"base_url":"https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1","api_key":"illustrative-key"}`)
+	encrypted, _ := cipher.Encrypt(raw)
+	st := &quotaConfigStore{controlStore: controlStore{account: domain.ProviderAccount{ID: "account", Provider: domain.ProviderOpenAICompatible, CredentialVersion: 1, CredentialCiphertext: encrypted}}}
+	s := &Server{store: st, cipher: cipher, bailianQuota: quotaConfigUsage{}}
+	r := httptest.NewRequest(http.MethodPut, "/", strings.NewReader(`{"access_token":" illustrative-token ","console_switch_agent":123}`))
+	r.SetPathValue("id", "account")
+	w := httptest.NewRecorder()
+	s.configureBailianQuota(w, r)
+	if w.Code != 200 || !st.saved || strings.Contains(w.Body.String(), "illustrative-token") || strings.Contains(string(st.account.CredentialCiphertext), "illustrative-token") {
+		t.Fatal("browser token was rejected or leaked")
+	}
+	plaintext, _ := cipher.Decrypt(st.account.CredentialCiphertext)
+	var saved openaicompat.Credentials
+	json.Unmarshal(plaintext, &saved)
+	if saved.APIKey != "illustrative-key" || saved.BailianQuota == nil || saved.BailianQuota.AccessToken != "illustrative-token" || saved.BailianQuota.ConsoleSwitchAgent != 123 {
+		t.Fatal("inference or delegated console credentials changed")
+	}
+}
+
 func TestBailianQuotaCredentialsStayEncryptedAndPreserveInference(t *testing.T) {
 	cipher, _ := credential.New(make([]byte, 32))
 	upstream := openaicompat.Credentials{BaseURL: "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1", APIKey: "illustrative-inference-key"}

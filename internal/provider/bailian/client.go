@@ -19,12 +19,15 @@ const PlanType = "bailian_token_plan"
 const usageAPI = "zeldaHttp.apikeyMgr./tokenplan/personal/api/v2/usage"
 
 var ErrAuthorizationRequired = errors.New("quota_authorization_required")
+var ErrAuthorizationExpired = errors.New("quota_authorization_expired")
 var ErrPermissionDenied = errors.New("quota_permission_denied")
 var ErrInvalidResponse = errors.New("invalid_usage_response")
 
 type Credentials struct {
-	AccessKeyID     string `json:"access_key_id"`
-	AccessKeySecret string `json:"access_key_secret"`
+	AccessKeyID        string `json:"access_key_id,omitempty"`
+	AccessKeySecret    string `json:"access_key_secret,omitempty"`
+	AccessToken        string `json:"access_token,omitempty"`
+	ConsoleSwitchAgent int64  `json:"console_switch_agent,omitempty"`
 }
 
 type Window struct {
@@ -57,16 +60,22 @@ func SupportsURL(raw string) bool {
 }
 
 func (c *Client) Usage(ctx context.Context, credentials Credentials) (Snapshot, error) {
-	if credentials.AccessKeyID == "" || credentials.AccessKeySecret == "" {
+	if !credentials.Valid() {
 		return Snapshot{}, ErrAuthorizationRequired
 	}
-	token, err := c.accessToken(ctx, credentials)
-	if err != nil {
-		return Snapshot{}, err
+	token := credentials.AccessToken
+	if token == "" {
+		var err error
+		token, err = c.accessToken(ctx, credentials)
+		if err != nil {
+			return Snapshot{}, err
+		}
 	}
-	params, _ := json.Marshal(map[string]any{"Api": usageAPI, "V": "1.0", "Data": map[string]any{
-		"cornerstoneParam": map[string]any{"protocol": "V2", "console": "ONE_CONSOLE", "productCode": "p_efm", "switchUserType": 3, "consoleSite": "BAILIAN_ALIYUN"},
-	}})
+	cornerstone := map[string]any{"protocol": "V2", "console": "ONE_CONSOLE", "productCode": "p_efm", "switchUserType": 3, "consoleSite": "BAILIAN_ALIYUN"}
+	if credentials.ConsoleSwitchAgent > 0 {
+		cornerstone["switchAgent"] = credentials.ConsoleSwitchAgent
+	}
+	params, _ := json.Marshal(map[string]any{"Api": usageAPI, "V": "1.0", "Data": map[string]any{"cornerstoneParam": cornerstone}})
 	form := url.Values{"params": {string(params)}, "region": {"cn-beijing"}}
 	endpoint := "https://bailian-cs.console.aliyun.com/cli/api.json?action=BroadScopeAspnGateway&product=sfm_bailian&api=" + url.QueryEscape(usageAPI)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(form.Encode()))
@@ -88,6 +97,9 @@ func (c *Client) request(req *http.Request) ([]byte, error) {
 		return nil, errors.New("quota_connection_failed")
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusUnauthorized && strings.HasPrefix(req.Header.Get("Authorization"), "Bearer ") {
+		return nil, ErrAuthorizationExpired
+	}
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
 		return nil, ErrPermissionDenied
 	}
@@ -117,7 +129,10 @@ func ParseUsage(body []byte) (Snapshot, error) {
 			return Snapshot{}, ErrInvalidResponse
 		}
 		if payload.Success != nil && !*payload.Success {
-			if strings.Contains(payload.ErrorCode, "NotAuthorised") || strings.Contains(payload.ErrorCode, "NotLogined") {
+			if strings.Contains(payload.ErrorCode, "NotLogined") {
+				return Snapshot{}, ErrAuthorizationExpired
+			}
+			if strings.Contains(payload.ErrorCode, "NotAuthorised") {
 				return Snapshot{}, ErrPermissionDenied
 			}
 			return Snapshot{}, ErrInvalidResponse
@@ -147,4 +162,15 @@ func quotaWindow(fraction *float64, reset, seconds int64) (*Window, error) {
 	}
 	used := math.Min(100, *fraction*100)
 	return &Window{UsedPercent: used, RemainingPercent: 100 - used, WindowSeconds: seconds, ResetAt: reset / 1000}, nil
+}
+
+// Valid accepts either a browser-issued token or a complete RAM key pair.
+func (c Credentials) Valid() bool {
+	if c.ConsoleSwitchAgent < 0 {
+		return false
+	}
+	if c.AccessToken != "" {
+		return c.AccessKeyID == "" && c.AccessKeySecret == ""
+	}
+	return c.AccessKeyID != "" && c.AccessKeySecret != ""
 }

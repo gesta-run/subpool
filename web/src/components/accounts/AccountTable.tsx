@@ -146,7 +146,7 @@ export function AccountTable({ accounts, busyID, resetBusyID, resetStates, onMod
 
 function BailianQuotaStatus({ account, onAuthorize }: { account: ProviderAccount; onAuthorize?: (account: ProviderAccount) => void }) {
   const error = account.last_quota_error_code
-  const message = error === 'quota_authorization_required' ? 'Quota authorization required' : error === 'quota_permission_denied' ? 'Grant Token Plan access to the RAM user in Bailian' : error ? account.quota_snapshot ? 'Quota refresh failed; showing last known usage' : 'Quota refresh failed' : ''
+  const message = error === 'quota_authorization_required' ? 'Quota authorization required' : error === 'quota_authorization_expired' ? 'Browser authorization expired; sign in again' : error === 'quota_permission_denied' ? 'Grant Token Plan access to this console identity in Bailian' : error ? account.quota_snapshot ? 'Quota refresh failed; showing last known usage' : 'Quota refresh failed' : ''
   return <div className="subscription-summary__empty">
     {account.quota_checked_at ? <small>Updated {lastCheckedLabel(account.quota_checked_at)}</small> : null}
     {message ? <small className="health-error">{message}</small> : null}

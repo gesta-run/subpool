@@ -2,6 +2,7 @@ package bailian
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -9,6 +10,51 @@ import (
 	"strings"
 	"testing"
 )
+
+func TestBrowserTokenUsesQuotaGatewayWithoutGeneratingCredentials(t *testing.T) {
+	requests := 0
+	client := NewClient(&http.Client{Transport: transportFunc(func(r *http.Request) (*http.Response, error) {
+		requests++
+		if r.URL.Host != "bailian-cs.console.aliyun.com" || r.Header.Get("Authorization") != "Bearer illustrative-token" {
+			t.Fatal("browser authorization used an unexpected endpoint or credential")
+		}
+		body, _ := io.ReadAll(r.Body)
+		form, _ := url.ParseQuery(string(body))
+		var params struct {
+			Data struct {
+				Context struct {
+					SwitchAgent int64 `json:"switchAgent"`
+				} `json:"cornerstoneParam"`
+			}
+		}
+		if json.Unmarshal([]byte(form.Get("params")), &params) != nil || params.Data.Context.SwitchAgent != 123 {
+			t.Fatal("delegated console context was not retained")
+		}
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"per1WeekPercentage":0.25}`))}, nil
+	})})
+	snapshot, err := client.Usage(context.Background(), Credentials{AccessToken: "illustrative-token", ConsoleSwitchAgent: 123})
+	if err != nil || requests != 1 || snapshot.Weekly.RemainingPercent != 75 {
+		t.Fatalf("browser quota failed: %+v %v, requests=%d", snapshot, err, requests)
+	}
+}
+
+func TestQuotaCredentialsRejectMixedOrIncompleteAuthorization(t *testing.T) {
+	for _, credentials := range []Credentials{{}, {AccessKeyID: "id"}, {AccessKeySecret: "secret"}, {AccessToken: "token", AccessKeyID: "id"}, {AccessToken: "token", ConsoleSwitchAgent: -1}} {
+		if credentials.Valid() {
+			t.Fatal("invalid credential combination accepted")
+		}
+	}
+}
+
+func TestBrowserTokenHTTPUnauthorizedMeansExpiredAuthorization(t *testing.T) {
+	client := NewClient(&http.Client{Transport: transportFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusUnauthorized, Body: io.NopCloser(strings.NewReader(""))}, nil
+	})})
+	_, err := client.Usage(context.Background(), Credentials{AccessToken: "illustrative-token"})
+	if !errors.Is(err, ErrAuthorizationExpired) {
+		t.Fatalf("unexpected expiry error: %v", err)
+	}
+}
 
 type transportFunc func(*http.Request) (*http.Response, error)
 
@@ -67,7 +113,7 @@ func TestParseUsageDistinguishesMissingZeroAndRejectedQuota(t *testing.T) {
 		{"no windows", `{}`, ErrInvalidResponse},
 		{"negative", `{"per1WeekPercentage":-0.1}`, ErrInvalidResponse},
 		{"permission", `{"data":{"success":false,"errorCode":"BailianGateway.Team.NotAuthorised"}}`, ErrPermissionDenied},
-		{"login", `{"data":{"success":false,"errorCode":"BailianGateway.Login.NotLogined"}}`, ErrPermissionDenied},
+		{"login", `{"data":{"success":false,"errorCode":"BailianGateway.Login.NotLogined"}}`, ErrAuthorizationExpired},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := ParseUsage([]byte(tc.body))

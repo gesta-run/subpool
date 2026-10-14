@@ -65,11 +65,18 @@ Replace every `replace-with-*` value. Docker Compose pulls the latest published 
 
 Beijing Token Plan personal endpoints support automatic five-hour and weekly
 quota display. Connect the endpoint as an OpenAI-compatible account, then select
-**Connect quota** in its account row. Supply a RAM AccessKey belonging to the
-same subscription, with Token Plan read permissions in RAM and subscription
-access in Bailian account permissions. The integration uses the official CLI
-gateway and refreshes its authorization automatically; no CLI installation or
-browser session is required on the server.
+**Connect quota** in its account row. Choose either authorization method:
+
+- **Browser token (temporary):** sign in through the official Bailian CLI browser
+  flow using the subscription owner, then import its console access token in the
+  dialog or through the authenticated quota API. Repeat sign-in when it expires;
+  this token cannot renew itself. The dialog does not start a hosted OAuth flow.
+- **RAM AccessKey (automatic renewal):** supply keys from the same subscription,
+  with Token Plan read permissions in RAM and subscription access in Bailian
+  account permissions. The integration uses the official CLI gateway and renews
+  authorization automatically. No CLI installation is needed on the server.
+
+Delegated console contexts can also pass `console_switch_agent` in the quota API.
 
 Quota credentials are encrypted within the account's credential record and are never returned by the API. Quota query errors
 retain the last known values and do not disable inference. **Disconnect quota**

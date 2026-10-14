@@ -55,6 +55,9 @@ func (c *Checker) compatibleQuota(ctx context.Context, credentials openaicompat.
 	snapshot, err := c.bailian.Usage(ctx, *credentials.BailianQuota)
 	if err != nil {
 		result.QuotaErrorCode = "quota_unavailable"
+		if errors.Is(err, bailian.ErrAuthorizationExpired) {
+			result.QuotaErrorCode = "quota_authorization_expired"
+		}
 		if errors.Is(err, bailian.ErrPermissionDenied) {
 			result.QuotaErrorCode = "quota_permission_denied"
 		}
