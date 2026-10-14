@@ -40,6 +40,21 @@ function renderTable(account: ProviderAccount, resetStates: Record<string, Reset
 }
 
 describe('AccountTable health states', () => {
+  it('displays Token Plan windows and a separate quota permission warning', () => {
+    renderTable({ ...baseAccount, provider: 'openai_compatible', credential_type: 'api_key', quota_provider: 'bailian_token_plan', quota_authorized: true, last_quota_error_code: 'quota_permission_denied' })
+    expect(screen.getByText('Bailian · Token Plan subscription')).toBeInTheDocument()
+    expect(screen.getByText('75%')).toBeInTheDocument()
+    expect(screen.getByText('last known weekly capacity')).toBeInTheDocument()
+    expect(screen.getByText('Grant Token Plan access to the RAM user in Bailian')).toBeInTheDocument()
+    expect(screen.getByText('Routing enabled')).toBeInTheDocument()
+    expect(screen.queryByText('Quota is managed upstream')).not.toBeInTheDocument()
+  })
+
+  it('does not invent quota before Token Plan authorization', () => {
+    renderTable({ ...baseAccount, provider: 'openai_compatible', credential_type: 'api_key', quota_provider: 'bailian_token_plan', quota_snapshot: null })
+    expect(screen.getByText('Token Plan quota unavailable')).toBeInTheDocument()
+    expect(screen.queryByRole('progressbar')).not.toBeInTheDocument()
+  })
   it('groups availability and the latest check in the health column', () => {
     renderTable({ ...baseAccount, last_checked_at: '2026-09-10T08:00:00Z' })
 

@@ -18,6 +18,8 @@ export interface ProviderAccount {
   last_health_error_code?: string | null
   consecutive_health_failures?: number
   assigned_api_keys?: number
+  quota_provider?: 'bailian_token_plan'
+  quota_authorized?: boolean
   quota_snapshot?: {
     plan_type?: string
     usage_allowed?: boolean

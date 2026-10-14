@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/gesta-run/subpool/internal/domain"
+	"github.com/gesta-run/subpool/internal/provider/bailian"
 	"github.com/gesta-run/subpool/internal/provider/codex"
 	"github.com/gesta-run/subpool/internal/provider/copilot"
 	"github.com/gesta-run/subpool/internal/provider/openaicompat"
@@ -23,6 +24,57 @@ type testCipher struct{ plaintext []byte }
 func (c testCipher) Decrypt([]byte) ([]byte, error) { return c.plaintext, nil }
 
 type testCompatible struct{ status int }
+
+type testBailianUsage struct {
+	err   error
+	calls int
+}
+
+func (b *testBailianUsage) Usage(context.Context, bailian.Credentials) (bailian.Snapshot, error) {
+	b.calls++
+	return bailian.Snapshot{PlanType: bailian.PlanType, Weekly: &bailian.Window{RemainingPercent: 75}}, b.err
+}
+
+func TestBailianQuotaPermissionFailurePreservesLastKnownQuotaAndRouting(t *testing.T) {
+	credentials, _ := json.Marshal(openaicompat.Credentials{
+		BaseURL: "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1", APIKey: "illustrative-key",
+		BailianQuota: &bailian.Credentials{AccessKeyID: "illustrative-id", AccessKeySecret: "illustrative-secret"},
+	})
+	oldQuota := json.RawMessage(`{"weekly":{"remaining_percent":75}}`)
+	st := &quotaFailureStore{account: domain.ProviderAccount{ID: "account", Provider: domain.ProviderOpenAICompatible, Status: domain.AccountActive, HealthStatus: domain.HealthHealthy, QuotaSnapshot: oldQuota}}
+	checker := NewChecker(st, testCipher{plaintext: credentials}, nil, testCompatible{status: 200})
+	checker.bailian = &testBailianUsage{err: bailian.ErrPermissionDenied}
+	checked, err := checker.CheckAccount(context.Background(), "account")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if checked.Status != domain.AccountActive || checked.HealthStatus != domain.HealthHealthy || string(checked.QuotaSnapshot) != string(oldQuota) || st.healthFailures != 0 || st.quotaError != "quota_permission_denied" {
+		t.Fatalf("routing or last known quota changed: %+v", checked)
+	}
+}
+
+func TestBailianQuotaAuthorizationIsIndependentOfInference(t *testing.T) {
+	for _, authorized := range []bool{false, true} {
+		credentials := openaicompat.Credentials{BaseURL: "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1", APIKey: "illustrative-key"}
+		if authorized {
+			credentials.BailianQuota = &bailian.Credentials{AccessKeyID: "illustrative-id", AccessKeySecret: "illustrative-secret"}
+		}
+		plaintext, _ := json.Marshal(credentials)
+		checker := NewChecker(nil, testCipher{plaintext: plaintext}, nil, testCompatible{status: 200})
+		usage := &testBailianUsage{}
+		checker.bailian = usage
+		result := checker.Check(context.Background(), domain.ProviderAccount{Provider: domain.ProviderOpenAICompatible})
+		if result.HealthStatus != domain.HealthHealthy || result.AuthFailed || result.Failure || result.UsageAllowed != nil {
+			t.Fatalf("quota altered inference: %+v", result)
+		}
+		if authorized && (usage.calls != 1 || len(result.QuotaSnapshot) == 0) {
+			t.Fatal("quota not fetched")
+		}
+		if !authorized && (usage.calls != 0 || result.QuotaErrorCode != "quota_authorization_required") {
+			t.Fatal("missing credentials silently accepted")
+		}
+	}
+}
 
 func (c testCompatible) Models(context.Context, openaicompat.Credentials) (*http.Response, error) {
 	return &http.Response{StatusCode: c.status, Body: io.NopCloser(strings.NewReader(`{}`))}, nil

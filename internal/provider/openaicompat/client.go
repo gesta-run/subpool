@@ -7,12 +7,14 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/gesta-run/subpool/internal/provider/bailian"
 	providerhttp "github.com/gesta-run/subpool/internal/provider/httpclient"
 )
 
 type Credentials struct {
-	BaseURL string `json:"base_url"`
-	APIKey  string `json:"api_key"`
+	BaseURL      string               `json:"base_url"`
+	APIKey       string               `json:"api_key"`
+	BailianQuota *bailian.Credentials `json:"bailian_quota,omitempty"`
 }
 
 type Client struct {

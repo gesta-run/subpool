@@ -1,0 +1,105 @@
+package control
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"strings"
+	"time"
+
+	"github.com/gesta-run/subpool/internal/domain"
+	"github.com/gesta-run/subpool/internal/provider/bailian"
+	"github.com/gesta-run/subpool/internal/provider/openaicompat"
+)
+
+func (s *Server) describeBailianQuota(account *domain.ProviderAccount) {
+	credentials, ok := s.bailianCredentials(*account)
+	if !ok {
+		return
+	}
+	account.QuotaProvider = bailian.PlanType
+	account.QuotaAuthorized = credentials.BailianQuota != nil
+}
+
+func (s *Server) bailianCredentials(account domain.ProviderAccount) (openaicompat.Credentials, bool) {
+	var credentials openaicompat.Credentials
+	if account.Provider != domain.ProviderOpenAICompatible {
+		return credentials, false
+	}
+	raw, err := s.cipher.Decrypt(account.CredentialCiphertext)
+	if err != nil || json.Unmarshal(raw, &credentials) != nil {
+		return credentials, false
+	}
+	return credentials, bailian.SupportsURL(credentials.BaseURL)
+}
+
+func (s *Server) configureBailianQuota(w http.ResponseWriter, r *http.Request) {
+	account, err := s.store.GetProviderAccount(r.Context(), r.PathValue("id"))
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	credentials, supported := s.bailianCredentials(account)
+	if !supported {
+		writeError(w, http.StatusBadRequest, "quota integration requires a Beijing Token Plan endpoint")
+		return
+	}
+	var snapshot bailian.Snapshot
+	if r.Method == http.MethodDelete {
+		credentials.BailianQuota = nil
+	} else {
+		var request bailian.Credentials
+		if !decode(w, r, &request) {
+			return
+		}
+		request.AccessKeyID = strings.TrimSpace(request.AccessKeyID)
+		request.AccessKeySecret = strings.TrimSpace(request.AccessKeySecret)
+		if request.AccessKeyID == "" || request.AccessKeySecret == "" {
+			writeError(w, http.StatusBadRequest, "access_key_id and access_key_secret are required")
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+		defer cancel()
+		client := s.bailianQuota
+		if client == nil {
+			client = bailian.NewClient(nil)
+		}
+		if snapshot, err = client.Usage(ctx, request); err != nil {
+			writeError(w, http.StatusBadGateway, "quota authorization failed; grant this RAM user Token Plan access in RAM and the Bailian account permissions")
+			return
+		}
+		credentials.BailianQuota = &request
+	}
+	raw, err := json.Marshal(credentials)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to encode quota credentials")
+		return
+	}
+	ciphertext, err := s.cipher.Encrypt(raw)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to encrypt quota credentials")
+		return
+	}
+	saved, err := s.store.UpdateProviderCredentialCAS(r.Context(), account.ID, account.CredentialVersion, ciphertext, account.CredentialVersion+1)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	if !saved {
+		writeError(w, http.StatusConflict, "account changed; retry quota authorization")
+		return
+	}
+	s.audit(r.Context(), "provider_account.quota_credentials.update", "provider_account", account.ID, "success")
+	if credentials.BailianQuota != nil {
+		quota, _ := json.Marshal(snapshot)
+		err = s.store.UpdateProviderDetails(r.Context(), account.ID, "", quota, time.Now())
+	} else {
+		err = s.store.SetProviderQuotaError(r.Context(), account.ID, "quota_authorization_required", time.Now())
+	}
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]bool{"quota_authorized": credentials.BailianQuota != nil})
+}

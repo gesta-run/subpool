@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"hash/crc32"
-	"io"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -13,6 +12,7 @@ import (
 	"time"
 
 	"github.com/gesta-run/subpool/internal/domain"
+	"github.com/gesta-run/subpool/internal/provider/bailian"
 	"github.com/gesta-run/subpool/internal/provider/codex"
 	"github.com/gesta-run/subpool/internal/provider/copilot"
 	"github.com/gesta-run/subpool/internal/provider/openaicompat"
@@ -58,11 +58,12 @@ type Checker struct {
 	codex      CodexUsage
 	compatible CompatibleModels
 	copilot    CopilotCredits
+	bailian    BailianUsage
 	now        func() time.Time
 }
 
 func NewChecker(st store.Store, cipher Cipher, codexUsage CodexUsage, compatible CompatibleModels, copilotCredits ...CopilotCredits) *Checker {
-	checker := &Checker{store: st, cipher: cipher, codex: codexUsage, compatible: compatible, now: time.Now}
+	checker := &Checker{store: st, cipher: cipher, codex: codexUsage, compatible: compatible, bailian: bailian.NewClient(nil), now: time.Now}
 	if len(copilotCredits) > 0 {
 		checker.copilot = copilotCredits[0]
 	}
@@ -95,30 +96,7 @@ func (c *Checker) Check(ctx context.Context, account domain.ProviderAccount) Res
 		}
 		return classifyCodexQuotaError(err)
 	case domain.ProviderOpenAICompatible:
-		var credentials openaicompat.Credentials
-		if json.Unmarshal(plaintext, &credentials) != nil {
-			return Result{HealthStatus: domain.HealthUnhealthy, ErrorCode: "credential_unavailable", Failure: true}
-		}
-		resp, requestErr := c.compatible.Models(ctx, credentials)
-		if requestErr != nil {
-			return classifyError(requestErr)
-		}
-		defer resp.Body.Close()
-		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
-		switch {
-		case resp.StatusCode >= 200 && resp.StatusCode < 300:
-			return Result{HealthStatus: domain.HealthHealthy}
-		case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
-			return Result{HealthStatus: domain.HealthUnhealthy, ErrorCode: "authentication_failed", AuthFailed: true}
-		case resp.StatusCode == http.StatusTooManyRequests:
-			return Result{HealthStatus: domain.HealthHealthy}
-		case resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusMethodNotAllowed:
-			return Result{HealthStatus: domain.HealthUnknown, ErrorCode: "probe_unsupported"}
-		case resp.StatusCode >= 500:
-			return Result{HealthStatus: domain.HealthUnknown, ErrorCode: "provider_5xx", Failure: true}
-		default:
-			return Result{HealthStatus: domain.HealthUnknown, ErrorCode: "provider_error", Failure: true}
-		}
+		return c.checkCompatible(ctx, plaintext)
 	case domain.ProviderCopilot:
 		var credentials copilot.Credentials
 		if json.Unmarshal(plaintext, &credentials) != nil || c.copilot == nil {

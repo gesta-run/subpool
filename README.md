@@ -61,6 +61,23 @@ Replace every `replace-with-*` value. Docker Compose pulls the latest published 
 
 ## Connect and use
 
+### Bailian Token Plan quota
+
+Beijing Token Plan personal endpoints support automatic five-hour and weekly
+quota display. Connect the endpoint as an OpenAI-compatible account, then select
+**Connect quota** in its account row. Supply a RAM AccessKey belonging to the
+same subscription, with Token Plan read permissions in RAM and subscription
+access in Bailian account permissions. The integration uses the official CLI
+gateway and refreshes its authorization automatically; no CLI installation or
+browser session is required on the server.
+
+Quota credentials are encrypted within the account's credential record and are never returned by the API. Quota query errors
+retain the last known values and do not disable inference. **Disconnect quota**
+removes only the quota credentials. Other regions, team Credits, Coding Plan,
+and pay-as-you-go balances are not covered by this integration.
+
+### Client setup
+
 1. Open **Accounts** and connect a Codex, GitHub Copilot, or OpenAI-compatible account.
 2. Create a pool and add the account.
 3. Create an employee API key for the pool.

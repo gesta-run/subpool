@@ -45,6 +45,7 @@ type Server struct {
 	refresher                          credential.AccountRefresher
 	sources                            *auth.SourceResolver
 	health                             *providerhealth.Checker
+	bailianQuota                       providerhealth.BailianUsage
 	onAccountRoutingChange             func(string)
 	defaultMaxRequestBodyBytes         int64
 	defaultMaxInflightRequestBodyBytes int64
@@ -102,6 +103,8 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/provider-accounts", s.admin(s.listProviderAccounts))
 	mux.HandleFunc("GET /api/v1/provider-accounts/{id}/models", s.admin(s.listProviderModels))
 	mux.HandleFunc("POST /api/v1/provider-accounts", s.admin(s.createProviderAccount))
+	mux.HandleFunc("PUT /api/v1/provider-accounts/{id}/bailian-quota", s.admin(s.configureBailianQuota))
+	mux.HandleFunc("DELETE /api/v1/provider-accounts/{id}/bailian-quota", s.admin(s.configureBailianQuota))
 	mux.HandleFunc("PUT /api/v1/provider-accounts/{id}", s.admin(s.updateProviderAccount))
 	mux.HandleFunc("DELETE /api/v1/provider-accounts/{id}", s.admin(s.deleteProviderAccount))
 	mux.HandleFunc("POST /api/v1/provider-accounts/{id}/refresh", s.admin(s.refreshProviderAccount))
@@ -315,6 +318,9 @@ func (s *Server) listProviderAccounts(w http.ResponseWriter, r *http.Request) {
 		slog.Error("failed to list provider accounts", "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to list provider accounts")
 		return
+	}
+	for i := range accounts {
+		s.describeBailianQuota(&accounts[i])
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"data": accounts})
 }
