@@ -128,6 +128,22 @@ func TestParseUsageDistinguishesMissingZeroAndRejectedQuota(t *testing.T) {
 	}
 }
 
+func TestParseUsageMonthlyOnlySubscription(t *testing.T) {
+	// Illustrative fractions and timestamps; match the console envelope shape.
+	body := []byte(`{"data":{"success":true,"DataV2":{"data":{"success":true,"data":{"per1MonthPercentage":0.3,"per1MonthResetTime":1901000000000}}}}}`)
+	snapshot, err := ParseUsage(body)
+	if err != nil || snapshot.Monthly == nil || snapshot.Monthly.RemainingPercent != 70 || snapshot.Monthly.ResetAt != 1901000000 || snapshot.Monthly.WindowSeconds != 0 || snapshot.FiveHour != nil || snapshot.Weekly != nil {
+		t.Fatalf("monthly quota was lost or mislabeled: %+v %v", snapshot, err)
+	}
+	snapshot, err = ParseUsage([]byte(`{"per1MonthPercentage":0}`))
+	if err != nil || snapshot.Monthly == nil || snapshot.Monthly.RemainingPercent != 100 {
+		t.Fatal("unused monthly quota treated as missing")
+	}
+	if _, err = ParseUsage([]byte(`{"per1MonthPercentage":-0.1}`)); !errors.Is(err, ErrInvalidResponse) {
+		t.Fatal("negative monthly quota accepted")
+	}
+}
+
 func TestSupportsURLRequiresTheTokenPlanOrigin(t *testing.T) {
 	for _, raw := range []string{"http://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1", "https://token-plan.cn-beijing.maas.aliyuncs.com.example.com/compatible-mode/v1", "https://dashscope.aliyuncs.com/compatible-mode/v1"} {
 		if SupportsURL(raw) {

@@ -40,6 +40,15 @@ function renderTable(account: ProviderAccount, resetStates: Record<string, Reset
 }
 
 describe('AccountTable health states', () => {
+  it('displays a monthly-only Token Plan without inventing other windows', () => {
+    renderTable({ ...baseAccount, provider: 'openai_compatible', credential_type: 'api_key', quota_provider: 'bailian_token_plan', quota_authorized: true, quota_snapshot: { monthly: { used_percent: 30, remaining_percent: 70, window_seconds: 0, reset_at: 1901000000 } } })
+    expect(screen.getByText('monthly capacity')).toBeInTheDocument()
+    expect(screen.getByRole('progressbar', { name: /monthly usage remaining/i })).toHaveAttribute('aria-valuenow', '70')
+    expect(screen.queryByText('Token Plan quota unavailable')).not.toBeInTheDocument()
+    expect(screen.queryByText('weekly capacity')).not.toBeInTheDocument()
+    expect(screen.queryByText('5-hour capacity')).not.toBeInTheDocument()
+  })
+
   it('displays Token Plan windows and a separate quota permission warning', () => {
     renderTable({ ...baseAccount, provider: 'openai_compatible', credential_type: 'api_key', quota_provider: 'bailian_token_plan', quota_authorized: true, last_quota_error_code: 'quota_permission_denied' })
     expect(screen.getByText('Bailian · Token Plan subscription')).toBeInTheDocument()

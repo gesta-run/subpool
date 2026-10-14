@@ -63,8 +63,9 @@ Replace every `replace-with-*` value. Docker Compose pulls the latest published 
 
 ### Bailian Token Plan quota
 
-Beijing Token Plan personal endpoints support automatic five-hour and weekly
-quota display. Connect the endpoint as an OpenAI-compatible account, then select
+Beijing Token Plan personal endpoints support automatic five-hour, weekly, or
+monthly quota display, depending on the windows reported by the subscription.
+Connect the endpoint as an OpenAI-compatible account, then select
 **Connect quota** in its account row. Choose either authorization method:
 
 - **Browser token (temporary):** sign in through the official Bailian CLI browser

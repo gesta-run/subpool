@@ -41,6 +41,7 @@ type Snapshot struct {
 	PlanType string  `json:"plan_type"`
 	FiveHour *Window `json:"five_hour,omitempty"`
 	Weekly   *Window `json:"weekly,omitempty"`
+	Monthly  *Window `json:"monthly,omitempty"`
 }
 
 type Client struct{ httpClient *http.Client }
@@ -122,8 +123,10 @@ func ParseUsage(body []byte) (Snapshot, error) {
 			DataV2        json.RawMessage `json:"DataV2"`
 			FiveHour      *float64        `json:"per5HourPercentage"`
 			Weekly        *float64        `json:"per1WeekPercentage"`
+			Monthly       *float64        `json:"per1MonthPercentage"`
 			FiveHourReset int64           `json:"per5HourResetTime"`
 			WeeklyReset   int64           `json:"per1WeekResetTime"`
+			MonthlyReset  int64           `json:"per1MonthResetTime"`
 		}
 		if json.Unmarshal(body, &payload) != nil {
 			return Snapshot{}, ErrInvalidResponse
@@ -137,13 +140,18 @@ func ParseUsage(body []byte) (Snapshot, error) {
 			}
 			return Snapshot{}, ErrInvalidResponse
 		}
-		if payload.FiveHour != nil || payload.Weekly != nil {
+		if payload.FiveHour != nil || payload.Weekly != nil || payload.Monthly != nil {
 			five, err := quotaWindow(payload.FiveHour, payload.FiveHourReset, 5*3600)
 			if err != nil {
 				return Snapshot{}, err
 			}
 			weekly, err := quotaWindow(payload.Weekly, payload.WeeklyReset, 7*24*3600)
-			return Snapshot{PlanType: PlanType, FiveHour: five, Weekly: weekly}, err
+			if err != nil {
+				return Snapshot{}, err
+			}
+			// The calendar month length is not reported; retain its actual reset time.
+			monthly, err := quotaWindow(payload.Monthly, payload.MonthlyReset, 0)
+			return Snapshot{PlanType: PlanType, FiveHour: five, Weekly: weekly, Monthly: monthly}, err
 		}
 		body = payload.Data
 		if len(payload.DataV2) > 0 {

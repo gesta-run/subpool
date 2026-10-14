@@ -28,6 +28,7 @@ export interface ProviderAccount {
     resets_at?: string
     five_hour?: QuotaWindow
     weekly?: QuotaWindow
+    monthly?: QuotaWindow
     credits?: CreditsQuota | CodexCreditsQuota
   } | null
   quota_checked_at?: string | null
