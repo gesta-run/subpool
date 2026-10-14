@@ -149,4 +149,8 @@ func (s *Server) CloseResponsesWebSocketsForAccount(accountID string) {
 	s.responsesWS.CloseAccount(accountID)
 }
 
-func (s *Server) ResponsesWebSocketMetrics() string { return s.responsesWS.Metrics() }
+func (s *Server) ResponsesWebSocketMetrics() string {
+	return "# HELP subpool_codex_routing_requests_total Codex client requests by existing routing binding; resets on restart.\n" +
+		"# TYPE subpool_codex_routing_requests_total counter\n" +
+		s.routingStats.Metrics("http") + s.responsesWS.Metrics()
+}

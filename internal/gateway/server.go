@@ -22,6 +22,7 @@ import (
 	"github.com/gesta-run/subpool/internal/domain"
 	"github.com/gesta-run/subpool/internal/gateway/clientquota"
 	"github.com/gesta-run/subpool/internal/gateway/responsesws"
+	"github.com/gesta-run/subpool/internal/gateway/routingstats"
 	"github.com/gesta-run/subpool/internal/protocol/responseevent"
 	"github.com/gesta-run/subpool/internal/provider/codex"
 	"github.com/gesta-run/subpool/internal/provider/copilot"
@@ -79,6 +80,7 @@ type Server struct {
 	requestBodyTimeout  time.Duration
 	now                 func() time.Time
 	eventSeq            atomic.Uint64
+	routingStats        routingstats.Counters
 }
 
 func New(st store.Store, keys *auth.APIKeys, cipher Cipher, client CodexClient, refresher credential.AccountRefresher, compatible ...OpenAICompatibleClient) *Server {
@@ -339,6 +341,11 @@ func (s *Server) call(w http.ResponseWriter, r *http.Request, route domain.KeyRo
 			writeOpenAIError(w, http.StatusServiceUnavailable, "no eligible account", "subpool_no_eligible_account")
 			return nil, false
 		}
+	}
+	// Observe once per client request, before retries. Image requests are outside
+	// the Codex conversation-routing population.
+	if account.Provider == domain.ProviderCodex && !isImageRequest(request.Kind) {
+		s.routingStats.Record(continuation, false)
 	}
 	for attempt := 0; attempt < maxProviderAttempts; attempt++ {
 		attempted = append(attempted, account.ID)

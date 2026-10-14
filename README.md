@@ -123,6 +123,14 @@ Save the file, then restart Codex so the new provider and WebSocket settings are
 
 Available API endpoints include `GET/POST /v1/responses`, `POST /v1/responses/compact`, `POST /v1/chat/completions`, `POST /v1/images/generations`, `POST /v1/images/edits`, `GET /v1/models`, `GET /healthz`, `GET /readyz`, and `GET /metrics`.
 
+`subpool_codex_routing_requests_total` observes Codex routing boundaries with fixed `transport` (`http`, `websocket`) and `binding` labels:
+
+- `unbound`: no previous response and no existing WebSocket account binding.
+- `continuation`: the request supplies a previous response ID, including the first request after reconnecting.
+- `connection`: no previous response ID, but the WebSocket already has an account binding.
+
+HTTP requests are counted once after initial account resolution, before upstream attempts; accepted WebSocket turns are counted once before forwarding. Retries and HTTP bridge attempts do not add requests. Image requests and other providers are excluded. Counters reset on process restart and contain no employee identifiers, credentials, request bodies, or response IDs. Compare deltas from the same process lifetime and allow a warm-up period after deployment. `unbound` identifies an opportunity under the current routing contract, not a guarantee of cross-account replay safety, available alternative capacity, or a share of consumed quota. These metrics do not change routing.
+
 Subpool always serves two listeners. `SUBPOOL_API_LISTEN_ADDRESS` exposes the employee API and operational endpoints, while `SUBPOOL_CONSOLE_LISTEN_ADDRESS` exposes the console and its `/api/v1/*` control API. For Compose deployments, `SUBPOOL_PORT` and `SUBPOOL_CONSOLE_PORT` select their host ports. The pre deployment uses `SUBPOOL_HOST_PORT` (API, default `8082`) and `SUBPOOL_CONSOLE_HOST_PORT` (console, default `8083`).
 
 ## Deployment notes

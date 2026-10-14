@@ -498,6 +498,8 @@ func TestResponsesWebSocketNativeCodex(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("native WebSocket was not dialed")
 	}
+	assertRoutingCount(t, server, "websocket", "unbound", "1")
+	assertRoutingCount(t, server, "http", "unbound", "0")
 	server.CloseResponsesWebSocketsForAccount(st.route.Account.ID)
 	readCtx, cancelRead := context.WithTimeout(context.Background(), time.Second)
 	_, _, err = client.Read(readCtx)

@@ -147,6 +147,9 @@ func (s *responsesWSSession) handleRequest(request responsesWSRequest, releaseBo
 		s.sendError(request.streamID(), requestErr.Code, requestErr.Message)
 		return true
 	}
+	s.mu.Lock()
+	wasPinned := s.pinned
+	s.mu.Unlock()
 	firstBridge, bridgeCanFailover, requestErr := s.ensurePinned(request, route)
 	if requestErr != nil {
 		s.hub.turnsRejected.Add(1)
@@ -178,7 +181,11 @@ func (s *responsesWSSession) handleRequest(request responsesWSRequest, releaseBo
 	s.hub.turnsTotal.Add(1)
 	s.mu.Lock()
 	native := s.native
+	provider := s.account.Provider
 	s.mu.Unlock()
+	if provider == domain.ProviderCodex {
+		s.hub.routingStats.Record(request.PreviousResponseID != "", wasPinned)
+	}
 	if native {
 		if err := s.writeUpstream(payload); err != nil {
 			s.finishTurn(turn)

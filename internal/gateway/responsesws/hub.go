@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/gesta-run/subpool/internal/gateway/routingstats"
 )
 
 type Hub struct {
@@ -33,6 +34,7 @@ type Hub struct {
 	turnsRejected     atomic.Int64
 	upstreamDials     atomic.Int64
 	upstreamFailures  atomic.Int64
+	routingStats      routingstats.Counters
 }
 
 func New(backend Backend) *Hub {
@@ -203,7 +205,7 @@ func (h *Hub) Metrics() string {
 		activeTurns += count
 	}
 	h.mu.Unlock()
-	return fmt.Sprintf(
+	return h.routingStats.Metrics("websocket") + fmt.Sprintf(
 		"# TYPE subpool_responses_ws_connections_active gauge\nsubpool_responses_ws_connections_active %d\n"+
 			"# TYPE subpool_responses_ws_connections_total counter\nsubpool_responses_ws_connections_total %d\n"+
 			"# TYPE subpool_responses_ws_connections_rejected_total counter\nsubpool_responses_ws_connections_rejected_total %d\n"+
