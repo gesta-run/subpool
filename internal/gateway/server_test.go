@@ -59,6 +59,13 @@ func (f *fakeStore) SaveSessionBinding(_ context.Context, _, _ string, _ []byte,
 	}
 	return nil
 }
+func (f *fakeStore) PreferQuotaAccount(_ context.Context, route domain.KeyRoute) (domain.ProviderAccount, error) {
+	f.quotaCalls++
+	if f.quotaPreferred.ID != "" {
+		return f.quotaPreferred, nil
+	}
+	return route.Account, nil
+}
 func (f *fakeStore) ReassignAPIKey(_ context.Context, _, _ string, excludeIDs []string) (domain.ProviderAccount, error) {
 	f.reassignExcludes = append(f.reassignExcludes, append([]string(nil), excludeIDs...))
 	if len(f.reassignedAccounts) > 0 {

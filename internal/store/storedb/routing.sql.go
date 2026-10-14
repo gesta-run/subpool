@@ -176,6 +176,25 @@ func (q *Queries) GetProviderAccountProvider(ctx context.Context, id string) (st
 	return provider, err
 }
 
+const getQuotaRoutingBinding = `-- name: GetQuotaRoutingBinding :one
+SELECT b.provider_account_id
+FROM api_key_account_bindings b JOIN api_keys k ON k.id = b.api_key_id
+WHERE k.id = $1 AND k.pool_id = $2
+  AND k.revoked_at IS NULL AND (k.expires_at IS NULL OR k.expires_at > now())
+`
+
+type GetQuotaRoutingBindingParams struct {
+	ApiKeyID string
+	PoolID   string
+}
+
+func (q *Queries) GetQuotaRoutingBinding(ctx context.Context, arg GetQuotaRoutingBindingParams) (string, error) {
+	row := q.db.QueryRow(ctx, getQuotaRoutingBinding, arg.ApiKeyID, arg.PoolID)
+	var provider_account_id string
+	err := row.Scan(&provider_account_id)
+	return provider_account_id, err
+}
+
 const getRoutableProviderAccount = `-- name: GetRoutableProviderAccount :one
 SELECT id, provider, credential_type, display_name, credential_ciphertext,
     credential_version, status, fast_mode_enabled, health_status, quota_snapshot,
@@ -614,6 +633,68 @@ func (q *Queries) LockPoolForUpdate(ctx context.Context, id string) (string, err
 	var provider string
 	err := row.Scan(&provider)
 	return provider, err
+}
+
+const lockQuotaRoutingCandidates = `-- name: LockQuotaRoutingCandidates :many
+SELECT a.id, a.quota_snapshot, a.quota_checked_at,
+    COALESCE(a.last_quota_error_code, '')::text AS quota_error,
+    pa.weight,
+    (SELECT count(*) FROM api_key_account_bindings b JOIN api_keys k ON k.id = b.api_key_id
+     WHERE b.provider_account_id = a.id AND k.revoked_at IS NULL
+       AND (k.expires_at IS NULL OR k.expires_at > now()))::bigint AS bound_keys
+FROM provider_accounts a
+JOIN pool_accounts pa ON pa.provider_account_id = a.id AND pa.pool_id = $1 AND pa.enabled
+JOIN pool_accounts current_pa ON current_pa.provider_account_id = $2
+    AND current_pa.pool_id = pa.pool_id AND current_pa.enabled AND current_pa.priority = pa.priority
+JOIN provider_accounts current_account ON current_account.id = current_pa.provider_account_id
+WHERE a.provider = 'codex' AND current_account.provider = 'codex'
+  AND a.credential_type = current_account.credential_type
+  AND a.fast_mode_enabled = current_account.fast_mode_enabled
+  AND (a.status = 'active' OR (a.status = 'cooling_down' AND a.cooldown_until <= now()))
+  AND COALESCE(NULLIF(a.health_status, ''), 'unknown') != 'unhealthy'
+ORDER BY a.id
+FOR UPDATE OF a
+`
+
+type LockQuotaRoutingCandidatesParams struct {
+	PoolID    string
+	CurrentID string
+}
+
+type LockQuotaRoutingCandidatesRow struct {
+	ID             string
+	QuotaSnapshot  []byte
+	QuotaCheckedAt pgtype.Timestamptz
+	QuotaError     string
+	Weight         int32
+	BoundKeys      int64
+}
+
+func (q *Queries) LockQuotaRoutingCandidates(ctx context.Context, arg LockQuotaRoutingCandidatesParams) ([]LockQuotaRoutingCandidatesRow, error) {
+	rows, err := q.db.Query(ctx, lockQuotaRoutingCandidates, arg.PoolID, arg.CurrentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []LockQuotaRoutingCandidatesRow
+	for rows.Next() {
+		var i LockQuotaRoutingCandidatesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.QuotaSnapshot,
+			&i.QuotaCheckedAt,
+			&i.QuotaError,
+			&i.Weight,
+			&i.BoundKeys,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const markPoolMixed = `-- name: MarkPoolMixed :exec

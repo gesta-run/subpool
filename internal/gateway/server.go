@@ -328,6 +328,11 @@ func (s *Server) call(w http.ResponseWriter, r *http.Request, route domain.KeyRo
 			account = preferred
 		}
 	}
+	if !continuation && !isImageRequest(request.Kind) && route.MembershipEnabled && route.Account.Provider == domain.ProviderCodex && accountHealthy(account, s.now()) {
+		if preferred, quotaErr := s.store.PreferQuotaAccount(r.Context(), route); quotaErr == nil {
+			account = preferred
+		}
+	}
 	attempted := make([]string, 0, maxProviderAttempts)
 	lastRetry := retryUnavailable
 	if (!continuation && !route.MembershipEnabled) || !accountHealthy(account, s.now()) {

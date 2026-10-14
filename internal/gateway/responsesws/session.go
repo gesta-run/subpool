@@ -292,6 +292,11 @@ func (s *responsesWSSession) initialAccount(request responsesWSRequest, route do
 		}
 	}
 	if route.MembershipEnabled && s.hub.backend.AccountHealthy(account) {
+		if route.Account.Provider == domain.ProviderCodex {
+			if preferred, err := s.hub.backend.RoutingStore().PreferQuotaAccount(s.ctx, route); err == nil {
+				account = preferred
+			}
+		}
 		return account, false, nil
 	}
 	reassigned, err := s.hub.backend.RoutingStore().ReassignAPIKey(s.ctx, route.Key.ID, route.Pool.ID, []string{account.ID})

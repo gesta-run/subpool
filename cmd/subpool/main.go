@@ -45,6 +45,7 @@ func main() {
 		os.Exit(1)
 	}
 	defer database.Close()
+	database.WithCodexQuotaRouting(cfg.CodexQuotaRouting)
 	cipher, err := credential.New(cfg.CredentialKey)
 	if err != nil {
 		slog.Error("credential cipher startup failed", "error", err)
@@ -104,7 +105,7 @@ func main() {
 	})
 	apiMux.HandleFunc("GET /metrics", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4")
-		_, _ = w.Write([]byte("# HELP subpool_up Whether the service is running.\n# TYPE subpool_up gauge\nsubpool_up 1\n" + gatewayServer.ResponsesWebSocketMetrics()))
+		_, _ = w.Write([]byte("# HELP subpool_up Whether the service is running.\n# TYPE subpool_up gauge\nsubpool_up 1\n" + gatewayServer.ResponsesWebSocketMetrics() + fmt.Sprintf("# HELP subpool_codex_quota_routing_switches_total Committed quota-aware default binding changes.\n# TYPE subpool_codex_quota_routing_switches_total counter\nsubpool_codex_quota_routing_switches_total %d\n", database.QuotaRoutingSwitches())))
 	})
 
 	consoleMux := http.NewServeMux()

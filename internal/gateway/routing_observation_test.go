@@ -43,6 +43,9 @@ func TestRoutingObservationHTTPContinuation(t *testing.T) {
 	}
 	assertRoutingCount(t, server, "http", "unbound", "0")
 	assertRoutingCount(t, server, "http", "continuation", "1")
+	if st.quotaCalls != 0 {
+		t.Fatalf("continuation evaluated quota routing %d times", st.quotaCalls)
+	}
 }
 
 func TestRoutingObservationWebSocketBindingAndBridge(t *testing.T) {
@@ -80,8 +83,21 @@ func TestRoutingObservationWebSocketBindingAndBridge(t *testing.T) {
 		}
 		cancel()
 	}
+	if st.quotaCalls != 1 {
+		t.Fatalf("expected one quota decision for the connection, got %d", st.quotaCalls)
+	}
 	for _, binding := range []string{"unbound", "continuation", "connection"} {
 		assertRoutingCount(t, server, "websocket", binding, "1")
 		assertRoutingCount(t, server, "http", binding, "0")
+	}
+}
+
+func TestQuotaRoutingHTTPUsesPreferredAccount(t *testing.T) {
+	server, st, provider, plain := newTestServer(t)
+	st.quotaPreferred = accountWithCredentials(t, "preferred-account", "quota-preferred-token")
+	provider.responses = []*http.Response{sseResponse(http.StatusOK, "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-quota\",\"usage\":{}}}\n\n")}
+	result := serveGateway(t, server, plain, "/v1/responses", `{"model":"gpt-test","input":"hello"}`)
+	if result.Code != http.StatusOK || st.quotaCalls != 1 || st.savedAccount != st.quotaPreferred.ID {
+		t.Fatalf("status=%d quota calls=%d saved account=%s", result.Code, st.quotaCalls, st.savedAccount)
 	}
 }

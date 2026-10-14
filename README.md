@@ -164,3 +164,28 @@ go test ./...
 ## Terms
 
 Subpool is licensed under the [Apache License 2.0](LICENSE). It is independent and self-hosted. Use only accounts you are authorized to manage, and review each upstream provider's terms before sharing access.
+
+### Opt-in Codex quota routing
+
+Set `SUBPOOL_CODEX_QUOTA_ROUTING=true` to prefer more remaining subscription
+capacity for independent, non-image Codex requests and the first unbound
+WebSocket turn. The default is `false`, including self-hosted deployments.
+Existing `previous_response_id` chains and established WebSockets keep their
+account; the policy does not migrate or replay them. API keys and client
+configuration stay unchanged. New keys still use the existing allocation
+policy; their first eligible request can update their default account.
+
+The score is the smaller remaining percentage of the five-hour and weekly
+windows. Both must be present, checked within 15 minutes, error-free, and not
+past their reset timestamps. A candidate must improve the score by more than
+five percentage points and have the same plan, provider, priority, credential
+type, and fast-mode setting. Health, cooldown and key-capacity checks still
+apply. Equal scores prefer lower weighted key count. Missing or stale data
+keeps the current binding; normal availability failover remains unchanged.
+
+`subpool_codex_quota_routing_switches_total` counts committed default-binding
+changes and resets on process restart, like the routing observation counters.
+Compare quota snapshots and failures over time; request counts alone do not
+measure quota consumption. Direct upstream usage can also change the balance.
+Set the flag back to `false` and restart to stop further quota-based changes;
+existing defaults and response bindings remain valid.

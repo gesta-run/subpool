@@ -59,6 +59,7 @@ type Store interface {
 	ResolvePinnedAPIKey(context.Context, []byte, string, string) (domain.KeyRoute, error)
 	ResolveSessionAccount(context.Context, string, []byte) (domain.ProviderAccount, error)
 	SaveSessionBinding(context.Context, string, string, []byte, string, time.Time) error
+	PreferQuotaAccount(context.Context, domain.KeyRoute) (domain.ProviderAccount, error)
 	ReassignAPIKey(context.Context, string, string, []string) (domain.ProviderAccount, error)
 	AllowAPIKeyRequest(context.Context, string, int, time.Time) (bool, error)
 	RecordRequestSuccess(context.Context, string, string, time.Time) error

@@ -457,7 +457,8 @@ func TestResponsesWebSocketNativeCodex(t *testing.T) {
 	defer upstream.Close()
 
 	server, st, _, plain := newTestServer(t)
-	st.route.Account.FastModeEnabled = true
+	st.quotaPreferred = accountWithCredentials(t, "quota-preferred-native", "illustrative-native-token")
+	st.quotaPreferred.FastModeEnabled = true
 	server.WithResponsesWebSocket(true, false, upstream.URL)
 	client, cleanup := dialResponsesWSTestServer(t, server, plain)
 	defer cleanup()
@@ -483,7 +484,7 @@ func TestResponsesWebSocketNativeCodex(t *testing.T) {
 			t.Fatal(err)
 		}
 		metadata, _ := body["client_metadata"].(map[string]any)
-		installationID, _ := codex.InstallationID(st.route.Account.ID)
+		installationID, _ := codex.InstallationID(st.quotaPreferred.ID)
 		if body["store"] != false || body["stream"] != nil || body["service_tier"] != "priority" || metadata["x-codex-installation-id"] != installationID {
 			t.Fatalf("unexpected native body: %s", payload)
 		}
@@ -500,7 +501,10 @@ func TestResponsesWebSocketNativeCodex(t *testing.T) {
 	}
 	assertRoutingCount(t, server, "websocket", "unbound", "1")
 	assertRoutingCount(t, server, "http", "unbound", "0")
-	server.CloseResponsesWebSocketsForAccount(st.route.Account.ID)
+	if st.quotaCalls != 1 {
+		t.Fatalf("quota calls=%d", st.quotaCalls)
+	}
+	server.CloseResponsesWebSocketsForAccount(st.quotaPreferred.ID)
 	readCtx, cancelRead := context.WithTimeout(context.Background(), time.Second)
 	_, _, err = client.Read(readCtx)
 	cancelRead()

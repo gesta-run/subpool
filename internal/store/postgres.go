@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/gesta-run/subpool/internal/domain"
@@ -15,8 +16,10 @@ import (
 )
 
 type Postgres struct {
-	pool    *pgxpool.Pool
-	queries *storedb.Queries
+	pool                 *pgxpool.Pool
+	queries              *storedb.Queries
+	codexQuotaRouting    bool
+	quotaRoutingSwitches atomic.Uint64
 }
 
 func Open(ctx context.Context, databaseURL string) (*Postgres, error) {

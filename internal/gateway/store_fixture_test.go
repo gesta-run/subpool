@@ -11,6 +11,8 @@ import (
 
 type fakeStore struct {
 	store.Store
+	quotaCalls              int
+	quotaPreferred          domain.ProviderAccount
 	settingsMu              sync.RWMutex
 	settings                domain.Settings
 	settingsErr             error

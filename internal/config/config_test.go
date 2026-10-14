@@ -9,6 +9,7 @@ import (
 
 func setValidEnv(t *testing.T) {
 	t.Helper()
+	t.Setenv("SUBPOOL_CODEX_QUOTA_ROUTING", "")
 	t.Setenv("SUBPOOL_API_LISTEN_ADDRESS", "")
 	t.Setenv("SUBPOOL_CONSOLE_LISTEN_ADDRESS", "")
 	t.Setenv("SUBPOOL_DATABASE_URL", "postgres://db/subpool")
@@ -200,5 +201,22 @@ func TestLoadRejectsPublicURLPathPrefix(t *testing.T) {
 	t.Setenv("SUBPOOL_PUBLIC_URL", "https://subpool.example.com/team-a")
 	if _, err := Load(); err == nil {
 		t.Fatal("expected a public URL path prefix error")
+	}
+}
+
+func TestCodexQuotaRoutingOptIn(t *testing.T) {
+	setValidEnv(t)
+	cfg, err := Load()
+	if err != nil || cfg.CodexQuotaRouting {
+		t.Fatal("quota routing must default off", err)
+	}
+	t.Setenv("SUBPOOL_CODEX_QUOTA_ROUTING", "true")
+	cfg, err = Load()
+	if err != nil || !cfg.CodexQuotaRouting {
+		t.Fatal("quota routing opt-in failed", err)
+	}
+	t.Setenv("SUBPOOL_CODEX_QUOTA_ROUTING", "invalid")
+	if _, err = Load(); err == nil {
+		t.Fatal("invalid opt-in accepted")
 	}
 }

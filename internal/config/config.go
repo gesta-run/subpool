@@ -29,6 +29,7 @@ type Config struct {
 	CopilotAPIBase                string
 	CopilotTokenExchangeURL       string
 	CopilotEntitlementsURL        string
+	CodexQuotaRouting             bool
 	ResponsesWSEnabled            bool
 	ResponsesWSForceHTTPBridge    bool
 	UpstreamResponseHeaderTimeout time.Duration
@@ -60,6 +61,9 @@ func Load() (Config, error) {
 		RequestBodyReadTimeout:        5 * time.Minute,
 	}
 	var err error
+	if cfg.CodexQuotaRouting, err = envBool("SUBPOOL_CODEX_QUOTA_ROUTING", false); err != nil {
+		return Config{}, err
+	}
 	if cfg.ResponsesWSEnabled, err = envBool("SUBPOOL_RESPONSES_WS_ENABLED", true); err != nil {
 		return Config{}, err
 	}

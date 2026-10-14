@@ -66,6 +66,7 @@ type RoutingStore interface {
 	ResolveAPIKey(context.Context, []byte) (domain.KeyRoute, error)
 	ResolvePinnedAPIKey(context.Context, []byte, string, string) (domain.KeyRoute, error)
 	ResolveSessionAccount(context.Context, string, []byte) (domain.ProviderAccount, error)
+	PreferQuotaAccount(context.Context, domain.KeyRoute) (domain.ProviderAccount, error)
 	ReassignAPIKey(context.Context, string, string, []string) (domain.ProviderAccount, error)
 	UpdateProviderStatus(context.Context, string, string, *time.Time) error
 	SetProviderUsageAllowed(context.Context, string, bool) error

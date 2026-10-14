@@ -308,3 +308,29 @@ LIMIT sqlc.arg(top_limit);
 -- name: WriteAuditEvent :exec
 INSERT INTO audit_events(actor, action, target_type, target_id, result)
 VALUES (sqlc.arg(actor), sqlc.arg(action), sqlc.arg(target_type), sqlc.arg(target_id), sqlc.arg(result));
+
+-- name: GetQuotaRoutingBinding :one
+SELECT b.provider_account_id
+FROM api_key_account_bindings b JOIN api_keys k ON k.id = b.api_key_id
+WHERE k.id = sqlc.arg(api_key_id) AND k.pool_id = sqlc.arg(pool_id)
+  AND k.revoked_at IS NULL AND (k.expires_at IS NULL OR k.expires_at > now());
+
+-- name: LockQuotaRoutingCandidates :many
+SELECT a.id, a.quota_snapshot, a.quota_checked_at,
+    COALESCE(a.last_quota_error_code, '')::text AS quota_error,
+    pa.weight,
+    (SELECT count(*) FROM api_key_account_bindings b JOIN api_keys k ON k.id = b.api_key_id
+     WHERE b.provider_account_id = a.id AND k.revoked_at IS NULL
+       AND (k.expires_at IS NULL OR k.expires_at > now()))::bigint AS bound_keys
+FROM provider_accounts a
+JOIN pool_accounts pa ON pa.provider_account_id = a.id AND pa.pool_id = sqlc.arg(pool_id) AND pa.enabled
+JOIN pool_accounts current_pa ON current_pa.provider_account_id = sqlc.arg(current_id)
+    AND current_pa.pool_id = pa.pool_id AND current_pa.enabled AND current_pa.priority = pa.priority
+JOIN provider_accounts current_account ON current_account.id = current_pa.provider_account_id
+WHERE a.provider = 'codex' AND current_account.provider = 'codex'
+  AND a.credential_type = current_account.credential_type
+  AND a.fast_mode_enabled = current_account.fast_mode_enabled
+  AND (a.status = 'active' OR (a.status = 'cooling_down' AND a.cooldown_until <= now()))
+  AND COALESCE(NULLIF(a.health_status, ''), 'unknown') != 'unhealthy'
+ORDER BY a.id
+FOR UPDATE OF a;
