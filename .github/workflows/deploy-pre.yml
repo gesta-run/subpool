@@ -21,7 +21,7 @@ env:
   GESTA_PRE_INSTANCE_ID: i-06dd31f05e6c295fd
   SUBPOOL_HOST_PORT: "8082"
   SUBPOOL_CONSOLE_HOST_PORT: "8083"
-  SUBPOOL_PUBLIC_URL: http://3.21.189.90:8083
+  SUBPOOL_PUBLIC_URL: ${{ vars.SUBPOOL_PUBLIC_URL || 'https://subpool.cloudpilot.ai' }}
   SUBPOOL_RESPONSES_WS_ENABLED: ${{ vars.SUBPOOL_RESPONSES_WS_ENABLED || 'true' }}
   SUBPOOL_RESPONSES_WS_FORCE_HTTP_BRIDGE: ${{ vars.SUBPOOL_RESPONSES_WS_FORCE_HTTP_BRIDGE || 'false' }}
   SUBPOOL_UPSTREAM_RESPONSE_HEADER_TIMEOUT: ${{ vars.SUBPOOL_UPSTREAM_RESPONSE_HEADER_TIMEOUT || '3m' }}
@@ -111,6 +111,10 @@ jobs:
           done
 
           compose_b64="$(base64 < deploy/pre/compose.yaml | tr -d '\n')"
+          proxy_b64="$(base64 < deploy/pre/subpool.conf.template | tr -d '\n')"
+          renew_b64="$(base64 < deploy/pre/renew-tls.sh | tr -d '\n')"
+          renewal_service_b64="$(base64 < deploy/pre/subpool-tls-renew.service | tr -d '\n')"
+          renewal_timer_b64="$(base64 < deploy/pre/subpool-tls-renew.timer | tr -d '\n')"
           environment_b64="$(printf '%s\n' \
             "SUBPOOL_IMAGE=$SUBPOOL_IMAGE" \
             "SUBPOOL_HOST_PORT=$SUBPOOL_HOST_PORT" \
@@ -127,6 +131,18 @@ jobs:
             | base64 | tr -d '\n')"
           remote_script="$(cat <<SCRIPT
           set -euo pipefail
+          test -s /gesta/nginx/tls/subpool-letsencrypt/live/subpool.cloudpilot.ai/fullchain.pem
+          install -d -m 755 /gesta/nginx/templates /gesta/nginx/acme
+          printf '%s' '$proxy_b64' | base64 -d > /gesta/nginx/templates/subpool.conf.template
+          printf '%s' '$renew_b64' | base64 -d > /gesta/nginx/renew-subpool-tls.sh
+          chmod 700 /gesta/nginx/renew-subpool-tls.sh
+          printf '%s' '$renewal_service_b64' | base64 -d > /etc/systemd/system/subpool-tls-renew.service
+          printf '%s' '$renewal_timer_b64' | base64 -d > /etc/systemd/system/subpool-tls-renew.timer
+          systemctl daemon-reload
+          systemctl enable --now subpool-tls-renew.timer
+          docker exec gesta-nginx-nginx-1 sh /docker-entrypoint.d/20-envsubst-on-templates.sh
+          docker exec gesta-nginx-nginx-1 nginx -t
+          docker exec gesta-nginx-nginx-1 nginx -s reload
           install -d -m 700 /gesta/subpool
           printf '%s' '$compose_b64' | base64 -d > /gesta/subpool/compose.yaml
           printf '%s' '$environment_b64' | base64 -d > /gesta/subpool/.env

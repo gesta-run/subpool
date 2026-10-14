@@ -1,0 +1,8 @@
+[Unit]
+Description=Renew the Subpool HTTPS certificate
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/gesta/nginx/renew-subpool-tls.sh
