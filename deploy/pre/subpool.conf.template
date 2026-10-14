@@ -1,0 +1,72 @@
+# Only ACME validation is served over HTTP; application requests use HTTPS.
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    server_name _;
+    return 444;
+}
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name subpool.cloudpilot.ai;
+
+    location ^~ /.well-known/acme-challenge/ {
+        root /var/www/acme;
+    }
+
+    location / {
+        return 301 https://subpool.cloudpilot.ai$request_uri;
+    }
+}
+
+map $http_upgrade $subpool_connection_upgrade {
+    default upgrade;
+    '' close;
+}
+
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    server_name subpool.cloudpilot.ai;
+
+    ssl_certificate /etc/nginx/tls/subpool-letsencrypt/live/subpool.cloudpilot.ai/fullchain.pem;
+    ssl_certificate_key /etc/nginx/tls/subpool-letsencrypt/live/subpool.cloudpilot.ai/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+
+    client_max_body_size 256m;
+    client_body_timeout 300s;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Host $host;
+    proxy_set_header X-Forwarded-Proto https;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection $subpool_connection_upgrade;
+
+    location ^~ /.well-known/acme-challenge/ {
+        root /var/www/acme;
+    }
+
+    location /v1/ {
+        proxy_pass http://127.0.0.1:8082;
+        proxy_buffering off;
+        proxy_request_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+    }
+
+    location = /healthz {
+        proxy_pass http://127.0.0.1:8082;
+    }
+
+    location = /readyz {
+        proxy_pass http://127.0.0.1:8082;
+    }
+
+    location / {
+        proxy_pass http://127.0.0.1:8083;
+    }
+}
