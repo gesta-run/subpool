@@ -175,9 +175,11 @@ account; the policy does not migrate or replay them. API keys and client
 configuration stay unchanged. New keys still use the existing allocation
 policy; their first eligible request can update their default account.
 
-The score is the smaller remaining percentage of the five-hour and weekly
-windows. Both must be present, checked within 15 minutes, error-free, and not
-past their reset timestamps. A candidate must improve the score by more than
+The score is the smallest remaining percentage of the available five-hour and
+weekly windows. At least one window must be present. Quota must be checked
+within 15 minutes and error-free; every present window must have a valid usage
+percentage and a future reset timestamp. An omitted window is not assumed to
+have zero or unlimited capacity. A candidate must improve the score by more than
 five percentage points and have the same plan, provider, priority, credential
 type, and fast-mode setting. Health, cooldown and key-capacity checks still
 apply. Equal scores prefer lower weighted key count. Missing or stale data

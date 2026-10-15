@@ -16,6 +16,11 @@ func testQuota(now time.Time, fiveHourUsed, weeklyUsed float64) []byte {
 	return raw
 }
 
+func testQuotaWithWindow(now time.Time, name string, used float64) []byte {
+	raw, _ := json.Marshal(map[string]any{"plan_type": "test-plan", name: &codex.UsageWindow{UsedPercent: used, ResetAt: now.Add(time.Hour).Unix()}})
+	return raw
+}
+
 func TestQuotaRoutingScore(t *testing.T) {
 	now := time.Now()
 	stale := now.Add(-16 * time.Minute)
@@ -30,6 +35,11 @@ func TestQuotaRoutingScore(t *testing.T) {
 	}{
 		{"weekly bottleneck", testQuota(now, 10, 70), &now, "", 30, true},
 		{"short bottleneck", testQuota(now, 80, 20), &now, "", 20, true},
+		{"weekly only", testQuotaWithWindow(now, "weekly", 35), &now, "", 65, true},
+		{"five hour only", testQuotaWithWindow(now, "five_hour", 25), &now, "", 75, true},
+		{"no windows", []byte(`{"plan_type":"test-plan"}`), &now, "", 0, false},
+		{"unknown window", testQuotaWithWindow(now, "other", 25), &now, "", 0, false},
+		{"weekly only reset passed", testQuotaWithWindow(now.Add(-2*time.Hour), "weekly", 35), &now, "", 0, false},
 		{"missing check", testQuota(now, 10, 20), nil, "", 0, false},
 		{"stale", testQuota(now, 10, 20), &stale, "", 0, false},
 		{"future", testQuota(now, 10, 20), &future, "", 0, false},

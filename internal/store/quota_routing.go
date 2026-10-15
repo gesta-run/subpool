@@ -103,7 +103,8 @@ func (p *Postgres) PreferQuotaAccount(ctx context.Context, route domain.KeyRoute
 // QuotaRoutingSwitches counts committed default-binding changes, not attempts.
 func (p *Postgres) QuotaRoutingSwitches() uint64 { return p.quotaRoutingSwitches.Load() }
 
-// Require complete, fresh windows; missing data must never look like free quota.
+// Require fresh quota and at least one complete window. Providers may omit an
+// unsupported window; it must not be treated as either empty or unlimited quota.
 func quotaRoutingScore(raw []byte, checked *time.Time, quotaError string, now time.Time) (float64, string, bool) {
 	if checked == nil || checked.After(now) || now.Sub(*checked) > quotaRoutingMaxAge || quotaError != "" {
 		return 0, "", false
@@ -122,11 +123,19 @@ func quotaRoutingScore(raw []byte, checked *time.Time, quotaError string, now ti
 		return 0, "", false
 	}
 	score := 100.0
+	windowCount := 0
 	for _, w := range []*window{quota.FiveHour, quota.Weekly} {
-		if w == nil || w.UsedPercent == nil || w.ResetAt <= now.Unix() || *w.UsedPercent < 0 || *w.UsedPercent >= 100 || math.IsNaN(*w.UsedPercent) {
+		if w == nil {
+			continue
+		}
+		if w.UsedPercent == nil || w.ResetAt <= now.Unix() || *w.UsedPercent < 0 || *w.UsedPercent >= 100 || math.IsNaN(*w.UsedPercent) {
 			return 0, "", false
 		}
+		windowCount++
 		score = math.Min(score, 100-*w.UsedPercent)
+	}
+	if windowCount == 0 {
+		return 0, "", false
 	}
 	return score, quota.PlanType, true
 }

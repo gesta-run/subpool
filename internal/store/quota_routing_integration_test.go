@@ -117,6 +117,13 @@ func TestPostgresQuotaRoutingPreservesSessionsAndCapacity(t *testing.T) {
 	if err = db.UpdateProviderDetails(ctx, accounts[0].ID, "", testQuota(now, 10, 60), now); err != nil {
 		t.Fatal(err)
 	}
+	// Weekly-only snapshots must still support concurrent, capacity-limited
+	// reassignment while existing response bindings stay pinned.
+	for i, used := range []float64{60, 40} {
+		if err = db.UpdateProviderDetails(ctx, accounts[i].ID, "", testQuotaWithWindow(now, "weekly", used), now); err != nil {
+			t.Fatal(err)
+		}
+	}
 	sessionHash := bytes.Repeat([]byte{220}, 32)
 	if err = db.SaveSessionBinding(ctx, routes[0].Key.ID, pool.ID, sessionHash, accounts[0].ID, now.Add(time.Hour)); err != nil {
 		t.Fatal(err)
