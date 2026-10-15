@@ -22,7 +22,7 @@ import (
 
 const (
 	responsesWSMaxConnections        = 256
-	responsesWSMaxConnectionsPerKey  = 8
+	responsesWSMaxConnectionsPerKey  = 32
 	responsesWSMaxTurnsPerConnection = 16
 	responsesWSMaxTurnsPerAccount    = 16
 	responsesWSMaxNamedStreams       = 32

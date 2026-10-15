@@ -149,12 +149,16 @@ func TestPostgresQuotaRoutingPreservesSessionsAndCapacity(t *testing.T) {
 		t.Fatalf("switches=%d, want one capacity-limited switch", db.QuotaRoutingSwitches())
 	}
 	counts := map[string]int{}
+	var movedRoute domain.KeyRoute
 	for _, route := range routes {
 		actual, e := db.ResolveAPIKey(ctx, route.Key.KeyHMAC)
 		if e != nil {
 			t.Fatal(e)
 		}
 		counts[actual.Account.ID]++
+		if actual.Account.ID == accounts[1].ID {
+			movedRoute = route
+		}
 		// Reusing the original (stale) route must not revert a concurrent assignment.
 		selected, e := db.PreferQuotaAccount(ctx, route)
 		if e != nil || selected.ID != actual.Account.ID {
@@ -163,6 +167,29 @@ func TestPostgresQuotaRoutingPreservesSessionsAndCapacity(t *testing.T) {
 	}
 	if counts[accounts[1].ID] != 1 || counts[accounts[2].ID] != 0 {
 		t.Fatalf("unexpected assignments: %v", counts)
+	}
+	// When relative quota reverses, defaults must move back without migrating
+	// continuations created on the previously preferred account.
+	setupSettings.MaxAPIKeysPerAccount = 10
+	if err = db.UpdateSettings(ctx, setupSettings); err != nil {
+		t.Fatal(err)
+	}
+	for i, used := range []float64{25, 75} {
+		if err = db.UpdateProviderDetails(ctx, accounts[i].ID, "", testQuotaWithWindow(now, "weekly", used), now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	reverseSessionHash := bytes.Repeat([]byte{221}, 32)
+	if err = db.SaveSessionBinding(ctx, movedRoute.Key.ID, pool.ID, reverseSessionHash, accounts[1].ID, now.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	selected, err := db.PreferQuotaAccount(ctx, movedRoute)
+	if err != nil || selected.ID != accounts[0].ID || db.QuotaRoutingSwitches() != 2 {
+		t.Fatalf("reverse routing: account=%s switches=%d err=%v", selected.ID, db.QuotaRoutingSwitches(), err)
+	}
+	reversePinned, err := db.ResolveSessionAccount(ctx, movedRoute.Key.ID, reverseSessionHash)
+	if err != nil || reversePinned.ID != accounts[1].ID {
+		t.Fatalf("reverse routing migrated session: %s %v", reversePinned.ID, err)
 	}
 	pinned, err := db.ResolveSessionAccount(ctx, routes[0].Key.ID, sessionHash)
 	if err != nil || pinned.ID != accounts[0].ID {

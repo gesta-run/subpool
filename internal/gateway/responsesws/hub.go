@@ -28,13 +28,16 @@ type Hub struct {
 	activeConnections int
 	closing           bool
 
-	connectionsTotal  atomic.Int64
-	connectionsReject atomic.Int64
-	turnsTotal        atomic.Int64
-	turnsRejected     atomic.Int64
-	upstreamDials     atomic.Int64
-	upstreamFailures  atomic.Int64
-	routingStats      routingstats.Counters
+	connectionsTotal         atomic.Int64
+	connectionsReject        atomic.Int64
+	connectionsRejectPerKey  atomic.Int64
+	connectionsRejectGlobal  atomic.Int64
+	connectionsRejectClosing atomic.Int64
+	turnsTotal               atomic.Int64
+	turnsRejected            atomic.Int64
+	upstreamDials            atomic.Int64
+	upstreamFailures         atomic.Int64
+	routingStats             routingstats.Counters
 }
 
 func New(backend Backend) *Hub {
@@ -105,8 +108,23 @@ func (h *Hub) Handle(w http.ResponseWriter, r *http.Request) {
 func (h *Hub) reserveConnection(keyID string) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if h.closing || h.activeConnections >= responsesWSMaxConnections || h.connections[keyID] >= responsesWSMaxConnectionsPerKey {
+	reason := ""
+	switch {
+	case h.closing:
+		reason = "closing"
+		h.connectionsRejectClosing.Add(1)
+	case h.activeConnections >= responsesWSMaxConnections:
+		reason = "global_limit"
+		h.connectionsRejectGlobal.Add(1)
+	case h.connections[keyID] >= responsesWSMaxConnectionsPerKey:
+		reason = "per_key_limit"
+		h.connectionsRejectPerKey.Add(1)
+	}
+	if reason != "" {
 		h.connectionsReject.Add(1)
+		slog.Warn("WebSocket connection rejected", "reason", reason,
+			"active_connections", h.activeConnections, "key_connections", h.connections[keyID],
+			"global_limit", responsesWSMaxConnections, "per_key_limit", responsesWSMaxConnectionsPerKey)
 		return false
 	}
 	h.activeConnections++
@@ -209,12 +227,17 @@ func (h *Hub) Metrics() string {
 		"# TYPE subpool_responses_ws_connections_active gauge\nsubpool_responses_ws_connections_active %d\n"+
 			"# TYPE subpool_responses_ws_connections_total counter\nsubpool_responses_ws_connections_total %d\n"+
 			"# TYPE subpool_responses_ws_connections_rejected_total counter\nsubpool_responses_ws_connections_rejected_total %d\n"+
+			"# TYPE subpool_responses_ws_connection_rejections_total counter\n"+
+			"subpool_responses_ws_connection_rejections_total{reason=\"per_key_limit\"} %d\n"+
+			"subpool_responses_ws_connection_rejections_total{reason=\"global_limit\"} %d\n"+
+			"subpool_responses_ws_connection_rejections_total{reason=\"closing\"} %d\n"+
 			"# TYPE subpool_responses_ws_turns_active gauge\nsubpool_responses_ws_turns_active %d\n"+
 			"# TYPE subpool_responses_ws_turns_total counter\nsubpool_responses_ws_turns_total %d\n"+
 			"# TYPE subpool_responses_ws_turns_rejected_total counter\nsubpool_responses_ws_turns_rejected_total %d\n"+
 			"# TYPE subpool_responses_ws_upstream_dials_total counter\nsubpool_responses_ws_upstream_dials_total %d\n"+
 			"# TYPE subpool_responses_ws_upstream_failures_total counter\nsubpool_responses_ws_upstream_failures_total %d\n",
-		activeConnections, h.connectionsTotal.Load(), h.connectionsReject.Load(), activeTurns,
+		activeConnections, h.connectionsTotal.Load(), h.connectionsReject.Load(),
+		h.connectionsRejectPerKey.Load(), h.connectionsRejectGlobal.Load(), h.connectionsRejectClosing.Load(), activeTurns,
 		h.turnsTotal.Load(), h.turnsRejected.Load(), h.upstreamDials.Load(), h.upstreamFailures.Load(),
 	)
 }
