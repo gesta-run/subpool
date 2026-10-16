@@ -106,6 +106,10 @@ Color is reserved for status and quantitative charts.
   follows the same layout as reset credits rather than introducing a boxed card.
 - Authorization dialogs reuse `Modal`, `form-stack`, `field`, and `form-actions`.
   Explanations use field help typography; credentials stay in a single column.
+- Saved quota authorization opens as a read-only method and credential summary.
+  AccessKey IDs expose only a masked hint; secrets are shown as saved, never
+  returned. Replacing credentials is explicit and preserves the current
+  authorization until a verified replacement is saved.
 
 ## Do's and Don'ts
 

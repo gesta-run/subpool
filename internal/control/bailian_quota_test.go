@@ -137,10 +137,84 @@ func TestAccountListingDiscoversQuotaWithoutListingCredentials(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
 		t.Fatal(err)
 	}
-	if w.Code != 200 || len(response.Data) != 1 || response.Data[0].QuotaProvider != bailian.PlanType || !response.Data[0].QuotaAuthorized {
+	if w.Code != 200 || len(response.Data) != 1 || response.Data[0].QuotaProvider != bailian.PlanType || !response.Data[0].QuotaAuthorized || response.Data[0].QuotaAuthorizationMethod != "ram" || response.Data[0].QuotaAccessKeyIDHint != "****e-id" {
 		t.Fatalf("quota discovery failed: %d %s", w.Code, w.Body)
 	}
-	if strings.Contains(w.Body.String(), "illustrative-inference-key") || strings.Contains(w.Body.String(), "illustrative-secret") || len(response.Data[0].CredentialCiphertext) > 0 {
+	if strings.Contains(w.Body.String(), "illustrative-inference-key") || strings.Contains(w.Body.String(), "illustrative-id") || strings.Contains(w.Body.String(), "illustrative-secret") || len(response.Data[0].CredentialCiphertext) > 0 {
 		t.Fatal("listing leaked credentials")
+	}
+}
+
+func TestBailianQuotaDescriptionIncludesOnlySafeAuthorizationMetadata(t *testing.T) {
+	for _, tt := range []struct {
+		name        string
+		credentials *bailian.Credentials
+		method      string
+		hint        string
+	}{
+		{name: "not configured"},
+		{name: "browser token", credentials: &bailian.Credentials{AccessToken: "illustrative-token"}, method: "browser"},
+		{name: "RAM key", credentials: &bailian.Credentials{AccessKeyID: "illustrative-key-1234", AccessKeySecret: "illustrative-secret"}, method: "ram", hint: "****1234"},
+		{name: "short key", credentials: &bailian.Credentials{AccessKeyID: "demo", AccessKeySecret: "illustrative-secret"}, method: "ram", hint: "****"},
+		{name: "eight character key", credentials: &bailian.Credentials{AccessKeyID: "demo1234", AccessKeySecret: "illustrative-secret"}, method: "ram", hint: "****"},
+		{name: "token takes precedence", credentials: &bailian.Credentials{AccessToken: "illustrative-token", AccessKeyID: "illustrative-key-1234", AccessKeySecret: "illustrative-secret"}, method: "browser"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			cipher, err := credential.New(make([]byte, 32))
+			if err != nil {
+				t.Fatal(err)
+			}
+			raw, err := json.Marshal(openaicompat.Credentials{BaseURL: "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1", APIKey: "illustrative-inference-key", BailianQuota: tt.credentials})
+			if err != nil {
+				t.Fatal(err)
+			}
+			encrypted, err := cipher.Encrypt(raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			account := domain.ProviderAccount{ID: "illustrative-account", Provider: domain.ProviderOpenAICompatible, QuotaAuthorizationMethod: "stale", QuotaAccessKeyIDHint: "stale"}
+			stored := account
+			stored.CredentialCiphertext = encrypted
+			s := &Server{store: &controlStore{account: stored}, cipher: cipher}
+			s.describeBailianQuota(context.Background(), &account)
+			if account.QuotaAuthorized != (tt.credentials != nil) || account.QuotaAuthorizationMethod != tt.method || account.QuotaAccessKeyIDHint != tt.hint {
+				t.Fatalf("unexpected authorization metadata: %+v", account)
+			}
+			response, err := json.Marshal(account)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, value := range []string{"illustrative-inference-key", "illustrative-token", "illustrative-secret"} {
+				if strings.Contains(string(response), value) {
+					t.Fatal("authorization metadata leaked a credential")
+				}
+			}
+			if tt.credentials != nil && tt.credentials.AccessKeyID != "" && strings.Contains(string(response), tt.credentials.AccessKeyID) {
+				t.Fatal("authorization metadata leaked the complete AccessKey ID")
+			}
+			if tt.credentials == nil && (strings.Contains(string(response), "quota_authorization_method") || strings.Contains(string(response), "quota_access_key_id_hint")) {
+				t.Fatal("unconfigured authorization included credential metadata")
+			}
+		})
+	}
+}
+
+func TestRejectedBailianReplacementPreservesSavedAuthorization(t *testing.T) {
+	cipher, err := credential.New(make([]byte, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := []byte(`{"base_url":"https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1","api_key":"illustrative-inference-key","bailian_quota":{"access_key_id":"illustrative-old-key","access_key_secret":"illustrative-old-secret"}}`)
+	encrypted, err := cipher.Encrypt(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := &quotaConfigStore{controlStore: controlStore{account: domain.ProviderAccount{Provider: domain.ProviderOpenAICompatible, CredentialVersion: 2, CredentialCiphertext: encrypted}}}
+	s := &Server{store: st, cipher: cipher, bailianQuota: quotaConfigUsage{err: bailian.ErrPermissionDenied}}
+	r := httptest.NewRequest(http.MethodPut, "/", strings.NewReader(`{"access_key_id":"illustrative-new-key","access_key_secret":"illustrative-new-secret"}`))
+	w := httptest.NewRecorder()
+	s.configureBailianQuota(w, r)
+	if w.Code != http.StatusBadGateway || st.saved || string(st.account.CredentialCiphertext) != string(encrypted) || st.account.CredentialVersion != 2 {
+		t.Fatal("rejected replacement changed the saved authorization")
 	}
 }
