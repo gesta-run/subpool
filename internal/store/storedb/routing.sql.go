@@ -1086,6 +1086,11 @@ func (q *Queries) RevokeAPIKey(ctx context.Context, id string) (int64, error) {
 }
 
 const saveSessionBinding = `-- name: SaveSessionBinding :exec
+WITH recorded AS (
+    INSERT INTO provider_request_events(api_key_id, response_hash, provider_account_id)
+    VALUES($1, $3, $4)
+    ON CONFLICT(api_key_id, response_hash) DO NOTHING
+)
 INSERT INTO session_bindings(api_key_id, pool_id, session_hash, provider_account_id, expires_at)
 VALUES ($1, $2, $3,
     $4, $5)

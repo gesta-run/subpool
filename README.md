@@ -192,3 +192,20 @@ Compare quota snapshots and failures over time; request counts alone do not
 measure quota consumption. Direct upstream usage can also change the balance.
 Set the flag back to `false` and restart to stop further quota-based changes;
 existing defaults and response bindings remain valid.
+
+## Daily team email
+
+Optional daily usage emails run inside the service and send through Resend. They are disabled by default. Configure these deployment variables:
+
+| Variable | Purpose |
+| --- | --- |
+| `SUBPOOL_DAILY_REPORT_ENABLED` | Enable the daily email (`false` by default). |
+| `SUBPOOL_RESEND_API_KEY` | Resend API key, kept in deployment secrets. |
+| `SUBPOOL_DAILY_REPORT_FROM` | Verified sender, for example `SubPool <reports@example.com>`. |
+| `SUBPOOL_DAILY_REPORT_TO` | Comma-separated team recipients or a mailing group. |
+| `SUBPOOL_DAILY_REPORT_TIME` | Local send time, default `17:50`. |
+| `SUBPOOL_DAILY_REPORT_TIMEZONE` | IANA timezone, default `Asia/Shanghai`. |
+
+The email contains each Codex account's completed-response count and share, remaining weekly capacity, and reset time. Request counts include completed/incomplete HTTP responses and WebSocket turns with a response ID, deduplicated by key and response. Failed requests, internal probes, and direct account traffic are excluded; upstream capacity includes direct usage. The initial email explicitly states its partial tracking window. Historic requests before installation are not reconstructed from session expiry timestamps.
+
+The database preserves counters and the frozen daily email across restarts. A database lease prevents concurrent sends; retries reuse the frozen body and Resend idempotency key, with a bounded attempt count. An instance that restarts after the send time catches up for that day. It does not replay previous days. Stale or missing quota displays as unavailable, never as zero.

@@ -28,6 +28,7 @@ import (
 	"github.com/gesta-run/subpool/internal/provider/copilot"
 	providerhttp "github.com/gesta-run/subpool/internal/provider/httpclient"
 	"github.com/gesta-run/subpool/internal/provider/openaicompat"
+	"github.com/gesta-run/subpool/internal/reporting"
 	"github.com/gesta-run/subpool/internal/store"
 )
 
@@ -35,6 +36,11 @@ func main() {
 	cfg, err := config.Load()
 	if err != nil {
 		slog.Error("invalid configuration", "error", err)
+		os.Exit(1)
+	}
+	reportConfig, err := reporting.LoadConfig(cfg.PublicURL)
+	if err != nil {
+		slog.Error("invalid daily report configuration", "error", err)
 		os.Exit(1)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -87,39 +93,14 @@ func main() {
 		WithModelProviders(resetCredits, compatibleProvider, copilotClient).
 		WithAccountRoutingChange(gatewayServer.CloseResponsesWebSocketsForAccount)
 
-	apiMux := http.NewServeMux()
-	gatewayServer.Register(apiMux)
-	apiMux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"status":"ok"}`))
-	})
-	apiMux.HandleFunc("GET /readyz", func(w http.ResponseWriter, r *http.Request) {
-		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
-		defer cancel()
-		if database.Ping(ctx) != nil {
-			http.Error(w, "not ready", http.StatusServiceUnavailable)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"status":"ready"}`))
-	})
-	apiMux.HandleFunc("GET /metrics", func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "text/plain; version=0.0.4")
-		_, _ = w.Write([]byte("# HELP subpool_up Whether the service is running.\n# TYPE subpool_up gauge\nsubpool_up 1\n" + gatewayServer.ResponsesWebSocketMetrics() + fmt.Sprintf("# HELP subpool_codex_quota_routing_switches_total Committed quota-aware default binding changes.\n# TYPE subpool_codex_quota_routing_switches_total counter\nsubpool_codex_quota_routing_switches_total %d\n", database.QuotaRoutingSwitches())))
-	})
+	bindings := httpBindings(cfg, database, gatewayServer, controlServer)
 
-	consoleMux := http.NewServeMux()
-	controlServer.Register(consoleMux)
-	registerWeb(consoleMux)
-
-	bindings := []serverBinding{
-		{name: "API", server: newHTTPServer(cfg.APIListenAddress, apiMux, cfg.RequestBodyReadTimeout)},
-		{name: "console", server: newHTTPServer(cfg.ConsoleListenAddress, consoleOnlyHandler(consoleMux), cfg.RequestBodyReadTimeout)},
-	}
 	stopCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	go healthChecker.Run(stopCtx)
 	go database.RunMaintenance(stopCtx)
+	reporter := &reporting.Service{Config: reportConfig, Store: database}
+	go reporter.Run(stopCtx)
 	if err = serveHTTPServers(stopCtx, bindings, gatewayServer.CloseResponsesWebSockets); err != nil {
 		slog.Error("HTTP server failed", "error", err)
 		os.Exit(1)
