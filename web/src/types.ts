@@ -20,6 +20,8 @@ export interface ProviderAccount {
   assigned_api_keys?: number
   quota_provider?: 'bailian_token_plan'
   quota_authorized?: boolean
+  quota_authorization_method?: 'browser' | 'ram'
+  quota_access_key_id_hint?: string
   quota_snapshot?: {
     plan_type?: string
     usage_allowed?: boolean

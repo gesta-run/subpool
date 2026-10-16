@@ -89,6 +89,11 @@
 .quota-authorization .reset-credit__copy strong { white-space: normal; overflow-wrap: anywhere; }
 .quota-authorization .reset-credit__copy small { overflow-wrap: anywhere; }
 .quota-authorization--attention .reset-credit__summary > i { background: var(--amber); }
+.quota-authorization-details { margin: 0; display: grid; gap: 16px; }
+.quota-authorization-details > div { display: grid; gap: 6px; }
+.quota-authorization-details dt { color: var(--ink-muted); font-size: 12px; }
+.quota-authorization-details dd { margin: 0; color: var(--ink); font-size: 14px; line-height: 1.5; overflow-wrap: anywhere; }
+.quota-authorization-details code { font-size: inherit; }
 .account-table .row-actions { gap: 5px; flex-wrap: nowrap; }
 .row-action-button { width: 40px; height: 40px; flex: 0 0 auto; display: inline-grid; place-items: center; border: 1px solid var(--line); border-radius: var(--radius-control); color: var(--ink-muted); background: var(--panel-nested); transition: color 140ms ease, border-color 140ms ease, background-color 140ms ease, transform 140ms ease; }
 .row-action-button svg { width: 16px; height: 16px; }
@@ -125,6 +130,8 @@
 }
 
 @media (max-width: 760px) {
+  .modal--bailian-quota .button { min-height: 44px; }
+  .modal--bailian-quota .icon-button { width: 44px; height: 44px; flex: 0 0 auto; }
   .accounts-page .page-heading { align-items: stretch; }
   .accounts-summary { width: 100%; overflow-x: auto; }
   .accounts-summary > div { flex: 0 0 auto; }

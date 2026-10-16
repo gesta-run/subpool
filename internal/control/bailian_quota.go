@@ -27,6 +27,19 @@ func (s *Server) describeBailianQuota(ctx context.Context, account *domain.Provi
 	}
 	account.QuotaProvider = bailian.PlanType
 	account.QuotaAuthorized = credentials.BailianQuota != nil
+	account.QuotaAuthorizationMethod = ""
+	account.QuotaAccessKeyIDHint = ""
+	if quota := credentials.BailianQuota; quota != nil {
+		if quota.AccessToken != "" {
+			account.QuotaAuthorizationMethod = "browser"
+		} else if quota.AccessKeyID != "" && quota.AccessKeySecret != "" {
+			account.QuotaAuthorizationMethod = "ram"
+			account.QuotaAccessKeyIDHint = "****"
+			if id := []rune(quota.AccessKeyID); len(id) > 8 {
+				account.QuotaAccessKeyIDHint += string(id[len(id)-4:])
+			}
+		}
+	}
 }
 
 func (s *Server) bailianCredentials(account domain.ProviderAccount) (openaicompat.Credentials, bool) {
