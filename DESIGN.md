@@ -101,6 +101,11 @@ Color is reserved for status and quantitative charts.
   never represented in the console.
 - Empty states explain what is missing and provide one next action. Loading uses
   geometry-matched table skeletons. Errors state the cause and offer retry.
+- Subscription secondary actions share a top divider, compact status and help
+  on the left, and an intrinsic-width button on the right. Quota authorization
+  follows the same layout as reset credits rather than introducing a boxed card.
+- Authorization dialogs reuse `Modal`, `form-stack`, `field`, and `form-actions`.
+  Explanations use field help typography; credentials stay in a single column.
 
 ## Do's and Don'ts
 

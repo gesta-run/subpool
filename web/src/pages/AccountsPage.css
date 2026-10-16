@@ -86,6 +86,9 @@
 .reset-credit--empty strong { color: var(--ink-soft); font-size: 12px; font-weight: 650; }
 .reset-credit--error small,
 .reset-credit--empty small { margin: 0; color: var(--ink-muted); font-size: 11px; line-height: 1.4; }
+.quota-authorization .reset-credit__copy strong { white-space: normal; overflow-wrap: anywhere; }
+.quota-authorization .reset-credit__copy small { overflow-wrap: anywhere; }
+.quota-authorization--attention .reset-credit__summary > i { background: var(--amber); }
 .account-table .row-actions { gap: 5px; flex-wrap: nowrap; }
 .row-action-button { width: 40px; height: 40px; flex: 0 0 auto; display: inline-grid; place-items: center; border: 1px solid var(--line); border-radius: var(--radius-control); color: var(--ink-muted); background: var(--panel-nested); transition: color 140ms ease, border-color 140ms ease, background-color 140ms ease, transform 140ms ease; }
 .row-action-button svg { width: 16px; height: 16px; }

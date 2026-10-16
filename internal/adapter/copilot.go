@@ -24,7 +24,7 @@ func (provider copilotAdapter) RoundTrip(ctx context.Context, request Request, h
 		return nil, errors.New("Copilot provider client is unavailable")
 	}
 	if request.Kind == "responses_compact" {
-		return nil, &RequestError{Code: "unsupported_compaction", Message: "GitHub Copilot does not advertise a standalone Responses compaction endpoint; use client-side summarization or a provider with native compaction support"}
+		return provider.compact(ctx, request, headers, credentials, options)
 	}
 	responses, err := provider.client.SupportsEndpoint(ctx, request.Model, copilot.EndpointResponses, credentials.Copilot)
 	if err != nil {
@@ -78,7 +78,7 @@ func (provider copilotAdapter) native(ctx context.Context, request Request, head
 	if err != nil {
 		return nil, err
 	}
-	normalizeCopilotPayloadError(response, request, copilot.EndpointResponses, inboundBytes, len(body))
+	normalizeCopilotPayloadError(response, request, copilot.EndpointResponses, inboundBytes, len(body), body)
 	if response != nil && response.Body != nil {
 		protocol.RestoreCopilotNativeResponses(response, tools)
 	}
@@ -94,6 +94,6 @@ func (provider copilotAdapter) chat(ctx context.Context, request Request, header
 	if err != nil {
 		return nil, err
 	}
-	normalizeCopilotPayloadError(response, request, copilot.EndpointChatCompletions, inboundBytes, len(body))
+	normalizeCopilotPayloadError(response, request, copilot.EndpointChatCompletions, inboundBytes, len(body), body)
 	return &Response{Response: response, format: "chat_completions", tools: tools}, nil
 }

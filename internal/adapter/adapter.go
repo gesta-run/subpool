@@ -26,6 +26,9 @@ type Options struct {
 	AccountID         string
 	FastMode          bool
 	AllowToolFallback bool
+	// InternalUsage records inference performed inside an adapter, even if the
+	// overall operation fails. Ordinary inference is observed by the renderer.
+	InternalUsage func(input, output int64)
 }
 
 type Credentials struct {
@@ -50,6 +53,15 @@ type RequestError struct {
 }
 
 func (err *RequestError) Error() string { return err.Message }
+
+// ResultError is terminal: replaying a multi-step operation could duplicate
+// already-completed inference. Its message must not include provider content.
+type ResultError struct {
+	Code    string
+	Message string
+}
+
+func (err *ResultError) Error() string { return err.Message }
 
 func For(provider string, clients Clients) (Provider, error) {
 	switch provider {

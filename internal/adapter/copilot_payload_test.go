@@ -195,3 +195,33 @@ func TestCopilotDiagnosticTokensRejectArbitraryText(t *testing.T) {
 		t.Fatal("a bounded identifier was rejected")
 	}
 }
+
+func TestCopilotPayloadClassificationDoesNotGuessFromStatusOrMessages(t *testing.T) {
+	for _, test := range []struct {
+		status, want int
+		code         string
+		wantCode     string
+	}{
+		{413, 400, "context_length_exceeded", "context_length_exceeded"},
+		{400, 400, "context_window_exceeded", "context_length_exceeded"},
+		{413, 413, "request_body_too_large", "upstream_payload_too_large"},
+		{400, 400, "request_body_too_large", "upstream_payload_too_large"},
+		{413, 413, "image_too_large", "upstream_payload_too_large"},
+		{413, 413, "unknown", "upstream_payload_too_large"},
+	} {
+		var logs bytes.Buffer
+		original := slog.Default()
+		slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
+		response := &http.Response{StatusCode: test.status, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(fmt.Sprintf(`{"error":{"code":%q,"message":"illustrative private text; context_length_exceeded"}}`, test.code)))}
+		normalizeCopilotPayloadError(response, Request{Kind: "responses", Model: "fixture"}, copilot.EndpointResponses, 10, 10)
+		slog.SetDefault(original)
+		raw, _ := io.ReadAll(response.Body)
+		_ = response.Body.Close()
+		if response.StatusCode != test.want || !strings.Contains(string(raw), `"code":"`+test.wantCode+`"`) {
+			t.Fatalf("status=%d body=%s", response.StatusCode, raw)
+		}
+		if strings.Contains(string(raw), "illustrative private") || strings.Contains(logs.String(), "illustrative private") {
+			t.Fatal("classification exposed upstream error text")
+		}
+	}
+}

@@ -83,8 +83,30 @@ in-band compaction likewise cannot be silently downgraded to Chat.
 to native Codex or OpenAI-compatible compaction endpoints. It preserves the full
 canonical output window, including retained messages and opaque compaction
 items. Compaction is non-streaming and does not create a continuation binding.
-Copilot subscriptions and compatible upstreams without this endpoint return
-`unsupported_compaction`; Subpool does not fabricate encrypted compaction items.
+Compatible upstreams without this endpoint return `unsupported_compaction`.
+
+Copilot subscriptions implement this explicit endpoint with bounded inference
+summaries, using the model's native Responses endpoint or its Chat fallback.
+The returned canonical window contains ordinary plaintext messages, not encrypted
+compaction items (`X-Subpool-Compaction: text-summary`). This supports legacy
+clients that install the full compact output window. It does **not** implement
+Codex V2 in-band `compaction_trigger` or guarantee automatic recovery in clients
+that require an opaque `compaction` item. Subpool never fabricates provider state.
+
+Compaction preserves instruction messages, a bounded initial user request, the
+latest user request, additional tool declarations, and unresolved parallel tool
+call groups. Completed tool history is quoted as data, not executable tools.
+The summary follows the retained latest request as an assistant message, so it
+cannot be mistaken for a new user request during subsequent compactions.
+Ordinary inference input is never silently truncated.
+Images remain multimodal; opaque state, unsupported files, and images above the
+local compaction work budget return `unsupported_compaction` instead of being
+discarded. The current work budgets are 16 MiB total compact input, 128 KiB text
+chunks, 2 MiB per serialized image part, 32 KiB summaries, and 128 inference calls.
+These are operational safeguards, **not** advertised Copilot service limits.
+The endpoint may make multiple billable inference calls and incur additional
+latency. Usage from internal summaries is recorded even if a later step fails;
+partial summaries are never installed. Empty-history requests require no inference.
 
 ## Compatibility and verification
 
