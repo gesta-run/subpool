@@ -63,14 +63,16 @@ Responses WebSocket messages:
    before reading the body.
 2. Reserve the estimated number of live body buffers from a process-wide byte
    budget. Responses requests, including native standalone compaction, reserve
-   two copies. After routing to Copilot, text-summary compaction upgrades its
-   existing reservation to eight copies for quoted transcript and chunk
-   representations, using the same request-scoped limits. The extra reservation
-   is released after each adapter attempt; capacity failures do not penalize
-   or retry provider accounts. WebSocket and Chat
-   Completions requests reserve four to cover rewriting, failover, and network
-   writes. For requests without a known length, reserve capacity incrementally
-   before each chunk and reduce the estimate to the bytes actually read.
+   two copies. Copilot compaction and Subpool-owned state restoration upgrade
+   the HTTP reservation to eight copies for transcript and chunk representations,
+   using the same request-scoped limits. WebSocket and Chat Completions requests
+   reserve four copies to cover rewriting, failover, and network writes.
+   Compaction and state restoration over the WebSocket bridge acquire a separate
+   eight-copy work reservation under the current limits, without changing the
+   turn's existing lease. Extra work reservations are released after each adapter
+   attempt; capacity failures do not penalize or retry provider accounts. For
+   requests without a known length, reserve capacity incrementally before each
+   chunk and reduce the estimate to the bytes actually read.
 3. If capacity is unavailable, return HTTP 503 with `Retry-After: 1`, or close a
    WebSocket with status 1013, so clients can retry instead of increasing
    process memory without a bound.
@@ -132,8 +134,21 @@ or exhausted work budget returns an error without installing a partial window.
 Invalid/incomplete summaries are terminal errors, not transport failures to
 repeat across accounts. All internal inference usage remains accounted for.
 
-This is explicit legacy-endpoint text compaction, not opaque encrypted state or
-automatic trimming of normal inference. Attachment-heavy inputs or large retained
+The legacy endpoint returns a plaintext canonical window. Copilot's in-band V2
+path accepts a final `compaction_trigger` and returns one Subpool-owned,
+authenticated opaque item with the compacted window inside. Later requests
+restore that state before provider conversion, deduplicate covered input kept
+by Codex, and preserve new messages and unresolved tool groups. State is bound
+to the API-key ID, encryption purpose/version, and item ID, and is bounded to
+1 MiB of plaintext. It is not an upstream provider's encrypted reasoning state.
+HTTP JSON/SSE and the WebSocket HTTP bridge share this adapter. Internal summary
+usage is recorded once, including on failure; synthetic response IDs do not
+create upstream continuation state.
+
+Clients must send an explicit trigger (for current Codex custom providers,
+`capabilities.remote_compaction = "v2"`). This is not capability negotiation,
+`context_management`, or automatic trimming of normal inference after 413.
+Attachment-heavy inputs or large retained
 instructions/tool definitions can still exceed upstream limits after compaction.
 No single upstream byte/token limit is assumed for every Copilot model. See
 [provider adapter boundaries](provider-adapters.md) for budgets and client limits.

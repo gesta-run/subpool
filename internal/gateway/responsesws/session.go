@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/gesta-run/subpool/internal/adapter/copilotcompact"
 	"github.com/gesta-run/subpool/internal/domain"
 	"github.com/gesta-run/subpool/internal/gateway/clientquota"
 	"github.com/gesta-run/subpool/internal/jsonobject"
@@ -82,6 +83,8 @@ type responsesWSTurn struct {
 	forwarded     bool
 	finished      bool
 	limitRecorded bool
+	usageRecorded bool
+	noSession     bool
 	releaseBody   func()
 }
 
@@ -260,7 +263,8 @@ func (s *responsesWSSession) ensurePinned(request responsesWSRequest, route doma
 		return false, false, requestErr
 	}
 	if account.Provider == "" || account.Provider == domain.ProviderCodex {
-		if !s.hub.forceHTTPBridge {
+		_, _, ownState := copilotcompact.Features(request.raw)
+		if !s.hub.forceHTTPBridge && !ownState {
 			bridge, pinErr := s.pinNativeAccount(route, account, continuation, request.Model)
 			return bridge, bridge && !continuation, pinErr
 		}
@@ -818,6 +822,10 @@ func (s *responsesWSSession) bridgeResponse(turn *responsesWSTurn, route domain.
 
 func (s *responsesWSSession) forwardBridgeTurnResponse(turn *responsesWSTurn, response *http.Response) {
 	defer response.Body.Close()
+	s.mu.Lock()
+	turn.usageRecorded = response.Header.Get("X-Subpool-Internal-Usage-Recorded") == "true"
+	turn.noSession = response.Header.Get("X-Subpool-Internal-No-Session") == "true"
+	s.mu.Unlock()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		code, message := readResponsesWSHTTPError(response)
 		s.sendError(turn.streamID, code, message)
@@ -854,7 +862,7 @@ func (s *responsesWSSession) finishTurn(turn *responsesWSTurn) {
 		s.pending--
 	}
 	successfulTerminal := turn.terminal == "response.completed" || turn.terminal == "response.incomplete"
-	if successfulTerminal && turn.response != "" {
+	if successfulTerminal && turn.response != "" && !turn.noSession {
 		s.rememberResponseLocked(turn.response)
 	}
 	accountID := turn.accountID
@@ -871,7 +879,14 @@ func (s *responsesWSSession) finishTurn(turn *responsesWSTurn) {
 	if !successfulTerminal {
 		return
 	}
-	s.hub.backend.CompleteTurn(s.keyID, s.poolID, accountID, turn.response, turn.model, turn.input, turn.output)
+	responseID, input, output := turn.response, turn.input, turn.output
+	if turn.usageRecorded {
+		input, output = 0, 0
+	}
+	if turn.noSession {
+		responseID = ""
+	}
+	s.hub.backend.CompleteTurn(s.keyID, s.poolID, accountID, responseID, turn.model, input, output)
 }
 
 func (s *responsesWSSession) writeClient(payload []byte) error {

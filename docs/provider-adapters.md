@@ -76,8 +76,9 @@ Responses grammar shape.
 Rich tool outputs cannot be represented in a Chat tool message. Native Responses
 retains images and files; Chat conversion returns `unsupported_tool_output`
 before inference instead of serializing those parts into ordinary text. Text
-tool-output parts are converted to readable text. Stateful continuation and
-in-band compaction likewise cannot be silently downgraded to Chat.
+tool-output parts are converted to readable text. Stateful upstream continuation
+cannot be silently downgraded to Chat. Subpool's own Copilot compaction state is
+restored before either protocol is encoded.
 
 `POST /v1/responses/compact` uses the Responses authorization scope and forwards
 to native Codex or OpenAI-compatible compaction endpoints. It preserves the full
@@ -89,9 +90,59 @@ Copilot subscriptions implement this explicit endpoint with bounded inference
 summaries, using the model's native Responses endpoint or its Chat fallback.
 The returned canonical window contains ordinary plaintext messages, not encrypted
 compaction items (`X-Subpool-Compaction: text-summary`). This supports legacy
-clients that install the full compact output window. It does **not** implement
-Codex V2 in-band `compaction_trigger` or guarantee automatic recovery in clients
-that require an opaque `compaction` item. Subpool never fabricates provider state.
+clients that install the full compact output window.
+
+Copilot also accepts exactly one final `compaction_trigger` input item through
+`POST /v1/responses` and the WebSocket HTTP bridge. Subpool generates the same
+bounded summaries and returns exactly one opaque `compaction` item using the
+Responses item lifecycle (`response.output_item.added`, `.done`, then
+`response.completed`). Non-streaming callers receive the equivalent JSON output.
+`X-Subpool-Compaction: subpool-opaque-v1` identifies this **Subpool-owned** state;
+it is not fabricated OpenAI/Copilot ciphertext or hidden model reasoning.
+
+Streaming begins once the first upstream summary request is accepted, before
+its body or the remaining summaries finish. Earlier rejections retain normal
+HTTP authentication and failover handling. While work remains pending, a
+content-free event is emitted every 30 seconds: `response.compaction.compacting`
+only after new summary sampling, otherwise `response.in_progress`. No partial
+summary text or usable encrypted state is exposed. Failures after streaming
+starts emit `response.failed` without installing a replacement window or
+replaying completed inference. Disconnecting cancels the work; request and
+transcript reservations remain held until inference and accounting stop.
+
+The state contains the compacted window and fingerprints of covered input. It
+is AES-GCM authenticated with purpose/version, API-key ID, and item ID binding.
+It survives restarts and replicas sharing Subpool's encryption key. Key rotation
+invalidates existing state; another API key, modified ciphertext, or modified
+item ID cannot restore it. No server-side transcript store is introduced. The
+adapter restores it before inference, including mixed-pool provider switching,
+and removes only covered prefix messages so Codex's retained input is not
+duplicated. New instructions, suffix messages, and pending tool calls remain.
+Multiple opaque windows in one request are rejected rather than amplified.
+
+Synthetic compaction responses do not create upstream continuation bindings.
+Replay the opaque item and full remaining input, not a synthetic response ID via
+`previous_response_id`. Do not combine Subpool state with upstream continuation
+IDs: upstream history cannot be replaced by an encrypted input item. Foreign
+provider compaction items are not decryptable by
+Copilot. `context_management`, configuration-update histories, and compaction
+without the full conversation window remain unsupported.
+
+This implements the server protocol, not client capability negotiation. Clients
+must actually send a trigger to use it. The installed Codex CLI
+`0.162.0-alpha.17.2` passed an offline V2 round trip through Subpool when its
+provider used `capabilities.remote_compaction = "v2"`; its custom-provider default
+instead selected local compaction. Subpool does not change that configuration
+or silently compact normal inference requests after an arbitrary 413.
+
+After deploying this server version, enable the existing Codex provider setting:
+
+```toml
+[model_providers.subpool.capabilities]
+remote_compaction = "v2"
+```
+
+Do not enable this against an older Subpool deployment that lacks the V2 adapter.
 
 Compaction preserves instruction messages, a bounded initial user request, the
 latest user request, additional tool declarations, and unresolved parallel tool
@@ -99,10 +150,13 @@ call groups. Completed tool history is quoted as data, not executable tools.
 The summary follows the retained latest request as an assistant message, so it
 cannot be mistaken for a new user request during subsequent compactions.
 Ordinary inference input is never silently truncated.
-Images remain multimodal; opaque state, unsupported files, and images above the
+Images remain multimodal; foreign opaque state, unsupported files, and images above the
 local compaction work budget return `unsupported_compaction` instead of being
 discarded. The current work budgets are 16 MiB total compact input, 128 KiB text
-chunks, 2 MiB per serialized image part, 32 KiB summaries, and 128 inference calls.
+chunks, 2 MiB per serialized image part, 32 KiB summaries, 1 MiB plaintext opaque
+state, and 128 inference calls. State-size preflight uses the final serialized
+envelope with worst-case JSON escaping of the maximum summary, so an oversized
+replacement window fails before inference. No-op windows reserve no summary.
 These are operational safeguards, **not** advertised Copilot service limits.
 The endpoint may make multiple billable inference calls and incur additional
 latency. Usage from internal summaries is recorded even if a later step fails;
