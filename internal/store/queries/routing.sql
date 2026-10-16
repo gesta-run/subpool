@@ -178,6 +178,11 @@ WHERE s.api_key_id = sqlc.arg(api_key_id)
   AND s.expires_at > now();
 
 -- name: SaveSessionBinding :exec
+WITH recorded AS (
+    INSERT INTO provider_request_events(api_key_id, response_hash, provider_account_id)
+    VALUES(sqlc.arg(api_key_id), sqlc.arg(session_hash), sqlc.arg(provider_account_id))
+    ON CONFLICT(api_key_id, response_hash) DO NOTHING
+)
 INSERT INTO session_bindings(api_key_id, pool_id, session_hash, provider_account_id, expires_at)
 VALUES (sqlc.arg(api_key_id), sqlc.arg(pool_id), sqlc.arg(session_hash),
     sqlc.arg(provider_account_id), sqlc.arg(expires_at))

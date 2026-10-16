@@ -67,6 +67,15 @@ type AuditEvent struct {
 	CreatedAt  pgtype.Timestamptz
 }
 
+type DailyTeamReport struct {
+	ReportDay  pgtype.Date
+	Payload    []byte
+	Attempts   int32
+	LeaseUntil pgtype.Timestamptz
+	EmailID    *string
+	SentAt     pgtype.Timestamptz
+}
+
 type Employee struct {
 	ID        string
 	Name      string
@@ -124,6 +133,18 @@ type ProviderAccount struct {
 	FastModeEnabled                 bool
 	QuotaCheckedAt                  pgtype.Timestamptz
 	LastQuotaErrorCode              *string
+}
+
+type ProviderRequestEvent struct {
+	ApiKeyID          string
+	ResponseHash      []byte
+	ProviderAccountID string
+	OccurredAt        pgtype.Timestamptz
+}
+
+type ReportTracking struct {
+	Singleton bool
+	StartedAt pgtype.Timestamptz
 }
 
 type SchemaMigration struct {
