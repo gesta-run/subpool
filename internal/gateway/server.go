@@ -138,17 +138,18 @@ func (s *Server) handleCompact(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	body, meta, releaseBody, ok := s.readRequest(w, r)
+	body, meta, reservation, ok := s.readReservedRequest(w, r)
 	if !ok {
 		return
 	}
-	defer releaseBody()
+	defer reservation.release()
 	if meta.Stream || meta.PreviousResponseID != "" {
 		writeOpenAIError(w, http.StatusBadRequest, "standalone compaction requires full input and does not support streaming or previous_response_id", "invalid_request_error")
 		return
 	}
+	r = r.WithContext(context.WithValue(r.Context(), compactBodyReservationKey{}, reservation))
 	response, ok := s.call(w, r, route, adapter.Request{Kind: "responses_compact", Model: meta.Model, Body: body}, "")
-	releaseBody()
+	reservation.release()
 	if !ok {
 		return
 	}
@@ -393,8 +394,11 @@ func (s *Server) attemptAccount(r *http.Request, route domain.KeyRoute, request 
 		s.recordHealthFailure(r.Context(), account.ID, "credential_unavailable")
 		return nil, retryUnavailable, false
 	}
-	response, err := s.providerAccountResponse(r.Context(), request, r.Header, credentials, account, route.Pool.Provider)
+	response, err := s.providerAccountResponse(r.Context(), request, r.Header, credentials, account, route.Pool.Provider, route.Key.ID)
 	if err != nil {
+		if failure := terminalAdapterFailure(err); failure != nil {
+			return failure, "", true
+		}
 		if errors.Is(err, adapter.ErrUnsupported) {
 			return nil, retryUnsupported, false
 		}
@@ -432,8 +436,11 @@ func (s *Server) retryRefreshedAccount(r *http.Request, route domain.KeyRoute, r
 		s.recordHealthFailure(r.Context(), refreshed.ID, "credential_unavailable")
 		return nil, retryUnavailable, false
 	}
-	resp, err := s.providerAccountResponse(r.Context(), request, r.Header, credentials, refreshed, route.Pool.Provider)
+	resp, err := s.providerAccountResponse(r.Context(), request, r.Header, credentials, refreshed, route.Pool.Provider, route.Key.ID)
 	if err != nil {
+		if failure := terminalAdapterFailure(err); failure != nil {
+			return failure, "", true
+		}
 		retry, complete := s.evaluateProviderError(r.Context(), refreshed.ID, err)
 		return nil, retry, complete
 	}
@@ -692,13 +699,21 @@ func drainAndClose(resp *http.Response) {
 	_ = resp.Body.Close()
 }
 
-func (s *Server) providerAccountResponse(ctx context.Context, request adapter.Request, header http.Header, credentials adapter.Credentials, account domain.ProviderAccount, poolProvider string) (*adapter.Response, error) {
+func (s *Server) providerAccountResponse(ctx context.Context, request adapter.Request, header http.Header, credentials adapter.Credentials, account domain.ProviderAccount, poolProvider, keyID string) (*adapter.Response, error) {
+	if request.Kind == "responses_compact" && account.Provider == domain.ProviderCopilot {
+		release, err := reserveCompactionTranscript(ctx, len(request.Body))
+		if err != nil {
+			return nil, err
+		}
+		defer release()
+	}
 	provider, err := adapter.For(account.Provider, adapter.Clients{Codex: s.codex, Compatible: s.compatible, Copilot: s.copilot})
 	if err != nil {
 		return nil, err
 	}
 	response, err := provider.RoundTrip(ctx, request,
-		header, credentials, adapter.Options{AccountID: account.ID, FastMode: account.FastModeEnabled, AllowToolFallback: poolProvider == domain.ProviderCopilot})
+		header, credentials, adapter.Options{AccountID: account.ID, FastMode: account.FastModeEnabled, AllowToolFallback: poolProvider == domain.ProviderCopilot,
+			InternalUsage: func(input, output int64) { s.addUsage(keyID, s.randomUsageEventHash(), request.Model, input, output) }})
 	if err != nil {
 		return nil, err
 	}
@@ -710,6 +725,20 @@ func (s *Server) providerAccountResponse(ctx context.Context, request adapter.Re
 	}
 	clientquota.ApplyHeaders(response.Header, account, s.now())
 	return response, nil
+}
+
+func terminalAdapterFailure(err error) *adapter.Response {
+	if errors.Is(err, errRequestBodyCapacity) {
+		response := openAIErrorResponse(http.StatusServiceUnavailable, "request body capacity is temporarily unavailable", "subpool_capacity_exceeded")
+		response.Header.Set("Retry-After", "1")
+		response.Header.Set("X-Subpool-Error-Source", "subpool")
+		return &adapter.Response{Response: response}
+	}
+	var failure *adapter.ResultError
+	if errors.As(err, &failure) {
+		return &adapter.Response{Response: openAIErrorResponse(http.StatusBadGateway, failure.Message, failure.Code)}
+	}
+	return nil
 }
 
 func writeOpenAIError(w http.ResponseWriter, status int, message, code string) {

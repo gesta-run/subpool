@@ -62,7 +62,12 @@ Responses WebSocket messages:
 1. Reject a known `Content-Length` above the per-request limit with HTTP 413
    before reading the body.
 2. Reserve the estimated number of live body buffers from a process-wide byte
-   budget. Responses requests reserve two copies, while WebSocket and Chat
+   budget. Responses requests, including native standalone compaction, reserve
+   two copies. After routing to Copilot, text-summary compaction upgrades its
+   existing reservation to eight copies for quoted transcript and chunk
+   representations, using the same request-scoped limits. The extra reservation
+   is released after each adapter attempt; capacity failures do not penalize
+   or retry provider accounts. WebSocket and Chat
    Completions requests reserve four to cover rewriting, failover, and network
    writes. For requests without a known length, reserve capacity incrementally
    before each chunk and reduce the estimate to the bytes actually read.
@@ -97,20 +102,48 @@ configured limit. Capacity rejections log the requested and available limits.
 Request bodies, image data, authorization headers, and prompt text are never
 logged.
 
-Copilot upstream HTTP 413 responses retain their status but use a fixed
-OpenAI-compatible error with code `upstream_payload_too_large` and header
-`X-Subpool-Error-Source: upstream`. Local size rejections use
-`X-Subpool-Error-Source: subpool`. Upstream rejection diagnostics include only
-sanitized correlation identifiers and inbound, adapted, and wire byte counts;
-the upstream error body is neither read nor returned. Rewritten responses remove
-stale encoding, length, digest, and cache-validator headers. Payload rejections
-are not retried unchanged and do not penalize the selected account.
+Copilot upstream size errors use an OpenAI-compatible envelope and header
+`X-Subpool-Error-Source: upstream`; local size rejections use
+`X-Subpool-Error-Source: subpool`. Bounded JSON inspection accepts only explicit
+machine-readable codes, never guesses from an error's message:
+
+- Recognized context codes on HTTP 400/413 normalize to HTTP 400 and
+  `context_length_exceeded`, which clients can recognize as context exhaustion.
+- Request-byte and image codes retain HTTP 400/413 with `upstream_payload_too_large`
+  with a distinct explanation. Unknown HTTP 413 remains explicitly unknown;
+  it is not misreported as token exhaustion or a proven byte-limit failure.
+
+Diagnostics include sanitized correlation identifiers, inbound/adapted/wire
+byte counts, and serialized instruction, tool-definition, message, tool-output,
+and image sizes. Image sizes overlap their enclosing message/output bucket.
+No prompt, image data, tool output, credentials, or upstream error message is
+logged or returned. Error inspection reads at most 64 KiB plus one byte and
+preserves unrecognized responses for their normal handling. Rewritten responses
+remove stale encoding, length, digest, and cache-validator headers. Payload
+rejections are not retried unchanged and do not penalize the selected account.
+
+## Explicit Copilot Compaction
+
+`POST /v1/responses/compact` can recover compressible completed history by
+splitting it into bounded transcript chunks and building a rolling text summary.
+If a summary call itself receives HTTP 413 or a recognized context error, only a
+smaller chunk is retried. An unsplittable image, an unusable summary, cancellation,
+or exhausted work budget returns an error without installing a partial window.
+Invalid/incomplete summaries are terminal errors, not transport failures to
+repeat across accounts. All internal inference usage remains accounted for.
+
+This is explicit legacy-endpoint text compaction, not opaque encrypted state or
+automatic trimming of normal inference. Attachment-heavy inputs or large retained
+instructions/tool definitions can still exceed upstream limits after compaction.
+No single upstream byte/token limit is assumed for every Copilot model. See
+[provider adapter boundaries](provider-adapters.md) for budgets and client limits.
 
 ## Compatibility
 
 Existing clients and deployments need no changes. The defaults apply when the
 new variables are absent. Responses retain the OpenAI-compatible error envelope;
-the existing HTTP 413 status remains stable, while aggregate pressure uses a
+HTTP 413 remains the default for unknown/body/image size rejections, while explicit
+context exhaustion is distinguishable as HTTP 400. Aggregate pressure uses a
 temporary HTTP 503 response or WebSocket 1013 close status.
 
 ## Verification
@@ -120,4 +153,8 @@ temporary HTTP 503 response or WebSocket 1013 close status.
 - Gateway tests cover exact-limit acceptance, 413 rejection, reservation
   release, concurrent capacity enforcement, WebSocket configuration, and an
   end-to-end request larger than the former 32 MiB limit.
+- Copilot tests cover exact-code classification, content-free byte diagnostics,
+  native/Chat multi-chunk compaction and continuation, reduced capacity retries,
+  unresolved parallel calls, image preservation, cancellation, and incomplete
+  summary rejection without replay or partial installation.
 - The full Go and web test/build suites run before a pull request is opened.

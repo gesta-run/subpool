@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import type { ResetCreditState } from '../../hooks/useResetCredits'
 import type { ProviderAccount } from '../../types'
@@ -22,11 +22,11 @@ const baseAccount: ProviderAccount = {
   },
 }
 
-function renderTable(account: ProviderAccount, resetStates: Record<string, ResetCreditState> = {}) {
+function renderTable(account: ProviderAccount, resetStates: Record<string, ResetCreditState> = {}, options: { onQuotaAuthorize?: (account: ProviderAccount) => void; busyID?: string } = {}) {
   const noop = vi.fn()
   return render(<AccountTable
     accounts={[account]}
-    busyID=""
+    busyID={options.busyID ?? ''}
     resetBusyID=""
     resetStates={resetStates}
     onModels={noop}
@@ -36,10 +36,39 @@ function renderTable(account: ProviderAccount, resetStates: Record<string, Reset
     onFastMode={noop}
     onToggle={noop}
     onRemove={noop}
+    onQuotaAuthorize={options.onQuotaAuthorize}
   />)
 }
 
 describe('AccountTable health states', () => {
+  it('aligns quota authorization with reset-credit secondary actions', () => {
+    const onQuotaAuthorize = vi.fn()
+    const account: ProviderAccount = { ...baseAccount, provider: 'openai_compatible', credential_type: 'api_key', quota_provider: 'bailian_token_plan', quota_authorized: true, last_quota_error_code: 'quota_authorization_expired' }
+    renderTable(account, {}, { onQuotaAuthorize })
+    const button = screen.getByRole('button', { name: 'Manage quota' })
+    expect(button.parentElement).toHaveClass('reset-credit__action')
+    expect(button.closest('.quota-authorization')).toHaveClass('reset-credit', 'quota-authorization--attention')
+    expect(screen.getByText('Authorization expired')).toBeInTheDocument()
+    expect(screen.getByText('Browser authorization expired; sign in again')).toBeInTheDocument()
+    expect(screen.getByText(/^Updated /)).toBeInTheDocument()
+    fireEvent.click(button)
+    expect(onQuotaAuthorize).toHaveBeenCalledWith(account)
+  })
+
+  it('disables quota authorization while the account is busy', () => {
+    const onQuotaAuthorize = vi.fn()
+    renderTable({ ...baseAccount, provider: 'openai_compatible', quota_provider: 'bailian_token_plan' }, {}, { onQuotaAuthorize, busyID: baseAccount.id })
+    const button = screen.getByRole('button', { name: 'Connect quota' })
+    expect(button).toBeDisabled()
+    fireEvent.click(button)
+    expect(onQuotaAuthorize).not.toHaveBeenCalled()
+  })
+
+  it('shows healthy quota authorization without a stale warning', () => {
+    renderTable({ ...baseAccount, provider: 'openai_compatible', quota_provider: 'bailian_token_plan', quota_authorized: true })
+    expect(screen.getByText('Quota connected').closest('.quota-authorization')).not.toHaveClass('quota-authorization--attention')
+    expect(screen.queryByText('Authorization required')).not.toBeInTheDocument()
+  })
   it('displays a monthly-only Token Plan without inventing other windows', () => {
     renderTable({ ...baseAccount, provider: 'openai_compatible', credential_type: 'api_key', quota_provider: 'bailian_token_plan', quota_authorized: true, quota_snapshot: { monthly: { used_percent: 30, remaining_percent: 70, window_seconds: 0, reset_at: 1901000000 } } })
     expect(screen.getByText('monthly capacity')).toBeInTheDocument()

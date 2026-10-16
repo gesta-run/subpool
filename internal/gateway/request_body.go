@@ -20,6 +20,7 @@ const (
 	defaultMaxInflightRequestBodyBytes int64 = domain.DefaultMaxInflightRequestBodyBytes
 	responsesHTTPRequestBodyCopies     int64 = 2
 	chatHTTPRequestBodyCopies          int64 = 4
+	compactHTTPRequestBodyCopies       int64 = 8
 	responsesWSRequestBodyCopies       int64 = 4
 	maxHTTPRequestBodyCopies                 = chatHTTPRequestBodyCopies
 	maxResponsesWSEventBytes                 = 32 << 20
@@ -108,6 +109,14 @@ func requestBodyCost(bytes, copies int64) (int64, bool) {
 }
 
 func (s *Server) readRequest(w http.ResponseWriter, r *http.Request) ([]byte, requestMeta, func(), bool) {
+	body, meta, reservation, ok := s.readReservedRequest(w, r)
+	if !ok {
+		return nil, requestMeta{}, nil, false
+	}
+	return body, meta, reservation.release, true
+}
+
+func (s *Server) readReservedRequest(w http.ResponseWriter, r *http.Request) ([]byte, requestMeta, *bodyReservation, bool) {
 	limits, err := s.requestBodyLimits(r.Context())
 	if err != nil {
 		slog.Error("request body settings unavailable", "error", err)
@@ -143,7 +152,7 @@ func (s *Server) readRequest(w http.ResponseWriter, r *http.Request) ([]byte, re
 		writeOpenAIError(w, http.StatusBadRequest, "model is required", "invalid_request_error")
 		return nil, requestMeta{}, nil, false
 	}
-	return body, meta, reservation.release, true
+	return body, meta, reservation, true
 }
 
 func (s *Server) readBufferedBody(reader io.Reader, declaredBytes, copies int64) ([]byte, *bodyReservation, error) {

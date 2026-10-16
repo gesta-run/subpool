@@ -10,11 +10,15 @@ type Observer = protocol.Observer
 
 type Response struct {
 	*http.Response
-	format string
-	tools  map[string]protocol.ToolInfo
+	format        string
+	tools         map[string]protocol.ToolInfo
+	usageRecorded bool
 }
 
 func (response *Response) Render(w http.ResponseWriter, stream bool, request Request, observer Observer) {
+	if response.usageRecorded {
+		observer.Usage = nil
+	}
 	protocol.NewRenderer(observer).Render(w, stream, request.Kind, response.format, request.Model, response.tools, response.Response, request.IncludeUsage)
 }
 

@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gesta-run/subpool/internal/domain"
 )
@@ -32,6 +33,7 @@ func TestNativeCompactionPreservesCanonicalWindow(t *testing.T) {
 			defer upstream.Close()
 			server, st, _, key := newTestServer(t)
 			configureMatrixProvider(t, server, st, upstream, provider, true)
+			server.WithRequestBodyLimits(int64(len(request)), int64(len(request))*maxHTTPRequestBodyCopies, time.Minute)
 			recorder := serveGateway(t, server, key, "/v1/responses/compact", request)
 			var want, got any
 			_ = json.Unmarshal([]byte(illustrativeCompactResponse), &want)
@@ -47,7 +49,7 @@ func TestNativeCompactionPreservesCanonicalWindow(t *testing.T) {
 }
 
 func TestUnsupportedCompactionReturnsCapabilityError(t *testing.T) {
-	for _, provider := range []string{domain.ProviderCodex, domain.ProviderOpenAICompatible, domain.ProviderCopilot} {
+	for _, provider := range []string{domain.ProviderCodex, domain.ProviderOpenAICompatible} {
 		t.Run(provider, func(t *testing.T) {
 			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.URL.Path != "/v1/responses/compact" {

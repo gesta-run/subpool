@@ -46,7 +46,7 @@ func TestCopilotPayloadTooLargeIsNotRetried(t *testing.T) {
 							t.Fatal(err)
 						}
 						if recorder.Code != http.StatusRequestEntityTooLarge || envelope.Error.Code != "upstream_payload_too_large" || envelope.Error.Type != "invalid_request_error" ||
-							!strings.Contains(envelope.Error.Message, "Shorten the conversation") || strings.Contains(recorder.Body.String(), "illustrative-private-error") {
+							!strings.Contains(envelope.Error.Message, "Compact the conversation") || strings.Contains(recorder.Body.String(), "illustrative-private-error") {
 							t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 						}
 						if recorder.Header().Get("X-Subpool-Error-Source") != "upstream" || recorder.Header().Get("X-Request-Id") != "illustrative-upstream-id" || recorder.Header().Get("Content-Encoding") != "" {
@@ -78,5 +78,23 @@ func TestCopilotLocalPayloadTooLargeNeverCallsUpstream(t *testing.T) {
 	}
 	if provider.chatCalls+provider.responsesCalls != 0 {
 		t.Fatal("a locally rejected payload was sent upstream")
+	}
+}
+
+func TestCopilotExplicitContextLimitIsRecognizableAndNotRetried(t *testing.T) {
+	for _, native := range []bool{false, true} {
+		for _, status := range []int{400, 413} {
+			server, st, _, key := newTestServer(t)
+			st.route.Account = copilotAccountWithCipher(t, server.cipher.(*credential.Cipher), "illustrative-account")
+			st.route.Pool.Provider = domain.ProviderMixed
+			provider := &fakeCopilotProvider{
+				supportedEndpoints: map[string]map[string]bool{"gpt-test": {copilot.EndpointResponses: native, copilot.EndpointChatCompletions: !native}},
+				response:           &http.Response{StatusCode: status, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"error":{"code":"context_length_exceeded","message":"illustrative private error"}}`))},
+			}
+			recorder := serveGateway(t, server.WithCopilot(provider), key, "/v1/responses", `{"model":"gpt-test","input":"fixture"}`)
+			if recorder.Code != 400 || !strings.Contains(recorder.Body.String(), `"code":"context_length_exceeded"`) || strings.Contains(recorder.Body.String(), "illustrative private") || provider.chatCalls+provider.responsesCalls != 1 || st.sessionSaved || st.usageCalls != 0 || len(st.reassignExcludes) != 0 || len(st.healthFailureCodes) != 0 {
+				t.Fatalf("context limit retried or lost its code: %d %s", recorder.Code, recorder.Body.String())
+			}
+		}
 	}
 }
