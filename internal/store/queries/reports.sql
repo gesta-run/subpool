@@ -2,7 +2,7 @@
 SELECT started_at FROM report_tracking WHERE singleton;
 
 -- name: ReportAccounts :many
-SELECT a.id, a.display_name, a.quota_snapshot, a.quota_checked_at,
+SELECT a.id, a.display_name, COALESCE(a.email, '')::text AS email, a.quota_snapshot, a.quota_checked_at,
     count(e.response_hash)::bigint AS requests
 FROM provider_accounts a
 LEFT JOIN provider_request_events e ON e.provider_account_id = a.id

@@ -49,7 +49,7 @@ func (q *Queries) FinishDailyReport(ctx context.Context, arg FinishDailyReportPa
 }
 
 const reportAccounts = `-- name: ReportAccounts :many
-SELECT a.id, a.display_name, a.quota_snapshot, a.quota_checked_at,
+SELECT a.id, a.display_name, COALESCE(a.email, '')::text AS email, a.quota_snapshot, a.quota_checked_at,
     count(e.response_hash)::bigint AS requests
 FROM provider_accounts a
 LEFT JOIN provider_request_events e ON e.provider_account_id = a.id
@@ -66,6 +66,7 @@ type ReportAccountsParams struct {
 type ReportAccountsRow struct {
 	ID             string
 	DisplayName    string
+	Email          string
 	QuotaSnapshot  []byte
 	QuotaCheckedAt pgtype.Timestamptz
 	Requests       int64
@@ -83,6 +84,7 @@ func (q *Queries) ReportAccounts(ctx context.Context, arg ReportAccountsParams) 
 		if err := rows.Scan(
 			&i.ID,
 			&i.DisplayName,
+			&i.Email,
 			&i.QuotaSnapshot,
 			&i.QuotaCheckedAt,
 			&i.Requests,

@@ -22,7 +22,7 @@ func (p *Postgres) ReportAccounts(ctx context.Context, start, end time.Time) ([]
 	}
 	accounts := make([]reporting.Account, 0, len(rows))
 	for _, row := range rows {
-		account := reporting.Account{ID: row.ID, Name: row.DisplayName, Requests: row.Requests, Snapshot: row.QuotaSnapshot}
+		account := reporting.Account{ID: row.ID, Name: row.DisplayName, Email: row.Email, Requests: row.Requests, Snapshot: row.QuotaSnapshot}
 		if row.QuotaCheckedAt.Valid {
 			account.CheckedAt = row.QuotaCheckedAt.Time
 		}
