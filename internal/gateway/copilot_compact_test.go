@@ -25,9 +25,10 @@ type compactCopilotProvider struct {
 	incomplete      bool
 	incompleteAfter int
 	failureAfter    int
+	bodyGate        <-chan struct{}
 }
 
-func (p *compactCopilotProvider) Responses(_ context.Context, body []byte, _ http.Header, _ copilot.Credentials) (*http.Response, error) {
+func (p *compactCopilotProvider) Responses(ctx context.Context, body []byte, _ http.Header, _ copilot.Credentials) (*http.Response, error) {
 	p.responsesCalls++
 	p.requests = append(p.requests, append([]byte(nil), body...))
 	if rejected := p.reject(body); rejected != nil {
@@ -38,10 +39,10 @@ func (p *compactCopilotProvider) Responses(_ context.Context, body []byte, _ htt
 	if p.incomplete || (p.incompleteAfter > 0 && p.successes > p.incompleteAfter) {
 		status = "incomplete"
 	}
-	return sseResponse(200, fmt.Sprintf(`data: {"type":"response.%s","response":{"id":"resp_summary_fixture","status":%q,"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Illustrative recovered task summary"}]}],"usage":{"input_tokens":5,"output_tokens":2}}}`+"\n\n", status, status)), nil
+	return p.gateBody(ctx, sseResponse(200, fmt.Sprintf(`data: {"type":"response.%s","response":{"id":"resp_summary_fixture","status":%q,"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Illustrative recovered task summary"}]}],"usage":{"input_tokens":5,"output_tokens":2}}}`+"\n\n", status, status))), nil
 }
 
-func (p *compactCopilotProvider) ChatCompletions(_ context.Context, body []byte, _ http.Header, _ copilot.Credentials) (*http.Response, error) {
+func (p *compactCopilotProvider) ChatCompletions(ctx context.Context, body []byte, _ http.Header, _ copilot.Credentials) (*http.Response, error) {
 	p.chatCalls++
 	p.requests = append(p.requests, append([]byte(nil), body...))
 	if rejected := p.reject(body); rejected != nil {
@@ -52,7 +53,34 @@ func (p *compactCopilotProvider) ChatCompletions(_ context.Context, body []byte,
 	if p.incomplete || (p.incompleteAfter > 0 && p.successes > p.incompleteAfter) {
 		finish = "length"
 	}
-	return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(fmt.Sprintf(`{"id":"chat_summary_fixture","choices":[{"message":{"role":"assistant","content":"Illustrative recovered task summary"},"finish_reason":%q}],"usage":{"prompt_tokens":5,"completion_tokens":2}}`, finish)))}, nil
+	var request struct{ Stream bool }
+	_ = json.Unmarshal(body, &request)
+	if request.Stream {
+		return p.gateBody(ctx, sseResponse(200, fmt.Sprintf("data: {\"id\":\"chat_summary_fixture\",\"choices\":[{\"delta\":{\"content\":\"Illustrative recovered task summary\"},\"finish_reason\":%q}],\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":2}}\n\ndata: [DONE]\n\n", finish))), nil
+	}
+	return p.gateBody(ctx, &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(fmt.Sprintf(`{"id":"chat_summary_fixture","choices":[{"message":{"role":"assistant","content":"Illustrative recovered task summary"},"finish_reason":%q}],"usage":{"prompt_tokens":5,"completion_tokens":2}}`, finish)))}), nil
+}
+
+func (p *compactCopilotProvider) gateBody(ctx context.Context, response *http.Response) *http.Response {
+	if p.bodyGate != nil {
+		response.Body = &gatedCompactBody{ReadCloser: response.Body, ctx: ctx, gate: p.bodyGate}
+	}
+	return response
+}
+
+type gatedCompactBody struct {
+	io.ReadCloser
+	ctx  context.Context
+	gate <-chan struct{}
+}
+
+func (body *gatedCompactBody) Read(buffer []byte) (int, error) {
+	select {
+	case <-body.ctx.Done():
+		return 0, body.ctx.Err()
+	case <-body.gate:
+		return body.ReadCloser.Read(buffer)
+	}
 }
 
 func (p *compactCopilotProvider) reject(body []byte) *http.Response {

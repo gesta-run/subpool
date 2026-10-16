@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/gesta-run/subpool/internal/adapter"
+	"github.com/gesta-run/subpool/internal/adapter/copilotcompact"
 	"github.com/gesta-run/subpool/internal/adapter/protocol"
 	"github.com/gesta-run/subpool/internal/auth"
 	"github.com/gesta-run/subpool/internal/domain"
@@ -99,6 +100,10 @@ func (b responsesWSBackend) CompleteTurn(keyID, poolID, accountID, responseID, m
 }
 
 func (b responsesWSBackend) NormalizeCodexRequest(body []byte, account domain.ProviderAccount) ([]byte, *responsesws.RequestError) {
+	_, _, ownState := copilotcompact.Features(body)
+	if ownState {
+		return nil, &responsesws.RequestError{Status: http.StatusBadRequest, Code: "unsupported_compaction", Message: "Subpool compaction state requires the HTTP bridge; reconnect and replay the full remaining input"}
+	}
 	installationID, err := codex.InstallationID(account.ID)
 	if err != nil {
 		return nil, &responsesws.RequestError{

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/gesta-run/subpool/internal/adapter/copilotcompact"
 	"github.com/gesta-run/subpool/internal/adapter/protocol"
 	"github.com/gesta-run/subpool/internal/domain"
 	"github.com/gesta-run/subpool/internal/provider/codex"
@@ -28,7 +29,11 @@ type Options struct {
 	AllowToolFallback bool
 	// InternalUsage records inference performed inside an adapter, even if the
 	// overall operation fails. Ordinary inference is observed by the renderer.
-	InternalUsage func(input, output int64)
+	InternalUsage     func(input, output int64)
+	CompactionState   *copilotcompact.State
+	compactionCovered []string
+	compactionStarted func()
+	compactionSampled func()
 }
 
 type Credentials struct {
@@ -64,16 +69,18 @@ type ResultError struct {
 func (err *ResultError) Error() string { return err.Message }
 
 func For(provider string, clients Clients) (Provider, error) {
+	var implementation Provider
 	switch provider {
 	case "", domain.ProviderCodex:
-		return codexAdapter{client: clients.Codex}, nil
+		implementation = codexAdapter{client: clients.Codex}
 	case domain.ProviderCopilot:
-		return copilotAdapter{client: clients.Copilot}, nil
+		implementation = copilotAdapter{client: clients.Copilot}
 	case domain.ProviderOpenAICompatible:
-		return compatibleAdapter{client: clients.Compatible}, nil
+		implementation = compatibleAdapter{client: clients.Compatible}
 	default:
 		return nil, fmt.Errorf("unsupported provider %q", provider)
 	}
+	return compactionAdapter{Provider: implementation, copilot: provider == domain.ProviderCopilot}, nil
 }
 
 func conversionError(err error) error {

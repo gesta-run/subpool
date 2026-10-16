@@ -12,10 +12,12 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/gesta-run/subpool/internal/adapter"
+	"github.com/gesta-run/subpool/internal/adapter/copilotcompact"
 	"github.com/gesta-run/subpool/internal/auth"
 	"github.com/gesta-run/subpool/internal/catalog"
 	"github.com/gesta-run/subpool/internal/credential"
@@ -55,6 +57,7 @@ const (
 type Cipher interface {
 	Encrypt([]byte) ([]byte, error)
 	Decrypt([]byte) ([]byte, error)
+	copilotcompact.ScopedCipher
 }
 
 type CodexClient = adapter.CodexClient
@@ -178,13 +181,17 @@ func (s *Server) handleResponses(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	body, meta, releaseBody, ok := s.readRequest(w, r)
+	body, meta, reservation, ok := s.readReservedRequest(w, r)
 	if !ok {
 		return
 	}
+	releaseBody := reservation.release
 	defer releaseBody()
+	r = r.WithContext(context.WithValue(r.Context(), compactBodyReservationKey{}, reservation))
 	response, ok := s.call(w, r, route, adapter.Request{Kind: "responses", Model: meta.Model, Body: body}, meta.PreviousResponseID)
-	releaseBody()
+	if !response.RetainsRequestBody() {
+		releaseBody()
+	}
 	if !ok {
 		return
 	}
@@ -314,6 +321,10 @@ func scopeAllowed(scopes []string, required string) bool {
 }
 
 func (s *Server) call(w http.ResponseWriter, r *http.Request, route domain.KeyRoute, request adapter.Request, previousResponseID string) (*adapter.Response, bool) {
+	if strings.HasPrefix(previousResponseID, "resp_subpool_cmp_") {
+		writeOpenAIError(w, http.StatusBadRequest, "Subpool compaction responses do not store upstream history; replay the compaction item and full remaining input", "previous_response_not_found")
+		return nil, false
+	}
 	account := route.Account
 	var err error
 	continuation := previousResponseID != ""
@@ -700,12 +711,19 @@ func drainAndClose(resp *http.Response) {
 }
 
 func (s *Server) providerAccountResponse(ctx context.Context, request adapter.Request, header http.Header, credentials adapter.Credentials, account domain.ProviderAccount, poolProvider, keyID string) (*adapter.Response, error) {
-	if request.Kind == "responses_compact" && account.Provider == domain.ProviderCopilot {
-		release, err := reserveCompactionTranscript(ctx, len(request.Body))
+	var release func()
+	defer func() {
+		if release != nil {
+			release()
+		}
+	}()
+	trigger, opaque, own := copilotcompact.Features(request.Body)
+	if own || account.Provider == domain.ProviderCopilot && (request.Kind == "responses_compact" || request.Kind == "responses" && (trigger || opaque)) {
+		var err error
+		release, err = s.reserveCompactionTranscript(ctx, len(request.Body))
 		if err != nil {
 			return nil, err
 		}
-		defer release()
 	}
 	provider, err := adapter.For(account.Provider, adapter.Clients{Codex: s.codex, Compatible: s.compatible, Copilot: s.copilot})
 	if err != nil {
@@ -713,12 +731,17 @@ func (s *Server) providerAccountResponse(ctx context.Context, request adapter.Re
 	}
 	response, err := provider.RoundTrip(ctx, request,
 		header, credentials, adapter.Options{AccountID: account.ID, FastMode: account.FastModeEnabled, AllowToolFallback: poolProvider == domain.ProviderCopilot,
-			InternalUsage: func(input, output int64) { s.addUsage(keyID, s.randomUsageEventHash(), request.Model, input, output) }})
+			CompactionState: &copilotcompact.State{Cipher: s.cipher, Scope: keyID},
+			InternalUsage:   func(input, output int64) { s.addUsage(keyID, s.randomUsageEventHash(), request.Model, input, output) }})
 	if err != nil {
 		return nil, err
 	}
 	if response == nil || response.Response == nil || response.Body == nil {
 		return nil, errors.New("provider returned an empty response")
+	}
+	if response.RetainsRequestBody() && release != nil {
+		response.Body = &compactResponseBody{ReadCloser: response.Body, release: sync.OnceFunc(release)}
+		release = nil
 	}
 	if response.Header == nil {
 		response.Header = make(http.Header)

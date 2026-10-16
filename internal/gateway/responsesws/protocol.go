@@ -45,6 +45,9 @@ func parseResponsesWSRequest(payload []byte) (responsesWSRequest, *RequestError)
 	if err := json.Unmarshal(trimmed, &request); err != nil || request.Type != "response.create" {
 		return responsesWSRequest{}, &RequestError{http.StatusBadRequest, "type must be response.create", "invalid_request_error"}
 	}
+	if strings.HasPrefix(request.PreviousResponseID, "resp_subpool_cmp_") {
+		return responsesWSRequest{}, &RequestError{http.StatusBadRequest, "Subpool compaction responses do not store upstream history; replay the compaction item and full remaining input", "previous_response_not_found"}
+	}
 	if request.StreamID != nil {
 		if !validResponsesWSStreamID(*request.StreamID) {
 			return responsesWSRequest{}, &RequestError{http.StatusBadRequest, "stream_id must contain 1-256 letters, numbers, underscores, hyphens, or periods", "invalid_stream_id"}
@@ -219,7 +222,7 @@ func (s *responsesWSSession) observeTurn(turn *responsesWSTurn, payload []byte, 
 	}
 	if terminalResponsesWSEvent(eventType) {
 		turn.terminal = eventType
-		if (eventType == "response.completed" || eventType == "response.incomplete") && turn.response != "" {
+		if (eventType == "response.completed" || eventType == "response.incomplete") && turn.response != "" && !turn.noSession {
 			s.rememberResponseLocked(turn.response)
 		}
 	}

@@ -1,5 +1,6 @@
-// Package copilotcompact implements explicit, text-summary compaction. It does
-// not manufacture provider-encrypted state or mutate ordinary inference input.
+// Package copilotcompact implements bounded text-summary compaction and
+// Subpool-owned opaque continuation state. It never fabricates upstream state
+// or silently compacts ordinary inference input.
 package copilotcompact
 
 import (
@@ -40,7 +41,8 @@ func Prepare(raw []byte) (Plan, error) {
 	if len(raw) > MaxCalls*ChunkBytes {
 		return Plan{}, ErrUnsupported
 	}
-	// A plaintext window cannot satisfy V2's encrypted compaction contract.
+	// Legacy requests cannot directly represent in-band compaction. The V2
+	// entry point removes its validated final trigger before preparing a plan.
 	for _, key := range []string{"context_management", "compaction_trigger"} {
 		if value, exists := jsonobject.Lookup(raw, key); exists && string(value) != "null" {
 			return Plan{}, ErrUnsupported

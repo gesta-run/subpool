@@ -117,7 +117,43 @@ supports_websockets = true
 responses_websockets_v2 = true
 ```
 
-Save the file, then restart Codex so the new provider and WebSocket settings are loaded. Codex subscription accounts use a dedicated upstream WebSocket, while OpenAI-compatible accounts use the existing HTTP/SSE bridge.
+Save the file, then restart Codex so the new provider and WebSocket settings are loaded. Codex subscription accounts normally use a dedicated upstream WebSocket, while GitHub Copilot and OpenAI-compatible accounts use the HTTP/SSE bridge.
+
+#### Optional: Codex V2 compaction with GitHub Copilot
+
+Deploy a Subpool build containing the V2 compaction adapter **before** enabling
+this setting. On a Codex version supporting the
+[remote compaction capability](https://learn.chatgpt.com/docs/config-file/config-reference),
+add the following table to the configuration above, then restart Codex:
+
+```toml
+[model_providers.subpool.capabilities]
+remote_compaction = "v2"
+```
+
+This opts the provider into sending `compaction_trigger` items through Responses.
+For Copilot accounts, Subpool summarizes history with bounded inference calls,
+returns a Subpool-owned encrypted compaction item, and restores that item before
+later inference. Internal summary calls consume upstream capacity and add latency.
+Streaming clients receive lifecycle and content-free progress events while work
+is pending; the usable compaction item is returned only after complete success.
+The legacy `/v1/responses/compact` endpoint remains available for clients that
+install a complete plaintext replacement window.
+
+The client must still trigger compaction; this is not automatic recovery from
+every HTTP 413. Set client compaction thresholds for the selected model's actual
+context window. Large images, tool definitions, or retained instructions can
+still exceed upstream limits, regardless of Subpool's request-size setting.
+Do not enable V2 against an older Subpool deployment or a pool whose other
+upstreams do not support it. Omitting the setting keeps Codex's provider default;
+the tested custom-provider configuration used local compaction by default.
+
+Compaction state is bound to the employee API key's identity and Subpool's
+credential encryption key. Replacing the employee API key or rotating the
+encryption key invalidates existing state; replay the full conversation or start
+a new session.
+See [compaction protocol and limits](docs/provider-adapters.md) for tested client
+versions, replay requirements, and unsupported input types.
 
 ## API and networking
 

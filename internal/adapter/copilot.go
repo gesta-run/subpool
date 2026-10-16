@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/gesta-run/subpool/internal/adapter/copilotcompact"
 	"github.com/gesta-run/subpool/internal/adapter/protocol"
 	"github.com/gesta-run/subpool/internal/provider/copilot"
 )
@@ -25,6 +26,15 @@ func (provider copilotAdapter) RoundTrip(ctx context.Context, request Request, h
 	}
 	if request.Kind == "responses_compact" {
 		return provider.compact(ctx, request, headers, credentials, options)
+	}
+	if request.Kind == "responses" {
+		trigger, opaque, _ := copilotcompact.Features(request.Body)
+		if trigger {
+			return provider.compactInband(ctx, request, headers, credentials, options)
+		}
+		if opaque {
+			return nil, &RequestError{Code: "invalid_compaction_state", Message: copilotcompact.ErrInvalidState.Error()}
+		}
 	}
 	responses, err := provider.client.SupportsEndpoint(ctx, request.Model, copilot.EndpointResponses, credentials.Copilot)
 	if err != nil {

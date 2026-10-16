@@ -32,6 +32,7 @@ Copilot accounts serve:
 
 - `POST /v1/chat/completions`
 - `POST /v1/responses`
+- `POST /v1/responses/compact` (bounded text-summary adapter)
 - Responses WebSocket requests
 - `GET /v1/models`
 
@@ -45,10 +46,17 @@ On chat-only models, stateful `previous_response_id` continuation and provider-h
 
 Image and file **tool results** require native Responses support. Chat-only
 conversion rejects them with `unsupported_tool_output`; ordinary user image
-messages remain supported. In-band `context_management` compaction cannot be
-translated to Chat. Standalone `/v1/responses/compact` is forwarded only to
-providers that implement native compaction; Copilot returns
-`unsupported_compaction` instead of an endpoint-not-found error.
+messages remain supported. In-band `context_management` compaction remains
+unsupported for Copilot; it is not the same contract as a final
+`compaction_trigger` input item.
+
+Copilot compaction uses bounded inference summaries through either native
+Responses or the Chat translator. Standalone `/v1/responses/compact` returns a
+plaintext replacement window. V2 triggers return a Subpool-owned encrypted item
+that Subpool restores before subsequent inference; clients must opt into the V2
+protocol. Neither mode silently truncates ordinary inference or guarantees
+recovery from every 413. See the [Codex configuration](../README.md#optional-codex-v2-compaction-with-github-copilot)
+and [adapter limits](provider-adapters.md) before enabling it.
 
 ### GitHub Copilot CLI as a client
 
