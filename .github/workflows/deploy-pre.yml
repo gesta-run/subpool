@@ -121,6 +121,7 @@ jobs:
           done
 
           compose_b64="$(base64 < deploy/pre/compose.yaml | tr -d '\n')"
+          verification_b64="$(base64 < deploy/pre/verify.py | tr -d '\n')"
           environment_b64="$(printf '%s\n' \
             "SUBPOOL_IMAGE=$SUBPOOL_IMAGE" \
             "SUBPOOL_HOST_PORT=$SUBPOOL_HOST_PORT" \
@@ -146,14 +147,16 @@ jobs:
           set -euo pipefail
           install -d -m 700 /gesta/subpool
           printf '%s' '$compose_b64' | base64 -d > /gesta/subpool/compose.yaml
+          printf '%s' '$verification_b64' | base64 -d > /gesta/subpool/verify.py
           printf '%s' '$environment_b64' | base64 -d > /gesta/subpool/.env
           chmod 600 /gesta/subpool/.env
           cd /gesta/subpool
           docker compose --env-file .env pull
           docker compose --env-file .env up -d --remove-orphans
           for _ in \$(seq 1 30); do
-            if curl -fsS 'http://127.0.0.1:$SUBPOOL_HOST_PORT/healthz' >/dev/null && \
+            if curl -fsS 'http://127.0.0.1:$SUBPOOL_HOST_PORT/readyz' >/dev/null && \
                curl -fsS 'http://127.0.0.1:$SUBPOOL_CONSOLE_HOST_PORT/' >/dev/null; then
+              python3 /gesta/subpool/verify.py
               exit 0
             fi
             sleep 2

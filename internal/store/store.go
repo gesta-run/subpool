@@ -63,6 +63,7 @@ type Store interface {
 	ReassignAPIKey(context.Context, string, string, []string) (domain.ProviderAccount, error)
 	AllowAPIKeyRequest(context.Context, string, int, time.Time) (bool, error)
 	RecordRequestSuccess(context.Context, string, string, time.Time) error
+	RecordProviderRequest(context.Context, string, []byte, string, time.Time) error
 
 	AddUsage(context.Context, string, []byte, string, time.Time, int64, int64) error
 	ListUsageEmployees(context.Context, domain.UsageSummaryFilter) ([]domain.UsageEmployeeSummary, error)

@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"net/http"
 	"testing"
@@ -59,4 +60,35 @@ func TestDefinitiveRefreshFailureMarksAuthFailed(t *testing.T) {
 	if recorder.Code != http.StatusUnauthorized || len(st.status) == 0 || st.status[0] != domain.AccountAuthFailed {
 		t.Fatalf("response=%d statuses=%#v body=%s", recorder.Code, st.status, recorder.Body.String())
 	}
+}
+
+func TestChatAndCompactionCallsRecordAccountWithoutSessionBinding(t *testing.T) {
+	for _, kind := range []string{"chat_completions", "responses_compact"} {
+		t.Run(kind, func(t *testing.T) {
+			server, st, provider, plain := newTestServer(t)
+			provider.responses = []*http.Response{sseResponse(http.StatusOK, "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-attribution\",\"usage\":{\"input_tokens\":5,\"output_tokens\":2},\"output\":[]}}\n\n")}
+			path, body := "/v1/chat/completions", `{"model":"gpt-test","messages":[{"role":"user","content":"hello"}]}`
+			if kind == "responses_compact" {
+				server.codex = &reportCompactProvider{provider}
+				path, body = "/v1/responses/compact", `{"model":"gpt-test","input":"hello"}`
+				provider.responses = []*http.Response{sseResponse(http.StatusOK, `{"object":"response.compaction","id":"compact-attribution","output":[],"usage":{"input_tokens":5,"output_tokens":2}}`)}
+				provider.responses[0].Header.Set("Content-Type", "application/json")
+			}
+			result := serveGateway(t, server, plain, path, body)
+			if result.Code != http.StatusOK || len(st.requestEvents) != 1 || st.sessionSaved {
+				t.Fatalf("status=%d events=%v session=%v body=%s", result.Code, st.requestEvents, st.sessionSaved, result.Body.String())
+			}
+			for _, account := range st.requestEvents {
+				if account != st.route.Account.ID {
+					t.Fatal("request attributed to the wrong upstream")
+				}
+			}
+		})
+	}
+}
+
+type reportCompactProvider struct{ *fakeProvider }
+
+func (p *reportCompactProvider) Compact(ctx context.Context, body []byte, header http.Header, credentials codex.Credentials) (*http.Response, error) {
+	return p.Responses(ctx, body, header, credentials)
 }

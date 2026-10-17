@@ -35,6 +35,7 @@ type fakeStore struct {
 	allowCalls              int
 	usageCommitUncertain    bool
 	usageEvents             map[string]struct{}
+	requestEvents           map[string]string
 	healthFailureCodes      []string
 	availabilityUpdates     []providerAvailabilityUpdate
 	sessionSavedSignal      chan struct{}

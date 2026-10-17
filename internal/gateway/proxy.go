@@ -20,7 +20,7 @@ func (s *Server) proxyUpstreamError(w http.ResponseWriter, resp *http.Response) 
 	_, _ = io.Copy(w, io.LimitReader(resp.Body, 1<<20))
 }
 
-func (s *Server) proxyImageJSON(w http.ResponseWriter, keyID, model string, resp *http.Response) {
+func (s *Server) proxyImageJSON(w http.ResponseWriter, keyID, accountID, model string, resp *http.Response) {
 	copyResponseHeaders(w.Header(), resp.Header)
 	w.WriteHeader(resp.StatusCode)
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
@@ -37,7 +37,7 @@ func (s *Server) proxyImageJSON(w http.ResponseWriter, keyID, model string, resp
 	decodeErr := decoder.Decode(&envelope)
 	_, copyErr := io.Copy(w, resp.Body)
 	if decodeErr == nil && copyErr == nil && (envelope.Usage.InputTokens > 0 || envelope.Usage.OutputTokens > 0) {
-		s.addUsage(keyID, s.randomUsageEventHash(), model, envelope.Usage.InputTokens, envelope.Usage.OutputTokens)
+		s.addAccountUsage(keyID, accountID, "", model, envelope.Usage.InputTokens, envelope.Usage.OutputTokens)
 	}
 }
 
@@ -104,7 +104,7 @@ func (s *Server) responseObserver(keyID, poolID, accountID string) adapter.Obser
 		Now:          s.now,
 		NextSequence: func() uint64 { return s.eventSeq.Add(1) },
 		Usage: func(responseID, model string, input, output int64) {
-			s.addUsage(keyID, s.usageEventHash(responseID, s.randomUsageEventHash()), model, input, output)
+			s.addAccountUsage(keyID, accountID, responseID, model, input, output)
 		},
 		Session: func(responseID string) {
 			if poolID != "" && accountID != "" {
@@ -113,4 +113,30 @@ func (s *Server) responseObserver(keyID, poolID, accountID string) adapter.Obser
 		},
 		Limit: func(limit responseevent.LimitKind) { s.recordProviderStreamLimit(accountID, limit) },
 	}
+}
+
+// Usage-only endpoints need attribution without creating a conversation binding.
+func (s *Server) addAccountUsage(keyID, accountID, responseID, model string, input, output int64) {
+	fallback := s.randomUsageEventHash()
+	s.addUsage(keyID, s.usageEventHash(responseID, fallback), model, input, output)
+	if accountID == "" {
+		return
+	}
+	hash := fallback
+	if responseID != "" {
+		hash = responseevent.SessionHash(responseID)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	var err error
+	for attempt := 1; attempt <= 3; attempt++ {
+		err = s.store.RecordProviderRequest(ctx, keyID, hash, accountID, s.now())
+		if err == nil {
+			return
+		}
+		if attempt < 3 && !waitRetry(ctx, time.Duration(attempt)*25*time.Millisecond) {
+			break
+		}
+	}
+	slog.Error("provider request recording failed", "api_key_id", keyID, "error", err)
 }

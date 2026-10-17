@@ -87,7 +87,7 @@ func (b responsesWSBackend) AttemptBridge(ctx context.Context, headers http.Head
 
 func (b responsesWSBackend) CompleteTurn(keyID, poolID, accountID, responseID, model string, input, output int64) {
 	if input > 0 || output > 0 {
-		b.server.addUsage(keyID, b.server.usageEventHash(responseID, b.server.randomUsageEventHash()), model, input, output)
+		b.server.addAccountUsage(keyID, accountID, responseID, model, input, output)
 	}
 	if responseID != "" {
 		b.server.saveSession(keyID, poolID, responseID, accountID)
