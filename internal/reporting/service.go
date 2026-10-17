@@ -15,6 +15,7 @@ import (
 type Store interface {
 	ReportTrackingStarted(context.Context) (time.Time, error)
 	ReportAccounts(context.Context, time.Time, time.Time) ([]Account, error)
+	ReportUnattributedRequests(context.Context, time.Time, time.Time) (int64, error)
 	ClaimDailyReport(context.Context, string, []byte) ([]byte, bool, error)
 	FinishDailyReport(context.Context, string, string) error
 	RetryDailyReport(context.Context, string) error
@@ -72,7 +73,11 @@ func (s *Service) SendDue(ctx context.Context, now time.Time) error {
 	if err != nil {
 		return err
 	}
-	report := NewReport(c, accounts, start, end, now, partial)
+	unattributed, err := s.Store.ReportUnattributedRequests(ctx, start, end)
+	if err != nil {
+		return err
+	}
+	report := NewReport(c, accounts, start, end, now, partial, unattributed)
 	message, err := Render(c, report)
 	if err != nil {
 		return err

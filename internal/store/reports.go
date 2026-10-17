@@ -59,3 +59,13 @@ func (p *Postgres) RetryDailyReport(ctx context.Context, day string) error {
 	}
 	return wrapDB("retry daily report", p.queries.RetryDailyReport(ctx, date))
 }
+
+func (p *Postgres) RecordProviderRequest(ctx context.Context, keyID string, hash []byte, accountID string, at time.Time) error {
+	return wrapDB("record provider request", p.queries.RecordProviderRequest(ctx, storedb.RecordProviderRequestParams{
+		ApiKeyID: keyID, ResponseHash: hash, ProviderAccountID: accountID, OccurredAt: dbTime(at),
+	}))
+}
+func (p *Postgres) ReportUnattributedRequests(ctx context.Context, start, end time.Time) (int64, error) {
+	count, err := p.queries.ReportUnattributedRequests(ctx, storedb.ReportUnattributedRequestsParams{WindowStart: dbTime(start), WindowEnd: dbTime(end)})
+	return count, wrapDB("read unattributed requests", err)
+}

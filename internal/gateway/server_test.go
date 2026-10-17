@@ -274,6 +274,9 @@ func TestOpenAICompatibleChatPassesThroughAndMetersUsage(t *testing.T) {
 	if st.usageInput != 9 || st.usageOutput != 2 {
 		t.Fatalf("usage = %d/%d", st.usageInput, st.usageOutput)
 	}
+	if len(st.requestEvents) != 1 {
+		t.Fatal("compatible chat was omitted from account reporting")
+	}
 	if countedCipher.decrypts != 1 {
 		t.Fatalf("credential decryptions = %d, want 1", countedCipher.decrypts)
 	}
@@ -979,3 +982,11 @@ func (b *failingBody) Read(target []byte) (int, error) {
 	return copy(target, b.data), io.ErrUnexpectedEOF
 }
 func (b *failingBody) Close() error { return nil }
+
+func (f *fakeStore) RecordProviderRequest(_ context.Context, _ string, hash []byte, account string, _ time.Time) error {
+	if f.requestEvents == nil {
+		f.requestEvents = make(map[string]string)
+	}
+	f.requestEvents[string(hash)] = account
+	return nil
+}

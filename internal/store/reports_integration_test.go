@@ -64,6 +64,63 @@ func TestReportCountsPersistDeduplicateAndClaimOnce(t *testing.T) {
 	if count != 2 {
 		t.Fatalf("duplicate response counted: %d", count)
 	}
+	baseline, err := db.ReportUnattributedRequests(ctx, start, time.Now().Add(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, response := range []string{"one", "two", "three"} {
+		hash := sha256.Sum256([]byte("usage:" + response))
+		if err = db.AddUsage(ctx, keyID, hash[:], "illustrative-model", time.Now(), 2, 1); err != nil {
+			t.Fatal(err)
+		}
+	}
+	gap, err := db.ReportUnattributedRequests(ctx, start, time.Now().Add(time.Second))
+	if err != nil || gap != baseline+1 {
+		t.Fatalf("missing-account count=%d baseline=%d error=%v", gap, baseline, err)
+	}
+	third := sha256.Sum256([]byte("three"))
+	for range 2 {
+		if err = db.RecordProviderRequest(ctx, keyID, third[:], accountID, time.Now()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	gap, err = db.ReportUnattributedRequests(ctx, start, time.Now().Add(time.Second))
+	if err != nil || gap != baseline {
+		t.Fatalf("recorded call remained unattributed: %d %v", gap, err)
+	}
+	accounts, err = db.ReportAccounts(ctx, start, time.Now().Add(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range accounts {
+		if a.ID == accountID && a.Requests != 3 {
+			t.Fatalf("usage and response paths double-counted: %d", a.Requests)
+		}
+	}
+	for _, provider := range []string{domain.ProviderCodex, domain.ProviderOpenAICompatible, domain.ProviderCopilot} {
+		idleID, _ := id.New()
+		digest := sha256.Sum256([]byte(idleID))
+		idle := domain.ProviderAccount{ID: idleID, Provider: provider, CredentialType: domain.CredentialSubscription, DisplayName: "Illustrative idle account", SubjectHMAC: digest[:], CredentialCiphertext: []byte("encrypted"), CredentialVersion: 1, Status: domain.AccountActive, HealthStatus: domain.HealthHealthy}
+		if err = db.CreateProviderAccount(ctx, idle); err != nil {
+			t.Fatal(err)
+		}
+		rows, e := db.ReportAccounts(ctx, start, time.Now().Add(time.Second))
+		if e != nil {
+			t.Fatal(e)
+		}
+		found := false
+		for _, row := range rows {
+			if row.ID == idleID {
+				found = true
+				if row.Requests != 0 {
+					t.Fatal("idle account has requests")
+				}
+			}
+		}
+		if !found {
+			t.Fatal("provider account omitted from report", provider)
+		}
+	}
 	day := "2099-01-02"
 	var won atomic.Int64
 	var workers sync.WaitGroup

@@ -48,14 +48,36 @@ func (q *Queries) FinishDailyReport(ctx context.Context, arg FinishDailyReportPa
 	return err
 }
 
+const recordProviderRequest = `-- name: RecordProviderRequest :exec
+INSERT INTO provider_request_events(api_key_id, response_hash, provider_account_id, occurred_at)
+VALUES($1, $2, $3, $4)
+ON CONFLICT(api_key_id, response_hash) DO NOTHING
+`
+
+type RecordProviderRequestParams struct {
+	ApiKeyID          string
+	ResponseHash      []byte
+	ProviderAccountID string
+	OccurredAt        pgtype.Timestamptz
+}
+
+func (q *Queries) RecordProviderRequest(ctx context.Context, arg RecordProviderRequestParams) error {
+	_, err := q.db.Exec(ctx, recordProviderRequest,
+		arg.ApiKeyID,
+		arg.ResponseHash,
+		arg.ProviderAccountID,
+		arg.OccurredAt,
+	)
+	return err
+}
+
 const reportAccounts = `-- name: ReportAccounts :many
 SELECT a.id, a.display_name, COALESCE(a.email, '')::text AS email, a.quota_snapshot, a.quota_checked_at,
     count(e.response_hash)::bigint AS requests
 FROM provider_accounts a
 LEFT JOIN provider_request_events e ON e.provider_account_id = a.id
     AND e.occurred_at >= $1 AND e.occurred_at < $2
-WHERE a.provider = 'codex'
-GROUP BY a.id ORDER BY a.display_name
+GROUP BY a.id ORDER BY a.created_at
 `
 
 type ReportAccountsParams struct {
@@ -108,6 +130,32 @@ func (q *Queries) ReportTrackingStarted(ctx context.Context) (pgtype.Timestamptz
 	var started_at pgtype.Timestamptz
 	err := row.Scan(&started_at)
 	return started_at, err
+}
+
+const reportUnattributedRequests = `-- name: ReportUnattributedRequests :one
+WITH usage_counts AS (
+    SELECT api_key_id, count(*) AS calls FROM usage_event_dedup
+    WHERE created_at >= $1 AND created_at < $2
+    GROUP BY api_key_id
+), attributed_counts AS (
+    SELECT api_key_id, count(*) AS calls FROM provider_request_events
+    WHERE occurred_at >= $1 AND occurred_at < $2
+    GROUP BY api_key_id
+)
+SELECT COALESCE(sum(GREATEST(u.calls - COALESCE(a.calls, 0), 0)), 0)::bigint AS calls
+FROM usage_counts u LEFT JOIN attributed_counts a USING(api_key_id)
+`
+
+type ReportUnattributedRequestsParams struct {
+	WindowStart pgtype.Timestamptz
+	WindowEnd   pgtype.Timestamptz
+}
+
+func (q *Queries) ReportUnattributedRequests(ctx context.Context, arg ReportUnattributedRequestsParams) (int64, error) {
+	row := q.db.QueryRow(ctx, reportUnattributedRequests, arg.WindowStart, arg.WindowEnd)
+	var calls int64
+	err := row.Scan(&calls)
+	return calls, err
 }
 
 const retryDailyReport = `-- name: RetryDailyReport :exec

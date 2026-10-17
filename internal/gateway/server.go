@@ -259,8 +259,9 @@ func (s *Server) handleImages(w http.ResponseWriter, r *http.Request, kind strin
 		return
 	}
 	defer resp.Body.Close()
+	accountID := resp.Header.Get(accountHeader)
 	resp.Header.Del(accountHeader)
-	s.proxyImageJSON(w, route.Key.ID, meta.Model, resp.Response)
+	s.proxyImageJSON(w, route.Key.ID, accountID, meta.Model, resp.Response)
 }
 
 func (s *Server) authorize(w http.ResponseWriter, r *http.Request, requiredScope string) (domain.KeyRoute, bool) {
@@ -732,7 +733,7 @@ func (s *Server) providerAccountResponse(ctx context.Context, request adapter.Re
 	response, err := provider.RoundTrip(ctx, request,
 		header, credentials, adapter.Options{AccountID: account.ID, FastMode: account.FastModeEnabled, AllowToolFallback: poolProvider == domain.ProviderCopilot,
 			CompactionState: &copilotcompact.State{Cipher: s.cipher, Scope: keyID},
-			InternalUsage:   func(input, output int64) { s.addUsage(keyID, s.randomUsageEventHash(), request.Model, input, output) }})
+			InternalUsage:   func(input, output int64) { s.addAccountUsage(keyID, account.ID, "", request.Model, input, output) }})
 	if err != nil {
 		return nil, err
 	}

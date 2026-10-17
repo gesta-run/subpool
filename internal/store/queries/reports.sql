@@ -7,8 +7,25 @@ SELECT a.id, a.display_name, COALESCE(a.email, '')::text AS email, a.quota_snaps
 FROM provider_accounts a
 LEFT JOIN provider_request_events e ON e.provider_account_id = a.id
     AND e.occurred_at >= sqlc.arg(window_start) AND e.occurred_at < sqlc.arg(window_end)
-WHERE a.provider = 'codex'
-GROUP BY a.id ORDER BY a.display_name;
+GROUP BY a.id ORDER BY a.created_at;
+
+-- name: RecordProviderRequest :exec
+INSERT INTO provider_request_events(api_key_id, response_hash, provider_account_id, occurred_at)
+VALUES(sqlc.arg(api_key_id), sqlc.arg(response_hash), sqlc.arg(provider_account_id), sqlc.arg(occurred_at))
+ON CONFLICT(api_key_id, response_hash) DO NOTHING;
+
+-- name: ReportUnattributedRequests :one
+WITH usage_counts AS (
+    SELECT api_key_id, count(*) AS calls FROM usage_event_dedup
+    WHERE created_at >= sqlc.arg(window_start) AND created_at < sqlc.arg(window_end)
+    GROUP BY api_key_id
+), attributed_counts AS (
+    SELECT api_key_id, count(*) AS calls FROM provider_request_events
+    WHERE occurred_at >= sqlc.arg(window_start) AND occurred_at < sqlc.arg(window_end)
+    GROUP BY api_key_id
+)
+SELECT COALESCE(sum(GREATEST(u.calls - COALESCE(a.calls, 0), 0)), 0)::bigint AS calls
+FROM usage_counts u LEFT JOIN attributed_counts a USING(api_key_id);
 
 -- name: ClaimDailyReport :one
 INSERT INTO daily_team_reports(report_day, payload, lease_until)
