@@ -29,7 +29,7 @@ func TestReportCountsPersistDeduplicateAndClaimOnce(t *testing.T) {
 	keyID, _ := id.New()
 	employeeID, _ := id.New()
 	digest := sha256.Sum256([]byte(accountID))
-	account := domain.ProviderAccount{ID: accountID, Provider: domain.ProviderCodex, CredentialType: domain.CredentialSubscription, DisplayName: "Illustrative report account", SubjectHMAC: digest[:], CredentialCiphertext: []byte("encrypted"), CredentialVersion: 1, Status: domain.AccountActive, HealthStatus: domain.HealthHealthy}
+	account := domain.ProviderAccount{ID: accountID, Provider: domain.ProviderCodex, CredentialType: domain.CredentialSubscription, DisplayName: "Illustrative report account", Email: "account@example.com", SubjectHMAC: digest[:], CredentialCiphertext: []byte("encrypted"), CredentialVersion: 1, Status: domain.AccountActive, HealthStatus: domain.HealthHealthy}
 	if err = db.CreateProviderAccount(ctx, account); err != nil {
 		t.Fatal(err)
 	}
@@ -56,6 +56,9 @@ func TestReportCountsPersistDeduplicateAndClaimOnce(t *testing.T) {
 	for _, a := range accounts {
 		if a.ID == accountID {
 			count = a.Requests
+			if a.Email != account.Email {
+				t.Fatal("report account email was not loaded")
+			}
 		}
 	}
 	if count != 2 {

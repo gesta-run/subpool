@@ -9,10 +9,10 @@ import (
 )
 
 type Account struct {
-	ID, Name  string
-	Requests  int64
-	Snapshot  []byte
-	CheckedAt time.Time
+	ID, Name, Email string
+	Requests        int64
+	Snapshot        []byte
+	CheckedAt       time.Time
 }
 type Row struct {
 	Name, Requests, Share, Remaining, Reset string
@@ -38,12 +38,9 @@ func NewReport(c Config, accounts []Account, start, end, now time.Time, partial 
 		r.Total += a.Requests
 	}
 	for _, a := range accounts {
-		name := a.Name
-		if strings.EqualFold(name, "codex1") {
-			name = "Codex 1"
-		}
-		if name == "codex-2" {
-			name = "Codex 2"
+		name := strings.TrimSpace(a.Email)
+		if name == "" {
+			name = a.Name
 		}
 		row := Row{Name: name, Requests: number(a.Requests), Share: "0.0%", Remaining: "Unavailable", Reset: "Quota refresh unavailable"}
 		if r.Total > 0 {
@@ -58,7 +55,7 @@ func NewReport(c Config, accounts []Account, start, end, now time.Time, partial 
 		if json.Unmarshal(a.Snapshot, &quota) == nil && quota.Weekly != nil && quota.Weekly.Remaining != nil && !a.CheckedAt.IsZero() && !a.CheckedAt.After(now.Add(time.Minute)) && now.Sub(a.CheckedAt) <= 15*time.Minute && quota.Weekly.Reset > now.Unix() && *quota.Weekly.Remaining >= 0 && *quota.Weekly.Remaining <= 100 {
 			row.Remaining = fmt.Sprintf("%.0f%%", *quota.Weekly.Remaining)
 			row.Bar = int(math.Round(*quota.Weekly.Remaining))
-			row.Reset = "Resets " + time.Unix(quota.Weekly.Reset, 0).In(c.Location).Format("Jan 2 · 15:04")
+			row.Reset = resetLabel(time.Unix(quota.Weekly.Reset, 0), now, c.Location)
 		}
 		r.Rows = append(r.Rows, row)
 	}
@@ -71,4 +68,19 @@ func number(n int64) string {
 		s = s[:i] + "," + s[i:]
 	}
 	return s
+}
+
+func resetLabel(reset, now time.Time, location *time.Location) string {
+	remaining := reset.Sub(now)
+	unit, duration := "minute", time.Minute
+	if remaining >= 24*time.Hour {
+		unit, duration = "day", 24*time.Hour
+	} else if remaining >= time.Hour {
+		unit, duration = "hour", time.Hour
+	}
+	count := int(math.Ceil(float64(remaining) / float64(duration)))
+	if count != 1 {
+		unit += "s"
+	}
+	return fmt.Sprintf("Resets %s (in %d %s)", reset.In(location).Format("2006-01-02 · 15:04"), count, unit)
 }

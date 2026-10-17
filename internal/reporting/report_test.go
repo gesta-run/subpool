@@ -62,6 +62,46 @@ func TestRenderTeamUsage(t *testing.T) {
 	}
 }
 
+func TestReportEmailResetAndPartialWindow(t *testing.T) {
+	c := fixtureConfig()
+	now := time.Date(2026, 1, 2, 9, 50, 0, 0, time.UTC)
+	reset := now.Add(5*24*time.Hour + 20*time.Hour)
+	snapshot, _ := json.Marshal(map[string]any{"weekly": map[string]any{"remaining_percent": 72, "reset_at": reset.Unix()}})
+	// This account address and capacity are illustrative.
+	accounts := []Account{{Name: "Internal label", Email: "account@example.com", Snapshot: snapshot, CheckedAt: now}}
+	report := NewReport(c, accounts, now.Add(-17*time.Minute), now, now, true)
+	if report.Rows[0].Name != "account@example.com" {
+		t.Fatal("account email was not used")
+	}
+	if report.Rows[0].Reset != "Resets 2026-01-08 · 13:50 (in 6 days)" {
+		t.Fatal(report.Rows[0].Reset)
+	}
+	message, err := Render(c, report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, body := range []string{message.HTML, message.Text} {
+		for _, want := range []string{"account@example.com", "17:33–17:50", "Partial first-day report", "(in 6 days)"} {
+			if !strings.Contains(body, want) {
+				t.Fatalf("missing %q", want)
+			}
+		}
+	}
+	for _, tc := range []struct {
+		remaining time.Duration
+		label     string
+	}{
+		{24 * time.Hour, "(in 1 day)"},
+		{2*time.Hour + time.Minute, "(in 3 hours)"},
+		{time.Hour, "(in 1 hour)"},
+		{30 * time.Second, "(in 1 minute)"},
+	} {
+		if got := resetLabel(now.Add(tc.remaining), now, c.Location); !strings.HasSuffix(got, tc.label) {
+			t.Fatal(got)
+		}
+	}
+}
+
 type fakeStore struct {
 	payload []byte
 	sent    bool
