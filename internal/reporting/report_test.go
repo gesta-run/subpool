@@ -233,3 +233,35 @@ func TestAllAccountQuotaKindsAndUnattributedFootnote(t *testing.T) {
 		t.Fatal("stale monthly quota was shown")
 	}
 }
+
+func TestEmployeeSharesUseAccountTotalAndEscapeNames(t *testing.T) {
+	c := fixtureConfig()
+	now := time.Date(2026, 2, 3, 9, 0, 0, 0, time.UTC)
+	// All account identities, contributor names and request counts are illustrative.
+	accounts := []Account{
+		{Name: "Example account", Requests: 12, Employees: []Employee{{Name: "Example <A>", Requests: 8}, {Name: "Example B", Requests: 4}}},
+		{Name: "Other account", Requests: 18},
+		{Name: "Idle account", Employees: []Employee{{Name: "Example C"}}},
+	}
+	r := NewReport(c, accounts, now.Add(-time.Hour), now, now, false, 0)
+	if r.Rows[0].Share != "40.0%" || r.Rows[0].Employees[0].Share != "66.7%" || r.Rows[0].Employees[1].Share != "33.3%" {
+		t.Fatalf("employee share must use its account total: %+v", r.Rows[0])
+	}
+	if r.Rows[2].Employees[0].Share != "0.0%" {
+		t.Fatal("zero-count account produced an invalid percentage")
+	}
+	m, err := Render(c, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, body := range []string{m.HTML, m.Text} {
+		for _, want := range []string{"8 · 66.7%", "4 · 33.3%", "Employee percentages are within each account"} {
+			if !strings.Contains(body, want) {
+				t.Fatalf("missing %q", want)
+			}
+		}
+	}
+	if !strings.Contains(m.HTML, "EMPLOYEE REQUESTS") || !strings.Contains(m.HTML, "Example &lt;A&gt;") || strings.Contains(m.HTML, "Example <A>") {
+		t.Fatal("employee column missing or employee name was not escaped")
+	}
+}
