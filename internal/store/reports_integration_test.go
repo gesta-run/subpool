@@ -121,6 +121,40 @@ func TestReportCountsPersistDeduplicateAndClaimOnce(t *testing.T) {
 			t.Fatal("provider account omitted from report", provider)
 		}
 	}
+	// Illustrative contributors with multiple keys must aggregate per employee,
+	// while events outside the reporting window must not affect totals.
+	end := time.Now().Add(time.Second)
+	for i := 0; i < 2; i++ {
+		extraID, _ := id.New()
+		extraEmployee, name := employeeID, "Illustrative employee"
+		if i == 1 {
+			extraEmployee, _ = id.New()
+			name = "Illustrative other contributor"
+		}
+		extraDigest := sha256.Sum256([]byte(extraID))
+		extra := domain.APIKey{ID: extraID, EmployeeID: extraEmployee, EmployeeName: name, PoolID: poolID, KeyHMAC: extraDigest[:], KeyHint: "example", Scopes: []string{"responses"}}
+		if _, err = db.CreateAPIKeyAndBind(ctx, extra); err != nil {
+			t.Fatal(err)
+		}
+		for j, at := range []time.Time{end.Add(-time.Millisecond), start.Add(-time.Hour), end.Add(time.Hour)} {
+			hash := sha256.Sum256([]byte(extraID + string(rune('a'+j))))
+			if err = db.RecordProviderRequest(ctx, extraID, hash[:], accountID, at); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	accounts, err = db.ReportAccounts(ctx, start, end)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range accounts {
+		if a.ID != accountID {
+			continue
+		}
+		if a.Requests != 5 || len(a.Employees) != 2 || a.Employees[0].Name != "Illustrative employee" || a.Employees[0].Requests != 4 || a.Employees[1].Requests != 1 {
+			t.Fatalf("employee aggregation or window mismatch: %+v", a)
+		}
+	}
 	day := "2099-01-02"
 	var won atomic.Int64
 	var workers sync.WaitGroup

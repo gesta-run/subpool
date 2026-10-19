@@ -72,12 +72,27 @@ func (q *Queries) RecordProviderRequest(ctx context.Context, arg RecordProviderR
 }
 
 const reportAccounts = `-- name: ReportAccounts :many
+WITH employee_counts AS (
+    SELECT e.provider_account_id, k.employee_id,
+        COALESCE(NULLIF(em.name, ''), 'Unknown')::text AS employee_name,
+        count(*)::bigint AS requests
+    FROM provider_request_events e
+    LEFT JOIN api_keys k ON k.id = e.api_key_id
+    LEFT JOIN employees em ON em.id = k.employee_id
+    WHERE e.occurred_at >= $1 AND e.occurred_at < $2
+    GROUP BY e.provider_account_id, k.employee_id, em.name
+), account_counts AS (
+    SELECT provider_account_id, sum(requests)::bigint AS requests,
+        jsonb_agg(jsonb_build_object('name', employee_name, 'requests', requests)
+            ORDER BY requests DESC, employee_name, employee_id) AS employees
+    FROM employee_counts GROUP BY provider_account_id
+)
 SELECT a.id, a.display_name, COALESCE(a.email, '')::text AS email, a.quota_snapshot, a.quota_checked_at,
-    count(e.response_hash)::bigint AS requests
+    COALESCE(c.requests, 0)::bigint AS requests,
+    COALESCE(c.employees, '[]'::jsonb)::jsonb AS employees
 FROM provider_accounts a
-LEFT JOIN provider_request_events e ON e.provider_account_id = a.id
-    AND e.occurred_at >= $1 AND e.occurred_at < $2
-GROUP BY a.id ORDER BY a.created_at
+LEFT JOIN account_counts c ON c.provider_account_id = a.id
+ORDER BY a.created_at
 `
 
 type ReportAccountsParams struct {
@@ -92,6 +107,7 @@ type ReportAccountsRow struct {
 	QuotaSnapshot  []byte
 	QuotaCheckedAt pgtype.Timestamptz
 	Requests       int64
+	Employees      []byte
 }
 
 func (q *Queries) ReportAccounts(ctx context.Context, arg ReportAccountsParams) ([]ReportAccountsRow, error) {
@@ -110,6 +126,7 @@ func (q *Queries) ReportAccounts(ctx context.Context, arg ReportAccountsParams) 
 			&i.QuotaSnapshot,
 			&i.QuotaCheckedAt,
 			&i.Requests,
+			&i.Employees,
 		); err != nil {
 			return nil, err
 		}
