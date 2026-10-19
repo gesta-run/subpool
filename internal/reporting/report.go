@@ -8,13 +8,24 @@ import (
 	"time"
 )
 
+type Employee struct {
+	Name     string `json:"name"`
+	Requests int64  `json:"requests"`
+}
+
+type EmployeeRow struct {
+	Name, Requests, Share string
+}
+
 type Account struct {
 	ID, Name, Email string
+	Employees       []Employee
 	Requests        int64
 	Snapshot        []byte
 	CheckedAt       time.Time
 }
 type Row struct {
+	Employees                               []EmployeeRow
 	Name, Requests, Share, Remaining, Reset string
 	Bar                                     int
 }
@@ -50,6 +61,13 @@ func NewReport(c Config, accounts []Account, start, end, now time.Time, partial 
 		row := Row{Name: name, Requests: number(a.Requests), Share: "0.0%", Remaining: "Unavailable", Reset: "Quota refresh unavailable"}
 		if r.Total > 0 {
 			row.Share = fmt.Sprintf("%.1f%%", float64(a.Requests)*100/float64(r.Total))
+		}
+		for _, employee := range a.Employees {
+			share := "0.0%"
+			if a.Requests > 0 {
+				share = fmt.Sprintf("%.1f%%", float64(employee.Requests)*100/float64(a.Requests))
+			}
+			row.Employees = append(row.Employees, EmployeeRow{Name: employee.Name, Requests: number(employee.Requests), Share: share})
 		}
 		fillQuota(&row, a, now, c.Location)
 		r.Rows = append(r.Rows, row)
