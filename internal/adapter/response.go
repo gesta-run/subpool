@@ -15,6 +15,12 @@ type Response struct {
 	usageRecorded    bool
 	noSession        bool
 	holdsRequestBody bool
+	modelScopedLimit bool
+}
+
+// ModelScopedLimit distinguishes adapter-classified model capacity from account limits.
+func (response *Response) ModelScopedLimit() bool {
+	return response != nil && response.modelScopedLimit
 }
 
 // RetainsRequestBody reports work that outlives upstream response headers.

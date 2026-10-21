@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gesta-run/subpool/internal/credential"
 	"github.com/gesta-run/subpool/internal/domain"
 	"github.com/gesta-run/subpool/internal/provider/bailian"
 	"github.com/gesta-run/subpool/internal/provider/codex"
@@ -53,13 +54,15 @@ type Result struct {
 }
 
 type Checker struct {
-	store      store.Store
-	cipher     Cipher
-	codex      CodexUsage
-	compatible CompatibleModels
-	copilot    CopilotCredits
-	bailian    BailianUsage
-	now        func() time.Time
+	store       store.Store
+	cipher      Cipher
+	codex       CodexUsage
+	compatible  CompatibleModels
+	copilot     CopilotCredits
+	bailian     BailianUsage
+	antigravity AntigravityModels
+	refresher   credential.AccountRefresher
+	now         func() time.Time
 }
 
 func NewChecker(st store.Store, cipher Cipher, codexUsage CodexUsage, compatible CompatibleModels, copilotCredits ...CopilotCredits) *Checker {
@@ -97,6 +100,8 @@ func (c *Checker) Check(ctx context.Context, account domain.ProviderAccount) Res
 		return classifyCodexQuotaError(err)
 	case domain.ProviderOpenAICompatible:
 		return c.checkCompatible(ctx, plaintext)
+	case domain.ProviderAntigravity:
+		return c.checkAntigravity(ctx, account, plaintext)
 	case domain.ProviderCopilot:
 		var credentials copilot.Credentials
 		if json.Unmarshal(plaintext, &credentials) != nil || c.copilot == nil {

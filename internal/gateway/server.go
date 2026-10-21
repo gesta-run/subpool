@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/gesta-run/subpool/internal/adapter"
+	"github.com/gesta-run/subpool/internal/adapter/antigravitywire"
 	"github.com/gesta-run/subpool/internal/adapter/copilotcompact"
 	"github.com/gesta-run/subpool/internal/auth"
 	"github.com/gesta-run/subpool/internal/catalog"
@@ -26,6 +27,7 @@ import (
 	"github.com/gesta-run/subpool/internal/gateway/responsesws"
 	"github.com/gesta-run/subpool/internal/gateway/routingstats"
 	"github.com/gesta-run/subpool/internal/protocol/responseevent"
+	"github.com/gesta-run/subpool/internal/provider/antigravity"
 	"github.com/gesta-run/subpool/internal/provider/codex"
 	"github.com/gesta-run/subpool/internal/provider/copilot"
 	"github.com/gesta-run/subpool/internal/store"
@@ -67,23 +69,26 @@ type OpenAICompatibleClient = adapter.CompatibleClient
 type CopilotClient = adapter.CopilotClient
 
 type Server struct {
-	store               store.Store
-	keys                *auth.APIKeys
-	cipher              Cipher
-	codex               CodexClient
-	compatible          OpenAICompatibleClient
-	copilot             CopilotClient
-	refresher           credential.AccountRefresher
-	activity            *requestActivityThrottle
-	catalog             *catalog.Service
-	models              *modelCache
-	responsesWS         *responsesws.Hub
-	maxRequestBodyBytes int64
-	requestBodyBudget   *byteBudget
-	requestBodyTimeout  time.Duration
-	now                 func() time.Time
-	eventSeq            atomic.Uint64
-	routingStats        routingstats.Counters
+	store                 store.Store
+	keys                  *auth.APIKeys
+	cipher                Cipher
+	codex                 CodexClient
+	compatible            OpenAICompatibleClient
+	copilot               CopilotClient
+	antigravity           adapter.AntigravityClient
+	antigravitySignatures *antigravitywire.Signatures
+	antigravityLimits     *antigravitywire.ModelLimits
+	refresher             credential.AccountRefresher
+	activity              *requestActivityThrottle
+	catalog               *catalog.Service
+	models                *modelCache
+	responsesWS           *responsesws.Hub
+	maxRequestBodyBytes   int64
+	requestBodyBudget     *byteBudget
+	requestBodyTimeout    time.Duration
+	now                   func() time.Time
+	eventSeq              atomic.Uint64
+	routingStats          routingstats.Counters
 }
 
 func New(st store.Store, keys *auth.APIKeys, cipher Cipher, client CodexClient, refresher credential.AccountRefresher, compatible ...OpenAICompatibleClient) *Server {
@@ -100,6 +105,21 @@ func New(st store.Store, keys *auth.APIKeys, cipher Cipher, client CodexClient, 
 
 func (s *Server) WithCopilot(client CopilotClient) *Server {
 	s.copilot = client
+	return s
+}
+
+func (s *Server) WithAntigravity(client adapter.AntigravityClient) *Server {
+	s.antigravity = client
+	s.antigravitySignatures = antigravitywire.NewSignatures()
+	if storage, ok := s.store.(antigravitywire.SignatureStorage); ok {
+		s.antigravitySignatures.WithStorage(storage, s.cipher)
+	}
+	s.antigravityLimits = antigravitywire.NewModelLimits()
+	return s
+}
+
+func (s *Server) WithAntigravityModels(client catalog.AntigravityModels) *Server {
+	s.catalog.WithAntigravity(client)
 	return s
 }
 
@@ -406,6 +426,9 @@ func (s *Server) attemptAccount(r *http.Request, route domain.KeyRoute, request 
 		s.recordHealthFailure(r.Context(), account.ID, "credential_unavailable")
 		return nil, retryUnavailable, false
 	}
+	if account.Provider == domain.ProviderAntigravity && time.Until(credentials.Antigravity.ExpiresAt) <= time.Minute {
+		return s.retryRefreshedAccount(r, route, request, account)
+	}
 	response, err := s.providerAccountResponse(r.Context(), request, r.Header, credentials, account, route.Pool.Provider, route.Key.ID)
 	if err != nil {
 		if failure := terminalAdapterFailure(err); failure != nil {
@@ -453,6 +476,16 @@ func (s *Server) retryRefreshedAccount(r *http.Request, route domain.KeyRoute, r
 		if failure := terminalAdapterFailure(err); failure != nil {
 			return failure, "", true
 		}
+		var requestError *adapter.RequestError
+		if errors.As(err, &requestError) {
+			if route.Pool.Provider == domain.ProviderMixed {
+				return nil, retryUnsupported, false
+			}
+			return &adapter.Response{Response: openAIErrorResponse(http.StatusBadRequest, requestError.Message, requestError.Code)}, "", true
+		}
+		if errors.Is(err, adapter.ErrUnsupported) {
+			return nil, retryUnsupported, false
+		}
 		retry, complete := s.evaluateProviderError(r.Context(), refreshed.ID, err)
 		return nil, retry, complete
 	}
@@ -465,10 +498,13 @@ func (s *Server) retryRefreshedAccount(r *http.Request, route domain.KeyRoute, r
 }
 
 func (s *Server) evaluateResponse(ctx context.Context, keyID, accountID string, resp *adapter.Response) (*adapter.Response, retryReason, bool) {
-	if resp.StatusCode == http.StatusTooManyRequests {
+	if resp.StatusCode == http.StatusTooManyRequests || resp.ModelScopedLimit() {
 		retryAt := retryAfter(resp.Header, s.now())
+		modelScoped := resp.ModelScopedLimit()
 		drainAndClose(resp.Response)
-		_ = s.store.UpdateProviderStatus(ctx, accountID, domain.AccountCoolingDown, &retryAt)
+		if !modelScoped {
+			_ = s.store.UpdateProviderStatus(ctx, accountID, domain.AccountCoolingDown, &retryAt)
+		}
 		return nil, retryRateLimit, false
 	}
 	if unsupportedModelResponse(resp.Response) {
@@ -492,7 +528,7 @@ func (s *Server) evaluateResponse(ctx context.Context, keyID, accountID string, 
 }
 
 func (s *Server) recordRefreshFailure(ctx context.Context, accountID string, err error) bool {
-	if codex.IsDefinitiveAuthError(err) {
+	if codex.IsDefinitiveAuthError(err) || antigravity.IsDefinitiveAuthError(err) {
 		_ = s.store.UpdateProviderStatus(ctx, accountID, domain.AccountAuthFailed, nil)
 		return true
 	}
@@ -525,7 +561,7 @@ func (s *Server) recordProviderStreamLimit(accountID string, limit responseevent
 }
 
 func isAuthenticationStatus(provider string, status int) bool {
-	if provider == domain.ProviderCopilot {
+	if provider == domain.ProviderCopilot || provider == domain.ProviderAntigravity {
 		return status == http.StatusUnauthorized
 	}
 	return status == http.StatusUnauthorized || status == http.StatusForbidden
@@ -648,6 +684,8 @@ func (s *Server) credentials(account domain.ProviderAccount) (adapter.Credential
 		err = json.Unmarshal(plaintext, &credentials.Compatible)
 	case domain.ProviderCopilot:
 		err = json.Unmarshal(plaintext, &credentials.Copilot)
+	case domain.ProviderAntigravity:
+		err = json.Unmarshal(plaintext, &credentials.Antigravity)
 	default:
 		err = fmt.Errorf("unsupported provider %q", account.Provider)
 	}
@@ -661,7 +699,7 @@ func (s *Server) refresh(ctx context.Context, account domain.ProviderAccount) (d
 }
 
 func refreshableCredentials(account domain.ProviderAccount) bool {
-	return isCodexSubscriptionAccount(account)
+	return isCodexSubscriptionAccount(account) || account.Provider == domain.ProviderAntigravity && account.CredentialType == domain.CredentialSubscription
 }
 
 func isCodexSubscriptionAccount(account domain.ProviderAccount) bool {
@@ -726,7 +764,7 @@ func (s *Server) providerAccountResponse(ctx context.Context, request adapter.Re
 			return nil, err
 		}
 	}
-	provider, err := adapter.For(account.Provider, adapter.Clients{Codex: s.codex, Compatible: s.compatible, Copilot: s.copilot})
+	provider, err := adapter.For(account.Provider, adapter.Clients{Codex: s.codex, Compatible: s.compatible, Copilot: s.copilot, Antigravity: s.antigravity, AntigravitySignatures: s.antigravitySignatures, AntigravityLimits: s.antigravityLimits})
 	if err != nil {
 		return nil, err
 	}

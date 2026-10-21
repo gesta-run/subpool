@@ -10,7 +10,7 @@ export function useAccountMutations(reload: () => Promise<void>) {
     setBusyID(account.id)
     setError('')
     try {
-      if (account.provider === 'codex' && account.credential_type !== 'api_key') {
+      if ((account.provider === 'codex' || account.provider === 'antigravity') && account.credential_type !== 'api_key') {
         await request(`/api/v1/provider-accounts/${account.id}/refresh`, { method: 'POST' })
       }
       await request(`/api/v1/provider-accounts/${account.id}/check`, { method: 'POST' })

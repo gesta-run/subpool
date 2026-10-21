@@ -18,6 +18,7 @@ import (
 	"github.com/gesta-run/subpool/internal/domain"
 	providerhealth "github.com/gesta-run/subpool/internal/health"
 	"github.com/gesta-run/subpool/internal/id"
+	"github.com/gesta-run/subpool/internal/provider/antigravity"
 	"github.com/gesta-run/subpool/internal/provider/codex"
 	"github.com/gesta-run/subpool/internal/provider/copilot"
 	"github.com/gesta-run/subpool/internal/store"
@@ -40,6 +41,7 @@ type Server struct {
 	cipher                             Cipher
 	deviceAuth                         DeviceAuth
 	copilotDeviceAuth                  CopilotDeviceAuth
+	antigravityOAuth                   AntigravityOAuth
 	resets                             ResetCredits
 	catalog                            *catalog.Service
 	refresher                          credential.AccountRefresher
@@ -98,6 +100,8 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/provider-accounts/codex/device-login/{id}", s.admin(s.getDeviceLogin))
 	mux.HandleFunc("DELETE /api/v1/provider-accounts/codex/device-login/{id}", s.admin(s.cancelDeviceLogin))
 	mux.HandleFunc("POST /api/v1/provider-accounts/copilot/device-login", s.admin(s.startCopilotDeviceLogin))
+	mux.HandleFunc("POST /api/v1/provider-accounts/antigravity/oauth", s.admin(s.startAntigravityOAuth))
+	mux.HandleFunc("POST /api/v1/provider-accounts/antigravity/oauth/complete", s.admin(s.completeAntigravityOAuth))
 	mux.HandleFunc("GET /api/v1/provider-accounts/copilot/device-login/{id}", s.admin(s.getDeviceLogin))
 	mux.HandleFunc("DELETE /api/v1/provider-accounts/copilot/device-login/{id}", s.admin(s.cancelDeviceLogin))
 	mux.HandleFunc("GET /api/v1/provider-accounts", s.admin(s.listProviderAccounts))
@@ -456,7 +460,7 @@ func (s *Server) refreshProviderAccount(w http.ResponseWriter, r *http.Request) 
 		writeStoreError(w, err)
 		return
 	}
-	if account.Provider != domain.ProviderCodex || (account.CredentialType != "" && account.CredentialType != domain.CredentialSubscription) {
+	if (account.Provider != domain.ProviderCodex && account.Provider != domain.ProviderAntigravity) || (account.CredentialType != "" && account.CredentialType != domain.CredentialSubscription) {
 		writeError(w, http.StatusBadRequest, "this provider account does not support explicit credential refresh")
 		return
 	}
@@ -465,7 +469,7 @@ func (s *Server) refreshProviderAccount(w http.ResponseWriter, r *http.Request) 
 		status := domain.AccountCoolingDown
 		cooldown := time.Now().Add(time.Minute)
 		cooldownUntil := &cooldown
-		if codex.IsDefinitiveAuthError(err) {
+		if codex.IsDefinitiveAuthError(err) || antigravity.IsDefinitiveAuthError(err) {
 			status = domain.AccountAuthFailed
 			cooldownUntil = nil
 		}

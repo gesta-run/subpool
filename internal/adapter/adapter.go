@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/gesta-run/subpool/internal/adapter/antigravitywire"
 	"github.com/gesta-run/subpool/internal/adapter/copilotcompact"
 	"github.com/gesta-run/subpool/internal/adapter/protocol"
 	"github.com/gesta-run/subpool/internal/domain"
+	"github.com/gesta-run/subpool/internal/provider/antigravity"
 	"github.com/gesta-run/subpool/internal/provider/codex"
 	"github.com/gesta-run/subpool/internal/provider/copilot"
 	"github.com/gesta-run/subpool/internal/provider/openaicompat"
@@ -37,9 +39,10 @@ type Options struct {
 }
 
 type Credentials struct {
-	Codex      codex.Credentials
-	Copilot    copilot.Credentials
-	Compatible openaicompat.Credentials
+	Antigravity antigravity.Credentials
+	Codex       codex.Credentials
+	Copilot     copilot.Credentials
+	Compatible  openaicompat.Credentials
 }
 
 type Provider interface {
@@ -47,9 +50,12 @@ type Provider interface {
 }
 
 type Clients struct {
-	Codex      CodexClient
-	Compatible CompatibleClient
-	Copilot    CopilotClient
+	Antigravity           AntigravityClient
+	AntigravitySignatures *antigravitywire.Signatures
+	AntigravityLimits     *antigravitywire.ModelLimits
+	Codex                 CodexClient
+	Compatible            CompatibleClient
+	Copilot               CopilotClient
 }
 
 type RequestError struct {
@@ -77,6 +83,8 @@ func For(provider string, clients Clients) (Provider, error) {
 		implementation = copilotAdapter{client: clients.Copilot}
 	case domain.ProviderOpenAICompatible:
 		implementation = compatibleAdapter{client: clients.Compatible}
+	case domain.ProviderAntigravity:
+		implementation = antigravityAdapter{client: clients.Antigravity, signatures: clients.AntigravitySignatures, limits: clients.AntigravityLimits}
 	default:
 		return nil, fmt.Errorf("unsupported provider %q", provider)
 	}

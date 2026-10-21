@@ -1,9 +1,10 @@
 import { useState } from 'react'
 import { errorMessage, request } from '../api'
 import { useDeviceLogin } from './useDeviceLogin'
+import { useAntigravityLogin } from './antigravity/useLogin'
 export type { DeviceLogin } from './useDeviceLogin'
 
-export type ConnectProvider = 'codex' | 'copilot' | 'openai_compatible'
+export type ConnectProvider = 'codex' | 'copilot' | 'openai_compatible' | 'antigravity'
 
 function endpointErrors(displayName: string, baseURL: string, apiKey: string) {
   const errors: Record<string, string> = {}
@@ -35,6 +36,10 @@ export function useConnectAccount(reload: () => Promise<void>) {
     setDisplayName('')
     await reload()
   })
+  const google = useAntigravityLogin(async () => {
+    close()
+    await reload()
+  })
 
   function close() {
     setOpen(false)
@@ -45,6 +50,7 @@ export function useConnectAccount(reload: () => Promise<void>) {
     setFieldErrors({})
     setError('')
     device.cancel()
+    google.cancel()
   }
 
   async function submit() {
@@ -60,6 +66,7 @@ export function useConnectAccount(reload: () => Promise<void>) {
     setError('')
     device.setError('')
     try {
+      if (provider === 'antigravity') { await google.start(); return }
       if (provider !== 'openai_compatible') {
         await device.start(displayName.trim(), provider)
         return
@@ -76,11 +83,13 @@ export function useConnectAccount(reload: () => Promise<void>) {
   }
 
   function changeProvider(value: ConnectProvider) {
+    device.cancel()
+    google.cancel()
     setProvider(value)
     setFieldErrors({})
     setError('')
     device.setError('')
   }
 
-  return { open, setOpen, displayName, setDisplayName, provider, changeProvider, baseURL, setBaseURL, apiKey, setAPIKey, fieldErrors, setFieldErrors, error: device.error || error, busy: device.busy || busy, deviceLogin: device.login, copyStatus: device.copyStatus, continueToProvider: device.continueToProvider, close, submit }
+  return { open, setOpen, displayName, setDisplayName, provider, changeProvider, baseURL, setBaseURL, apiKey, setAPIKey, fieldErrors, setFieldErrors, error: google.error || device.error || error, busy: google.busy || device.busy || busy, deviceLogin: device.login, copyStatus: device.copyStatus, continueToProvider: device.continueToProvider, close, submit, google }
 }

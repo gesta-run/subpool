@@ -22,6 +22,14 @@ type AdminSession struct {
 	CreatedAt   pgtype.Timestamptz
 }
 
+type AntigravityToolSignature struct {
+	ProviderAccountID string
+	Model             string
+	CallID            string
+	Ciphertext        []byte
+	ExpiresAt         pgtype.Timestamptz
+}
+
 type ApiKey struct {
 	ID         string
 	PoolID     string

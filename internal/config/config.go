@@ -29,6 +29,11 @@ type Config struct {
 	CopilotAPIBase                string
 	CopilotTokenExchangeURL       string
 	CopilotEntitlementsURL        string
+	AntigravityClientID           string
+	AntigravityClientSecret       string
+	AntigravityRedirectURI        string
+	AntigravityBaseURL            string
+	AntigravityUserAgent          string
 	CodexQuotaRouting             bool
 	ResponsesWSEnabled            bool
 	ResponsesWSForceHTTPBridge    bool
@@ -39,8 +44,8 @@ type Config struct {
 	TrustedProxyCIDRs             []string
 }
 
-func Load() (Config, error) {
-	cfg := Config{
+func defaultConfig() Config {
+	return Config{
 		APIListenAddress:              envOr("SUBPOOL_API_LISTEN_ADDRESS", ":8080"),
 		ConsoleListenAddress:          envOr("SUBPOOL_CONSOLE_LISTEN_ADDRESS", ":8081"),
 		DatabaseURL:                   strings.TrimSpace(os.Getenv("SUBPOOL_DATABASE_URL")),
@@ -55,12 +60,24 @@ func Load() (Config, error) {
 		CopilotAPIBase:                strings.TrimRight(envOr("SUBPOOL_COPILOT_API_BASE", "https://api.githubcopilot.com"), "/"),
 		CopilotTokenExchangeURL:       envOr("SUBPOOL_COPILOT_TOKEN_EXCHANGE_URL", "https://api.github.com/copilot_internal/v2/token"),
 		CopilotEntitlementsURL:        envOr("SUBPOOL_COPILOT_ENTITLEMENTS_URL", "https://api.github.com/copilot_internal/user"),
+		AntigravityClientID:           strings.TrimSpace(os.Getenv("SUBPOOL_ANTIGRAVITY_CLIENT_ID")),
+		AntigravityClientSecret:       os.Getenv("SUBPOOL_ANTIGRAVITY_CLIENT_SECRET"),
+		AntigravityRedirectURI:        envOr("SUBPOOL_ANTIGRAVITY_REDIRECT_URI", "http://localhost:8085/callback"),
+		AntigravityBaseURL:            envOr("SUBPOOL_ANTIGRAVITY_BASE_URL", "https://cloudcode-pa.googleapis.com"),
+		AntigravityUserAgent:          envOr("SUBPOOL_ANTIGRAVITY_USER_AGENT", "antigravity/hub/2.23.0 windows/amd64"),
 		UpstreamResponseHeaderTimeout: 3 * time.Minute,
 		MaxRequestBodyBytes:           256 << 20,
 		MaxInflightRequestBodyBytes:   1 << 30,
 		RequestBodyReadTimeout:        5 * time.Minute,
 	}
+}
+
+func Load() (Config, error) {
+	cfg := defaultConfig()
 	var err error
+	if err = cfg.validateAntigravity(); err != nil {
+		return Config{}, err
+	}
 	if cfg.CodexQuotaRouting, err = envBool("SUBPOOL_CODEX_QUOTA_ROUTING", false); err != nil {
 		return Config{}, err
 	}
