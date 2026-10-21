@@ -87,11 +87,15 @@ Protocol completion does not guarantee that a model follows the latest instructi
 
 ### Authorization
 
-Set `SUBPOOL_ANTIGRAVITY_CLIENT_ID` and `SUBPOOL_ANTIGRAVITY_CLIENT_SECRET` using an OAuth client configuration authorized for the Antigravity service. A generic Google OAuth client or Gemini API key does not establish Antigravity eligibility. Subpool does not bundle a third-party client secret. If both variables are unset, other providers continue to work; the Google authorization action explains the missing configuration.
+The deployment administrator must set `SUBPOOL_ANTIGRAVITY_CLIENT_ID` and `SUBPOOL_ANTIGRAVITY_CLIENT_SECRET` to a matching OAuth client pair authorized for Antigravity. Both default to empty; Subpool does not bundle Google client credentials. When both are unset, other providers remain available and the Google authorization action explains the missing configuration. Setting only one value fails startup with a configuration error. Supply credentials through the deployment environment or secret manager, never in source control. A generic Google OAuth client or Gemini API key does not establish Antigravity eligibility.
 
-Select **Google Antigravity** in **Accounts**, enter a display name, and choose **Authorize Google**. Open the authorization link, approve access, then paste the complete callback URL into Subpool. The default callback is `http://localhost:8085/callback`; no local listener or additional server port is required. The callback page may fail to load: copy its URL from the address bar. The redirect must match the OAuth client's registered redirect URI. Override it with `SUBPOOL_ANTIGRAVITY_REDIRECT_URI` when necessary.
+Select **Google Antigravity** in **Accounts**, enter a display name, and choose **Authorize Google**. Continue to Google, sign in, approve access, then paste the complete callback URL into Subpool. The callback is fixed to `http://localhost:8085/callback` on the administrator's computer, not the Subpool server. Subpool does not start a local listener, and no additional server port needs to be exposed. The callback page may fail to load: copy its complete URL from the browser's address bar and paste it into the authorization dialog.
 
-Authorization uses PKCE S256 and a random, single-use state with a ten-minute lifetime. Subpool obtains the Google subject and email, discovers the Cloud Code project with `loadCodeAssist`, and initializes an offered default tier with `onboardUser` when necessary. Tokens and project identity are encrypted at rest. Access tokens refresh before expiration; transient refresh failures do not imply revoked credentials.
+The OAuth client must allow the fixed loopback callback above. `SUBPOOL_ANTIGRAVITY_REDIRECT_URI` is not read. Docker Compose passes the Client ID and Client Secret from the deployment environment with empty defaults. Changes to either value require a restart; a blank Secret does not enable secretless login for a client that requires it.
+
+For the pre deployment workflow, set the Actions variable `SUBPOOL_ANTIGRAVITY_CLIENT_ID` and the Actions secret `SUBPOOL_ANTIGRAVITY_CLIENT_SECRET` for the deployment repository or `preproduction` environment. The workflow forwards both values into the pre container; leaving both unset keeps Google authorization unavailable without disabling other providers.
+
+Authorization uses PKCE S256 and a random, single-use state with a ten-minute lifetime. The backend exchanges the one-time code, obtains the Google subject and email, discovers the Cloud Code project with `loadCodeAssist`, and initializes an offered default tier with `onboardUser` when necessary. The browser receives the authorization URL, not the client secret or account tokens. Tokens and project identity are encrypted at rest. Access tokens refresh before expiration using the same configured client; transient refresh failures do not imply revoked credentials. Keep the client pair stable after connecting accounts, because Google refresh tokens are bound to the client that obtained them.
 
 ### Supported APIs and quota
 
@@ -104,7 +108,7 @@ Inference targets `https://cloudcode-pa.googleapis.com/v1internal:streamGenerate
 
 ### Limitations and verification
 
-This provider uses Google's internal Cloud Code contract. Google can change eligibility, OAuth requirements, models and request fields independently of Subpool. Use only accounts and clients you are authorized to manage, and review the service terms.
+This provider uses Google's internal Cloud Code contract. Google can change eligibility, OAuth requirements, models and request fields independently of Subpool. Configuring an OAuth client does not guarantee that Google accepts a login. Use only accounts and clients you are authorized to manage, and review the service terms.
 
 Clients must replay full conversation input. `previous_response_id`, standalone or in-band compaction, hosted tools, image/file tool outputs, remote image URLs, and generated image/audio outputs are not supported. Unsupported requests fail explicitly; Subpool does not silently drop tools, fetch arbitrary image URLs, fabricate thought signatures, or truncate conversation history. Thinking text is not promoted to normal assistant output; the Responses compatibility renderer does not expose native Gemini thinking blocks.
 

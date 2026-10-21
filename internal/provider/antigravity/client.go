@@ -25,14 +25,17 @@ type Credentials struct {
 }
 
 type Config struct {
-	ClientID, ClientSecret, RedirectURI, BaseURL, UserAgent string
-	TokenURL, AuthorizeURL, UserInfoURL                     string
-	HTTPClient                                              *http.Client
+	ClientID, ClientSecret              string
+	BaseURL, UserAgent                  string
+	TokenURL, AuthorizeURL, UserInfoURL string
+	HTTPClient                          *http.Client
 }
 
 type Client struct{ config Config }
 
 func New(config Config) *Client {
+	config.ClientID = strings.TrimSpace(config.ClientID)
+	config.ClientSecret = strings.TrimSpace(config.ClientSecret)
 	if config.HTTPClient == nil {
 		config.HTTPClient = &http.Client{Timeout: 3 * time.Minute}
 	}
@@ -44,9 +47,6 @@ func New(config Config) *Client {
 		config.BaseURL = DefaultBaseURL
 	}
 	config.BaseURL = strings.TrimRight(config.BaseURL, "/")
-	if config.RedirectURI == "" {
-		config.RedirectURI = DefaultRedirectURI
-	}
 	if config.TokenURL == "" {
 		config.TokenURL = "https://oauth2.googleapis.com/token"
 	}

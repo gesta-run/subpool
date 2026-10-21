@@ -72,8 +72,9 @@ func main() {
 		ClientID: cfg.CopilotClientID, TokenExchangeURL: cfg.CopilotTokenExchangeURL, HTTPClient: providerHTTPClient,
 	})
 	defer copilotDeviceAuth.Close()
-	antigravityClient := antigravity.New(antigravity.Config{ClientID: cfg.AntigravityClientID, ClientSecret: cfg.AntigravityClientSecret,
-		RedirectURI: cfg.AntigravityRedirectURI, BaseURL: cfg.AntigravityBaseURL, UserAgent: cfg.AntigravityUserAgent, HTTPClient: providerHTTPClient})
+	antigravityClient := antigravity.New(antigravity.Config{
+		ClientID: cfg.AntigravityClientID, ClientSecret: cfg.AntigravityClientSecret,
+		BaseURL: cfg.AntigravityBaseURL, UserAgent: cfg.AntigravityUserAgent, HTTPClient: providerHTTPClient})
 	provider := codex.NewClient(cfg.CodexUpstreamURL, providerHTTPClient)
 	resetCredits := codex.NewAppServer()
 	compatibleProvider := openaicompat.NewClient(providerHTTPClient)

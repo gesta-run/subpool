@@ -13,6 +13,8 @@ import (
 	"time"
 )
 
+var errOAuthNotConfigured = errors.New("configure both SUBPOOL_ANTIGRAVITY_CLIENT_ID and SUBPOOL_ANTIGRAVITY_CLIENT_SECRET before authorizing Google")
+
 type Authorization struct {
 	LoginID   string    `json:"login_id"`
 	URL       string    `json:"authorization_url"`
@@ -42,7 +44,7 @@ func randomID() string {
 
 func (o *OAuth) Start() (Authorization, error) {
 	if !o.client.Configured() {
-		return Authorization{}, errors.New("configure SUBPOOL_ANTIGRAVITY_CLIENT_ID and SUBPOOL_ANTIGRAVITY_CLIENT_SECRET first")
+		return Authorization{}, errOAuthNotConfigured
 	}
 	o.mu.Lock()
 	defer o.mu.Unlock()
@@ -58,7 +60,7 @@ func (o *OAuth) Start() (Authorization, error) {
 	expires := time.Now().Add(10 * time.Minute)
 	o.pending[state] = pendingLogin{verifier: verifier, expires: expires}
 	digest := sha256.Sum256([]byte(verifier))
-	params := url.Values{"client_id": {o.client.config.ClientID}, "redirect_uri": {o.client.config.RedirectURI},
+	params := url.Values{"client_id": {o.client.config.ClientID}, "redirect_uri": {DefaultRedirectURI},
 		"response_type": {"code"}, "access_type": {"offline"}, "prompt": {"consent"}, "state": {state},
 		"code_challenge_method": {"S256"}, "code_challenge": {base64.RawURLEncoding.EncodeToString(digest[:])},
 		"scope": {"openid email profile https://www.googleapis.com/auth/cloud-platform https://www.googleapis.com/auth/cclog https://www.googleapis.com/auth/experimentsandconfigs"}}
@@ -67,7 +69,7 @@ func (o *OAuth) Start() (Authorization, error) {
 
 func (o *OAuth) Complete(ctx context.Context, loginID, callback string) (Credentials, error) {
 	parsed, err := url.Parse(callback)
-	expected, _ := url.Parse(o.client.config.RedirectURI)
+	expected, _ := url.Parse(DefaultRedirectURI)
 	if err != nil || parsed.Scheme != expected.Scheme || parsed.Host != expected.Host || parsed.Path != expected.Path || parsed.Fragment != "" || parsed.User != nil || parsed.Query().Get("state") != loginID || parsed.Query().Get("code") == "" {
 		return Credentials{}, errors.New("paste the complete Google callback URL with the matching state and code")
 	}
@@ -78,7 +80,7 @@ func (o *OAuth) Complete(ctx context.Context, loginID, callback string) (Credent
 	if !ok || time.Now().After(entry.expires) {
 		return Credentials{}, errors.New("Google authorization expired or was already used; start again")
 	}
-	credentials, err := o.client.token(ctx, url.Values{"grant_type": {"authorization_code"}, "code": {parsed.Query().Get("code")}, "code_verifier": {entry.verifier}, "redirect_uri": {o.client.config.RedirectURI}})
+	credentials, err := o.client.token(ctx, url.Values{"grant_type": {"authorization_code"}, "code": {parsed.Query().Get("code")}, "code_verifier": {entry.verifier}, "redirect_uri": {DefaultRedirectURI}})
 	if err != nil {
 		return Credentials{}, err
 	}
@@ -86,6 +88,9 @@ func (o *OAuth) Complete(ctx context.Context, loginID, callback string) (Credent
 }
 
 func (c *Client) token(ctx context.Context, params url.Values) (Credentials, error) {
+	if !c.Configured() {
+		return Credentials{}, errOAuthNotConfigured
+	}
 	params.Set("client_id", c.config.ClientID)
 	params.Set("client_secret", c.config.ClientSecret)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.config.TokenURL, strings.NewReader(params.Encode()))
@@ -112,8 +117,8 @@ func (c *Client) token(ctx context.Context, params url.Values) (Credentials, err
 }
 
 func (c *Client) Refresh(ctx context.Context, current Credentials) (Credentials, error) {
-	if !c.Configured() || current.RefreshToken == "" {
-		return Credentials{}, errors.New("Google OAuth refresh is not configured")
+	if current.RefreshToken == "" {
+		return Credentials{}, errors.New("Google OAuth refresh token is missing; authorize again")
 	}
 	refreshed, err := c.token(ctx, url.Values{"grant_type": {"refresh_token"}, "refresh_token": {current.RefreshToken}})
 	if err != nil {
