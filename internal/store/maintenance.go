@@ -30,6 +30,9 @@ func (p *Postgres) RunMaintenance(ctx context.Context) {
 }
 
 func (p *Postgres) runMaintenance(ctx context.Context) {
+	if err := p.queries.DeleteExpiredAntigravitySignatures(ctx); err != nil {
+		slog.Error("Antigravity signature maintenance failed", "error", err)
+	}
 	cutoff := time.Now().UTC().Add(-usageDedupRetention)
 	for batch := 0; batch < maintenanceBatches; batch++ {
 		rows, err := p.queries.DeleteExpiredUsageDedup(ctx, storedb.DeleteExpiredUsageDedupParams{

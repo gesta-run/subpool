@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/gesta-run/subpool/internal/domain"
+	"github.com/gesta-run/subpool/internal/provider/antigravity"
 	"github.com/gesta-run/subpool/internal/provider/codex"
 	"github.com/gesta-run/subpool/internal/store"
 )
@@ -18,15 +19,25 @@ type AccountRefresher interface {
 	RefreshAccount(context.Context, string, int) (domain.ProviderAccount, error)
 }
 
+type AntigravityRefresher interface {
+	Refresh(context.Context, antigravity.Credentials) (antigravity.Credentials, error)
+}
+
 type RefreshManager struct {
-	store    store.Store
-	cipher   *Cipher
-	provider CodexTokenRefresher
-	locks    sync.Map
+	store       store.Store
+	cipher      *Cipher
+	provider    CodexTokenRefresher
+	antigravity AntigravityRefresher
+	locks       sync.Map
 }
 
 func NewRefreshManager(st store.Store, cipher *Cipher, provider CodexTokenRefresher) *RefreshManager {
 	return &RefreshManager{store: st, cipher: cipher, provider: provider}
+}
+
+func (m *RefreshManager) WithAntigravity(provider AntigravityRefresher) *RefreshManager {
+	m.antigravity = provider
+	return m
 }
 
 func (m *RefreshManager) RefreshAccount(ctx context.Context, accountID string, observedVersion int) (domain.ProviderAccount, error) {
@@ -45,33 +56,13 @@ func (m *RefreshManager) RefreshAccount(ctx context.Context, accountID string, o
 	if err != nil {
 		return domain.ProviderAccount{}, fmt.Errorf("decrypt provider credentials: %w", err)
 	}
-	var current codex.Credentials
-	if err = json.Unmarshal(plaintext, &current); err != nil {
-		return domain.ProviderAccount{}, fmt.Errorf("decode provider credentials: %w", err)
-	}
-	refreshed, err := m.provider.Refresh(ctx, current.RefreshToken)
+	raw, err := m.refreshCredentials(ctx, account.Provider, plaintext)
 	if err != nil {
 		return domain.ProviderAccount{}, err
-	}
-	if refreshed.RefreshToken == "" {
-		refreshed.RefreshToken = current.RefreshToken
-	}
-	if refreshed.AccountID == "" {
-		refreshed.AccountID = current.AccountID
-	}
-	if refreshed.Email == "" {
-		refreshed.Email = current.Email
-	}
-	if refreshed.IDToken == "" {
-		refreshed.IDToken = current.IDToken
-	}
-	raw, err := json.Marshal(refreshed)
-	if err != nil {
-		return domain.ProviderAccount{}, fmt.Errorf("encode provider credentials: %w", err)
 	}
 	ciphertext, err := m.cipher.Encrypt(raw)
 	if err != nil {
-		return domain.ProviderAccount{}, err
+		return domain.ProviderAccount{}, fmt.Errorf("encrypt provider credentials: %w", err)
 	}
 	updated, err := m.store.UpdateProviderCredentialCAS(ctx, account.ID, account.CredentialVersion, ciphertext, account.CredentialVersion+1)
 	if err != nil {
@@ -87,4 +78,46 @@ func (m *RefreshManager) RefreshAccount(ctx context.Context, accountID string, o
 		account.CooldownUntil = nil
 	}
 	return account, nil
+}
+
+func (m *RefreshManager) refreshCredentials(ctx context.Context, provider string, plaintext []byte) ([]byte, error) {
+	if provider == domain.ProviderAntigravity {
+		if m.antigravity == nil {
+			return nil, fmt.Errorf("Antigravity refresh is unavailable")
+		}
+		var current antigravity.Credentials
+		if err := json.Unmarshal(plaintext, &current); err != nil {
+			return nil, fmt.Errorf("decode Antigravity credentials: %w", err)
+		}
+		refreshed, err := m.antigravity.Refresh(ctx, current)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(refreshed)
+	}
+	if provider != "" && provider != domain.ProviderCodex {
+		return nil, fmt.Errorf("provider does not support OAuth refresh")
+	}
+	var current codex.Credentials
+	var err error
+	if err = json.Unmarshal(plaintext, &current); err != nil {
+		return nil, fmt.Errorf("decode provider credentials: %w", err)
+	}
+	refreshed, err := m.provider.Refresh(ctx, current.RefreshToken)
+	if err != nil {
+		return nil, err
+	}
+	if refreshed.RefreshToken == "" {
+		refreshed.RefreshToken = current.RefreshToken
+	}
+	if refreshed.AccountID == "" {
+		refreshed.AccountID = current.AccountID
+	}
+	if refreshed.Email == "" {
+		refreshed.Email = current.Email
+	}
+	if refreshed.IDToken == "" {
+		refreshed.IDToken = current.IDToken
+	}
+	return json.Marshal(refreshed)
 }

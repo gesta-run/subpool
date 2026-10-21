@@ -23,6 +23,7 @@ export interface ProviderAccount {
   quota_authorization_method?: 'browser' | 'ram'
   quota_access_key_id_hint?: string
   quota_snapshot?: {
+    models?: Record<string, { displayName?: string; quotaInfo?: { remainingFraction: number; resetTime?: string } }>
     plan_type?: string
     usage_allowed?: boolean
     limit_reason?: string

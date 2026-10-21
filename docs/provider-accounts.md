@@ -83,6 +83,41 @@ In mixed pools, a known incompatible request can try another eligible provider w
 
 Protocol completion does not guarantee that a model follows the latest instruction. Claude Haiku can still interpret conflict-framed formatting tests as suspicious even with correctly serialized history. These compatibility rules do not add instructions or remove earlier turns to influence model behavior.
 
+## Google Antigravity
+
+### Authorization
+
+Set `SUBPOOL_ANTIGRAVITY_CLIENT_ID` and `SUBPOOL_ANTIGRAVITY_CLIENT_SECRET` using an OAuth client configuration authorized for the Antigravity service. A generic Google OAuth client or Gemini API key does not establish Antigravity eligibility. Subpool does not bundle a third-party client secret. If both variables are unset, other providers continue to work; the Google authorization action explains the missing configuration.
+
+Select **Google Antigravity** in **Accounts**, enter a display name, and choose **Authorize Google**. Open the authorization link, approve access, then paste the complete callback URL into Subpool. The default callback is `http://localhost:8085/callback`; no local listener or additional server port is required. The callback page may fail to load: copy its URL from the address bar. The redirect must match the OAuth client's registered redirect URI. Override it with `SUBPOOL_ANTIGRAVITY_REDIRECT_URI` when necessary.
+
+Authorization uses PKCE S256 and a random, single-use state with a ten-minute lifetime. Subpool obtains the Google subject and email, discovers the Cloud Code project with `loadCodeAssist`, and initializes an offered default tier with `onboardUser` when necessary. Tokens and project identity are encrypted at rest. Access tokens refresh before expiration; transient refresh failures do not imply revoked credentials.
+
+### Supported APIs and quota
+
+- `POST /v1/chat/completions`, `POST /v1/responses`, and Responses WebSocket through the existing HTTP/SSE bridge.
+- `GET /v1/models` and account model discovery use `fetchAvailableModels` on the same upstream base as inference.
+- Text, base64 image inputs, function tools, Responses custom/namespaced tools through the shared translator, JSON response formats, supported model-specific reasoning controls, and streaming/non-streaming output.
+- Per-model remaining quota and reset times appear in Accounts. A model's 429 applies a bounded account/model cooldown rather than disabling all models on that account. Usage records input and output tokens, including generated thinking tokens; it is not a Google billing estimate.
+
+Inference targets `https://cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse`, not the public Gemini API-key API. `SUBPOOL_ANTIGRAVITY_BASE_URL` and `SUBPOOL_ANTIGRAVITY_USER_AGENT` are operator overrides. There is no automatic switch to Google's daily/testing service, identity-prompt injection, model substitution, or opt-in to paid Google AI Credits overages.
+
+### Limitations and verification
+
+This provider uses Google's internal Cloud Code contract. Google can change eligibility, OAuth requirements, models and request fields independently of Subpool. Use only accounts and clients you are authorized to manage, and review the service terms.
+
+Clients must replay full conversation input. `previous_response_id`, standalone or in-band compaction, hosted tools, image/file tool outputs, remote image URLs, and generated image/audio outputs are not supported. Unsupported requests fail explicitly; Subpool does not silently drop tools, fetch arbitrary image URLs, fabricate thought signatures, or truncate conversation history. Thinking text is not promoted to normal assistant output; the Responses compatibility renderer does not expose native Gemini thinking blocks.
+
+Tool signatures are scoped to account/model and bound to the function name and arguments. Opaque signatures and argument fingerprints are encrypted in PostgreSQL for a 24-hour lifetime, with an in-process 4,096-entry / 32 MiB cache. Ordinary Gemini function-call signatures survive process restarts and cache eviction when instances share the database and credential encryption key. Expired state or switching accounts/models requires a fresh conversation; Subpool never fabricates a replacement signature.
+
+Claude assistant prefixes preceding function calls retain their original order, including visible text, native thinking, and standalone signature parts. Subpool's no-transcript-persistence policy forbids saving that text in the database, so these prefixes are memory-only (within the same cache bounds, with a 64 KiB per-call native-state limit). Such tool conversations require sticky instance routing and a fresh conversation after restart/eviction. Missing required native state or modified replay text fails explicitly. Opaque signature persistence does not make native Claude histories stateless or interchangeable between accounts. Prompts, assistant text, tool arguments/results, and native thinking text are never written to this state table.
+
+Claude reasoning maps to a budget of at least 1,024 tokens. An explicit output token limit must exceed that budget; incompatible combinations fail before inference rather than silently raising the client's limit or lowering the requested effort. When reasoning is enabled without an output limit, Subpool sends a 64,000-token maximum.
+
+Automated tests use isolated fake Google endpoints; they do not prove live account eligibility. Before production rollout, verify real Google authorization/refresh, each advertised model, tool/signature round-trips, reasoning/JSON-schema support, both wire APIs and WebSocket reconnects with an authorized test account. Request body settings do not increase Google's upstream context or payload limits.
+
+The protocol investigation referenced [sub2api](https://github.com/Wei-Shaw/sub2api); Subpool's provider and adapter implementation is independent.
+
 ## OpenAI-compatible API
 
 OpenAI-compatible accounts use an upstream API key and a Base URL that includes the API version path, such as `https://api.example.com/v1`. Subpool appends the appropriate `/chat/completions` or `/responses` path when forwarding requests.

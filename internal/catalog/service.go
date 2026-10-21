@@ -37,11 +37,12 @@ type CopilotModels interface {
 }
 
 type Service struct {
-	cipher     Cipher
-	refresher  Refresher
-	codex      CodexModels
-	compatible CompatibleModels
-	copilot    CopilotModels
+	cipher      Cipher
+	refresher   Refresher
+	codex       CodexModels
+	compatible  CompatibleModels
+	copilot     CopilotModels
+	antigravity AntigravityModels
 }
 
 func New(cipher Cipher, refresher Refresher, codexModels CodexModels, compatibleModels CompatibleModels, copilotModels ...CopilotModels) *Service {
@@ -64,6 +65,8 @@ func (s *Service) ListAccount(ctx context.Context, account domain.ProviderAccoun
 		models, err = s.listCompatible(ctx, account)
 	case domain.ProviderCopilot:
 		models, err = s.listCopilot(ctx, account)
+	case domain.ProviderAntigravity:
+		models, err = s.listAntigravity(ctx, account)
 	default:
 		err = errors.New("provider does not support model discovery")
 	}
