@@ -487,7 +487,7 @@ func (s *Server) checkProviderAccount(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "provider health checker is unavailable")
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), providerhealth.CheckTimeout)
 	defer cancel()
 	account, err := s.health.CheckAccount(ctx, r.PathValue("id"))
 	if err != nil {
@@ -511,7 +511,7 @@ func (s *Server) validateNewAccount(ctx context.Context, account *domain.Provide
 		account.HealthStatus = domain.HealthUnknown
 		return nil
 	}
-	checkCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	checkCtx, cancel := context.WithTimeout(ctx, providerhealth.CheckTimeout)
 	defer cancel()
 	result := s.health.Check(checkCtx, *account)
 	if result.AuthFailed {

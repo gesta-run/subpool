@@ -23,6 +23,8 @@ import (
 const (
 	checkInterval = 5 * time.Minute
 	checkTimeout  = 5 * time.Second
+	// CheckTimeout includes the model probe and independent quota authorization and usage requests.
+	CheckTimeout = 15 * time.Second
 )
 
 type Cipher interface {
@@ -74,6 +76,12 @@ func NewChecker(st store.Store, cipher Cipher, codexUsage CodexUsage, compatible
 }
 
 func (c *Checker) Check(ctx context.Context, account domain.ProviderAccount) Result {
+	timeout := checkTimeout
+	if account.Provider == domain.ProviderOpenAICompatible {
+		timeout = CheckTimeout
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
 	plaintext, err := c.cipher.Decrypt(account.CredentialCiphertext)
 	if err != nil {
 		result := Result{HealthStatus: domain.HealthUnhealthy, ErrorCode: "credential_unavailable", Failure: true}
@@ -218,7 +226,7 @@ func (c *Checker) runBatch(ctx context.Context) {
 				account.Status = domain.AccountActive
 				account.CooldownUntil = nil
 			}
-			checkCtx, cancel := context.WithTimeout(ctx, checkTimeout)
+			checkCtx, cancel := context.WithTimeout(ctx, CheckTimeout)
 			result := c.Check(checkCtx, account)
 			cancel()
 			persistCtx, persistCancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -234,6 +242,9 @@ func (c *Checker) runBatch(ctx context.Context) {
 func (c *Checker) persist(ctx context.Context, accountID string, result Result) error {
 	now := c.now()
 	next := c.nextCheck(accountID, now)
+	if result.QuotaErrorCode != "" {
+		slog.Warn("provider quota check failed", "account_id", accountID, "error_code", result.QuotaErrorCode)
+	}
 	if result.QuotaProbeFailed {
 		return c.store.SetProviderQuotaError(ctx, accountID, result.QuotaErrorCode, next)
 	}

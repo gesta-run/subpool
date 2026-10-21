@@ -21,6 +21,17 @@ func (c *Checker) checkCompatible(ctx context.Context, plaintext []byte) Result 
 	if json.Unmarshal(plaintext, &credentials) != nil {
 		return Result{HealthStatus: domain.HealthUnhealthy, ErrorCode: "credential_unavailable", Failure: true}
 	}
+	probeCtx, cancel := context.WithTimeout(ctx, checkTimeout)
+	result := c.compatibleHealth(probeCtx, credentials)
+	cancel()
+	// The console quota API has separate credentials and availability from /models.
+	quota := c.compatibleQuota(ctx, credentials)
+	result.QuotaSnapshot = quota.QuotaSnapshot
+	result.QuotaErrorCode = quota.QuotaErrorCode
+	return result
+}
+
+func (c *Checker) compatibleHealth(ctx context.Context, credentials openaicompat.Credentials) Result {
 	resp, err := c.compatible.Models(ctx, credentials)
 	if err != nil {
 		return classifyError(err)
@@ -29,7 +40,7 @@ func (c *Checker) checkCompatible(ctx context.Context, plaintext []byte) Result 
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
 	switch {
 	case resp.StatusCode >= 200 && resp.StatusCode < 300:
-		return c.compatibleQuota(ctx, credentials)
+		return Result{HealthStatus: domain.HealthHealthy}
 	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
 		return Result{HealthStatus: domain.HealthUnhealthy, ErrorCode: "authentication_failed", AuthFailed: true}
 	case resp.StatusCode == http.StatusTooManyRequests:
