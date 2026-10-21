@@ -26,11 +26,11 @@ describe('Google Antigravity authorization', () => {
     expect(connected).toHaveBeenCalledOnce()
   })
 
-  it('shows configuration errors and allows a clean retry', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(response({ error: 'Configure Google OAuth first.' }, 503)))
+  it('shows authorization errors and allows a clean retry', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(response({ error: 'Google authorization is unavailable. Try again.' }, 503)))
     const { result } = renderHook(() => useAntigravityLogin(vi.fn()))
     await act(async () => { await result.current.start() })
-    expect(result.current.error).toBe('Configure Google OAuth first.')
+    expect(result.current.error).toBe('Google authorization is unavailable. Try again.')
     expect(result.current.busy).toBe(false)
     act(() => result.current.cancel())
     expect(result.current.login).toBeNull()

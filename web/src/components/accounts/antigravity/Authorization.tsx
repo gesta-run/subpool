@@ -12,7 +12,7 @@ export function AntigravityAuthorization({ google, displayName, onClose }: Props
   return <Modal title="Authorize Google Antigravity" description="Connect an eligible Google account using OAuth." onClose={onClose}>
     <form className="form-stack" onSubmit={(event) => { event.preventDefault(); void google.complete(displayName) }}>
       <div className="field">
-        <p>Open Google authorization, sign in, and approve access. Google will redirect to the configured callback address. The page may not load; copy its complete URL from the address bar.</p>
+        <p>Continue to Google, sign in, and approve access. Google will redirect to http://localhost:8085/callback on your computer. The page may not load; copy its complete URL from the address bar and paste it below.</p>
         <a className="button button--secondary" href={google.login?.authorization_url} target="_blank" rel="noopener noreferrer">Continue to Google</a>
       </div>
       <div className="field">

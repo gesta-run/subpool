@@ -60,7 +60,7 @@ func (s *Server) completeAntigravityOAuth(w http.ResponseWriter, r *http.Request
 	defer cancel()
 	credentials, err := s.antigravityOAuth.Complete(ctx, input.LoginID, input.CallbackURL)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "Google authorization could not be completed. Check the callback URL, account eligibility and OAuth configuration, then start again.")
+		writeError(w, http.StatusBadRequest, "Google authorization could not be completed. Check the callback URL, account eligibility and server OAuth configuration, then start again.")
 		return
 	}
 	accountID, err := s.saveAntigravityAccount(ctx, credentials, strings.TrimSpace(input.DisplayName))

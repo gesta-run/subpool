@@ -51,7 +51,7 @@ func TestRefreshPreservesIdentityAndRefreshToken(t *testing.T) {
 		if err := r.ParseForm(); err != nil {
 			t.Error(err)
 		}
-		if r.Form.Get("grant_type") != "refresh_token" || r.Form.Get("refresh_token") != "example-refresh" || r.Form.Get("client_secret") != "example-secret" {
+		if r.Form.Get("grant_type") != "refresh_token" || r.Form.Get("refresh_token") != "example-refresh" || r.Form.Get("client_id") != "example-client" || r.Form.Get("client_secret") != "example-secret" {
 			t.Error("invalid refresh form")
 		}
 		_, _ = io.WriteString(w, `{"access_token":"example-new-access","expires_in":3600}`)

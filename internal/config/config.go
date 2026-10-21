@@ -31,7 +31,6 @@ type Config struct {
 	CopilotEntitlementsURL        string
 	AntigravityClientID           string
 	AntigravityClientSecret       string
-	AntigravityRedirectURI        string
 	AntigravityBaseURL            string
 	AntigravityUserAgent          string
 	CodexQuotaRouting             bool
@@ -61,8 +60,7 @@ func defaultConfig() Config {
 		CopilotTokenExchangeURL:       envOr("SUBPOOL_COPILOT_TOKEN_EXCHANGE_URL", "https://api.github.com/copilot_internal/v2/token"),
 		CopilotEntitlementsURL:        envOr("SUBPOOL_COPILOT_ENTITLEMENTS_URL", "https://api.github.com/copilot_internal/user"),
 		AntigravityClientID:           strings.TrimSpace(os.Getenv("SUBPOOL_ANTIGRAVITY_CLIENT_ID")),
-		AntigravityClientSecret:       os.Getenv("SUBPOOL_ANTIGRAVITY_CLIENT_SECRET"),
-		AntigravityRedirectURI:        envOr("SUBPOOL_ANTIGRAVITY_REDIRECT_URI", "http://localhost:8085/callback"),
+		AntigravityClientSecret:       strings.TrimSpace(os.Getenv("SUBPOOL_ANTIGRAVITY_CLIENT_SECRET")),
 		AntigravityBaseURL:            envOr("SUBPOOL_ANTIGRAVITY_BASE_URL", "https://cloudcode-pa.googleapis.com"),
 		AntigravityUserAgent:          envOr("SUBPOOL_ANTIGRAVITY_USER_AGENT", "antigravity/hub/2.23.0 windows/amd64"),
 		UpstreamResponseHeaderTimeout: 3 * time.Minute,
