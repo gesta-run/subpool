@@ -11,6 +11,10 @@ assert runtime["Config"]["Image"] == service["image"], "Deployed image differs"
 for key in [
     "SUBPOOL_CODEX_AUTO_RESET",
     "SUBPOOL_AUTO_RESET_TO",
+    "SUBPOOL_RESET_NOTICE_ENABLED",
+    "SUBPOOL_RESET_NOTICE_MCP_URL",
+    "SUBPOOL_RESET_NOTICE_MCP_TOOL",
+    "SUBPOOL_RESET_NOTICE_CHANNEL",
     "SUBPOOL_DAILY_REPORT_ENABLED",
     "SUBPOOL_DAILY_REPORT_FROM",
     "SUBPOOL_DAILY_REPORT_TO",
@@ -21,4 +25,6 @@ for key in [
 if environment.get("SUBPOOL_DAILY_REPORT_ENABLED") == "true":
     for key in ["SUBPOOL_DAILY_REPORT_FROM", "SUBPOOL_DAILY_REPORT_TO", "SUBPOOL_RESEND_API_KEY"]:
         assert environment.get(key), key
+if environment.get("SUBPOOL_RESET_NOTICE_ENABLED") == "true":
+    assert environment.get("SUBPOOL_RESET_NOTICE_MCP_AUTHORIZATION"), "Slack MCP authorization missing"
 print("Deployed image and daily report configuration verified.")

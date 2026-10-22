@@ -100,6 +100,16 @@ type CodexResetJob struct {
 	FinishedAt   pgtype.Timestamptz
 }
 
+type CodexResetNotice struct {
+	NoticeDate  pgtype.Date
+	ChannelID   string
+	Message     string
+	Outcome     string
+	MessageLink *string
+	AttemptedAt pgtype.Timestamptz
+	FinishedAt  pgtype.Timestamptz
+}
+
 type DailyTeamReport struct {
 	ReportDay  pgtype.Date
 	Payload    []byte

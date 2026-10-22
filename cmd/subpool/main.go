@@ -30,6 +30,7 @@ import (
 	providerhttp "github.com/gesta-run/subpool/internal/provider/httpclient"
 	"github.com/gesta-run/subpool/internal/provider/openaicompat"
 	"github.com/gesta-run/subpool/internal/reporting"
+	"github.com/gesta-run/subpool/internal/resetnotice"
 	"github.com/gesta-run/subpool/internal/store"
 )
 
@@ -46,6 +47,11 @@ func main() {
 	}
 	if cfg.CodexAutoReset && !reportConfig.Enabled {
 		slog.Error("automatic resets require the existing daily report mail configuration")
+		os.Exit(1)
+	}
+	noticeConfig, err := resetnotice.LoadConfig()
+	if err != nil {
+		slog.Error("invalid reset notice configuration", "error", err)
 		os.Exit(1)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -112,6 +118,8 @@ func main() {
 	go database.RunMaintenance(stopCtx)
 	reporter := &reporting.Service{Config: reportConfig, Store: database}
 	go reporter.Run(stopCtx)
+	notices := &resetnotice.Service{Config: noticeConfig, Store: database, Sender: &resetnotice.MCP{Config: noticeConfig}}
+	go notices.Run(stopCtx)
 	if cfg.CodexAutoReset {
 		go controlServer.RunAutoResets(stopCtx, cfg.AutoResetTo, reporter)
 	}
