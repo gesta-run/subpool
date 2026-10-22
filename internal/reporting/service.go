@@ -141,3 +141,12 @@ func (s *Service) send(ctx context.Context, key string, payload []byte) (string,
 	}
 	return result.ID, nil
 }
+
+// SendMessage sends a separately identified event report without changing the daily schedule.
+func (s *Service) SendMessage(ctx context.Context, key string, message Message) (string, error) {
+	payload, err := json.Marshal(message)
+	if err != nil {
+		return "", err
+	}
+	return s.send(ctx, key, payload)
+}

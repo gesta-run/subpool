@@ -31,6 +31,7 @@ type Row struct {
 }
 type Report struct {
 	Date, Time, Zone, Window, URL string
+	NoticeTitle, Notice           string
 	Rows                          []Row
 	Total                         int64
 	Unattributed                  int64
