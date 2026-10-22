@@ -9,6 +9,8 @@ runtime = json.loads(subprocess.check_output(["docker", "inspect", container]))[
 environment = dict(value.split("=", 1) for value in runtime["Config"]["Env"] if "=" in value)
 assert runtime["Config"]["Image"] == service["image"], "Deployed image differs"
 for key in [
+    "SUBPOOL_CODEX_AUTO_RESET",
+    "SUBPOOL_AUTO_RESET_TO",
     "SUBPOOL_DAILY_REPORT_ENABLED",
     "SUBPOOL_DAILY_REPORT_FROM",
     "SUBPOOL_DAILY_REPORT_TO",

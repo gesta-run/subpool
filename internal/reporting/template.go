@@ -9,7 +9,7 @@ import (
 
 var emailTemplate = template.Must(template.New("report").Funcs(template.FuncMap{"formatNumber": number}).Parse(`<!doctype html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head><body style="margin:0;background:#f5f6f8;color:#151922;font-family:Arial,Helvetica,sans-serif"><table role="presentation" width="100%" cellspacing="0" cellpadding="0"><tr><td align="center" style="padding:32px 12px"><table role="presentation" width="860" cellspacing="0" cellpadding="0" style="width:100%;max-width:860px;background:white;border:1px solid #dce0e6;border-radius:12px"><tr><td style="padding:32px 28px">
 <div style="font-size:30px;font-weight:800;letter-spacing:-1px">sub<span style="color:#0768fa">pool</span></div>
-{{if .NoticeTitle}}<div style="margin-top:24px;padding:18px;background:#edf4ff;border-radius:8px;font-size:17px;line-height:1.6"><strong>{{.NoticeTitle}}</strong><br>{{.Notice}}</div>{{end}}
+{{if .NoticeTitle}}<div style="margin-top:24px;padding:18px;background:#edf4ff;border-radius:8px;font-size:17px;line-height:1.6;white-space:pre-line"><strong>{{.NoticeTitle}}</strong><br>{{.Notice}}</div>{{end}}
 <h1 style="font-size:30px;line-height:1.2;margin:32px 0 12px">Team usage overview</h1>
 <p style="font-size:17px;color:#596273;margin:0 0 24px">{{.Date}} · {{.Window}} · {{.Zone}}</p>
 <p style="font-size:18px;line-height:1.5">{{if .Partial}}Partial first-day report: only {{.Window}} is included. Earlier requests are not included.{{else}}All {{len .Rows}} connected accounts · Recorded calls in this reporting window.{{end}}</p>
