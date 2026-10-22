@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/mail"
 	"net/url"
 	"os"
 	"strconv"
@@ -34,6 +35,8 @@ type Config struct {
 	AntigravityBaseURL            string
 	AntigravityUserAgent          string
 	CodexQuotaRouting             bool
+	CodexAutoReset                bool
+	AutoResetTo                   string
 	ResponsesWSEnabled            bool
 	ResponsesWSForceHTTPBridge    bool
 	UpstreamResponseHeaderTimeout time.Duration
@@ -78,6 +81,16 @@ func Load() (Config, error) {
 	}
 	if cfg.CodexQuotaRouting, err = envBool("SUBPOOL_CODEX_QUOTA_ROUTING", false); err != nil {
 		return Config{}, err
+	}
+	if cfg.CodexAutoReset, err = envBool("SUBPOOL_CODEX_AUTO_RESET", false); err != nil {
+		return Config{}, err
+	}
+	cfg.AutoResetTo = strings.TrimSpace(os.Getenv("SUBPOOL_AUTO_RESET_TO"))
+	if cfg.CodexAutoReset {
+		address, parseErr := mail.ParseAddress(cfg.AutoResetTo)
+		if parseErr != nil || address.Address != cfg.AutoResetTo {
+			return Config{}, errors.New("SUBPOOL_AUTO_RESET_TO must be one email address")
+		}
 	}
 	if cfg.ResponsesWSEnabled, err = envBool("SUBPOOL_RESPONSES_WS_ENABLED", true); err != nil {
 		return Config{}, err

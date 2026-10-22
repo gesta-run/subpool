@@ -10,6 +10,8 @@ import (
 func setValidEnv(t *testing.T) {
 	t.Helper()
 	t.Setenv("SUBPOOL_CODEX_QUOTA_ROUTING", "")
+	t.Setenv("SUBPOOL_CODEX_AUTO_RESET", "")
+	t.Setenv("SUBPOOL_AUTO_RESET_TO", "")
 	t.Setenv("SUBPOOL_API_LISTEN_ADDRESS", "")
 	t.Setenv("SUBPOOL_CONSOLE_LISTEN_ADDRESS", "")
 	t.Setenv("SUBPOOL_DATABASE_URL", "postgres://db/subpool")

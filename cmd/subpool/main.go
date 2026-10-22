@@ -44,6 +44,10 @@ func main() {
 		slog.Error("invalid daily report configuration", "error", err)
 		os.Exit(1)
 	}
+	if cfg.CodexAutoReset && !reportConfig.Enabled {
+		slog.Error("automatic resets require the existing daily report mail configuration")
+		os.Exit(1)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	database, err := store.Open(ctx, cfg.DatabaseURL)
 	cancel()
@@ -108,6 +112,9 @@ func main() {
 	go database.RunMaintenance(stopCtx)
 	reporter := &reporting.Service{Config: reportConfig, Store: database}
 	go reporter.Run(stopCtx)
+	if cfg.CodexAutoReset {
+		go controlServer.RunAutoResets(stopCtx, cfg.AutoResetTo, reporter)
+	}
 	if err = serveHTTPServers(stopCtx, bindings, gatewayServer.CloseResponsesWebSockets); err != nil {
 		slog.Error("HTTP server failed", "error", err)
 		os.Exit(1)
