@@ -122,7 +122,7 @@ func (s *Service) SendDue(ctx context.Context, now time.Time) error {
 func Message(now time.Time, events []Event) string {
 	zone, _ := time.LoadLocation("Asia/Shanghai")
 	var b strings.Builder
-	fmt.Fprintf(&b, "@channel Codex quota is scheduled to reset today, %s (Beijing time, UTC+8):\n", now.In(zone).Format("January 2, 2006"))
+	fmt.Fprintf(&b, "<!here> Codex quota is scheduled to reset today, %s (Beijing time, UTC+8):\n", now.In(zone).Format("January 2, 2006"))
 	for _, e := range events {
 		fmt.Fprintf(&b, "• %s — **%s** (%s)\n", e.Account, e.At.In(zone).Format("15:04"), e.Kind)
 	}
