@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="color-scheme" content="light">
+<title>SubPool · Team usage overview</title>
+<style>
+@media screen and (min-width:600px) {
+  .report-content { padding:40px !important; }
+  .account-content { padding:24px !important; }
+  .report-title { font-size:32px !important; }
+}
+@media screen and (max-width:360px) {
+  .report-content { padding:26px 16px !important; }
+  .request-value { font-size:23px !important; }
+}
+</style>
+</head>
+<body style="margin:0;background:#f3f6fb;color:#172236;font-family:Arial,Helvetica,sans-serif;-webkit-text-size-adjust:100%">
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0"><tr><td align="center">
+<table role="presentation" width="640" cellspacing="0" cellpadding="0" border="0" style="width:100%;max-width:640px;background:#ffffff"><tr><td class="report-content" style="padding:28px 20px">
+<div style="margin:0 0 26px;font-size:30px;line-height:1;font-weight:800;letter-spacing:-1.4px">sub<span style="color:#0768fa">pool</span></div>
+<h1 class="report-title" style="margin:0 0 12px;font-size:28px;line-height:1.18;letter-spacing:-0.7px;font-weight:700">Team usage overview</h1>
+<p style="margin:0;color:#637087;font-size:15px;line-height:1.6">{{.Date}} · {{.Window}}<br>{{if eq .Zone "Asia/Shanghai"}}Beijing time · UTC+8{{else}}{{.Zone}}{{end}}</p>
+<p style="margin:17px 0 23px;font-size:16px;line-height:1.5;color:#637087"><strong style="color:#172236">{{formatNumber .Total}} recorded calls</strong> · {{len .Rows}} accounts</p>
+
+{{if .NoticeTitle}}
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin-bottom:24px"><tr><td style="padding:17px 16px;border-radius:12px;background:{{if .ResetResults}}{{if allResetsSucceeded .ResetResults}}#f0f9f4{{else}}#fff7eb{{end}}{{else}}#edf4ff{{end}}">
+{{if .ResetResults}}
+<p style="margin:0 0 5px;font-size:17px;line-height:1.4;font-weight:700;color:{{if allResetsSucceeded .ResetResults}}#186447{{else}}#86500b{{end}}">{{if allResetsSucceeded .ResetResults}}✓ Resets completed{{else}}Reset results · Review needed{{end}}</p>
+<p style="margin:0 0 12px;color:#637087;font-size:13px;line-height:1.5">{{.Time}} · {{if eq .Zone "Asia/Shanghai"}}Beijing time{{else}}{{.Zone}}{{end}}</p>
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="font-size:13px;line-height:1.5">
+{{range .ResetResults}}
+<tr><td style="padding:4px 0;overflow-wrap:break-word">{{.Account}}</td><td align="right" style="padding:4px 0 4px 7px;font-weight:700;white-space:nowrap">{{compactCapacity .Before}} → {{compactCapacity .After}}</td></tr>
+<tr><td colspan="2" style="padding:0 0 7px;color:#637087;overflow-wrap:break-word">{{.Outcome}}{{if ne .Outcome "succeeded"}} · {{.Detail}}{{end}}</td></tr>
+{{end}}</table>
+{{else}}
+<strong style="font-size:17px;line-height:1.5">{{.NoticeTitle}}</strong><div style="margin-top:8px;font-size:14px;line-height:1.6;white-space:pre-line;overflow-wrap:break-word">{{.Notice}}</div>
+{{end}}
+</td></tr></table>
+{{end}}
+
+{{if .Partial}}<p style="margin:0 0 20px;font-size:15px;line-height:1.6;color:#637087">Partial first-day report: only {{.Window}} is included. Earlier requests are not included.</p>{{end}}
+{{range .Rows}}
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin-bottom:18px;border:1px solid #e2e8f0;border-radius:14px"><tr><td class="account-content" style="padding:20px 16px">
+<h2 style="margin:0;font-size:18px;line-height:1.45;letter-spacing:-0.3px;font-weight:700;overflow-wrap:break-word">{{.Name}}</h2>
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin:15px 0 11px"><tr>
+<td class="request-value" style="font-size:24px;font-weight:700;letter-spacing:-0.8px;white-space:nowrap;vertical-align:bottom;padding-right:10px">{{.Requests}} · {{.Share}}</td>
+<td align="right" style="white-space:nowrap;vertical-align:bottom"><div style="margin-bottom:3px;font-size:13px;color:#637087">Remaining</div><div style="font-size:{{if gt (len .Remaining) 7}}16px{{else}}26px{{end}};line-height:1.1;font-weight:700;letter-spacing:-0.7px">{{.Remaining}}</div></td>
+</tr></table>
+{{if ne .Remaining "Unavailable"}}<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="height:6px;background:#e9eef6;border-radius:4px"><tr><td width="{{.Bar}}%" style="height:6px;background:#0768fa;border-radius:4px"></td>{{if lt .Bar 100}}<td style="height:6px"></td>{{end}}</tr></table>{{end}}
+<p style="margin:10px 0 0;color:#637087;font-size:14px;line-height:1.6">{{.Reset}}</p>
+<div style="height:1px;background:#edf0f5;margin:17px 0 14px"></div>
+<p style="margin:0 0 7px;font-size:13px;line-height:1.5;color:#637087">Employee requests</p>
+<table width="100%" cellspacing="0" cellpadding="0" border="0" style="font-size:16px;line-height:1.6">
+{{range .Employees}}<tr><td style="padding:4px 10px 4px 0;color:#344156;overflow-wrap:break-word">{{.Name}}</td><td align="right" style="padding:4px 0;white-space:nowrap;font-variant-numeric:tabular-nums">{{.Requests}} · {{.Share}}</td></tr>{{else}}<tr><td style="padding:4px 0;color:#637087">—</td></tr>{{end}}
+</table>
+{{if .AICredits}}
+<div style="height:1px;background:#edf0f5;margin:17px 0 14px"></div>
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0"><tr>
+<td width="50%" style="vertical-align:top"><div style="font-size:13px;line-height:1.5;color:#637087;margin-bottom:4px">AI credits</div><div style="font-size:17px;line-height:1.4;font-weight:700">{{.AICredits}}</div></td>
+<td width="50%" style="padding-left:12px;vertical-align:top"><div style="font-size:13px;line-height:1.5;color:#637087;margin-bottom:4px">reset credits</div><div style="font-size:17px;line-height:1.4;font-weight:700">{{.ResetCredits}}</div></td>
+</tr></table>
+{{if .CreditExpiry}}<p style="color:{{if .ExpirySoon}}#86500b{{else}}#637087{{end}};font-size:14px;line-height:1.6;margin:13px 0 0">{{.CreditExpiry}}</p>{{end}}
+{{end}}
+</td></tr></table>
+{{end}}
+
+<div style="font-size:13px;line-height:1.65;color:#6b7689;margin:22px 2px">
+<p style="margin:0 0 9px">Calls through SubPool only. Direct usage is excluded from request counts. Remaining capacity includes direct usage.</p>
+<p style="margin:0 0 9px">Employee percentages are within each account; shared keys identify the key owner.</p>
+{{if .Unattributed}}<p style="margin:0 0 9px">Calls without retained account attribution: {{formatNumber .Unattributed}} ({{.UnattributedShare}}). These are included in the total and percentage denominator.</p>{{end}}
+</div>
+<p style="margin:0"><a href="{{.URL}}" style="display:block;text-align:center;background:#0768fa;color:#ffffff;border-radius:9px;padding:15px 18px;text-decoration:none;font-size:16px;line-height:1.3;font-weight:700">Open SubPool</a></p>
+<p style="border-top:1px solid #edf0f5;padding-top:17px;margin:23px 0 0;font-size:12px;line-height:1.7;color:#8791a2">{{.Window}} · {{.Zone}}<br>{{if .NoticeTitle}}Sent by SubPool{{else}}Sent daily by SubPool{{end}}</p>
+</td></tr></table>
+</td></tr></table>
+</body>
+</html>

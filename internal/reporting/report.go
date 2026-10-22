@@ -35,9 +35,13 @@ type Row struct {
 	AICredits, ResetCredits, CreditExpiry   string
 	ExpirySoon                              bool
 }
+type ResetResult struct {
+	Account, Outcome, Before, After, Detail string
+}
 type Report struct {
 	Date, Time, Zone, Window, URL string
 	NoticeTitle, Notice           string
+	ResetResults                  []ResetResult
 	Rows                          []Row
 	Total                         int64
 	Unattributed                  int64

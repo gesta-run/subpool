@@ -261,7 +261,7 @@ func TestEmployeeSharesUseAccountTotalAndEscapeNames(t *testing.T) {
 			}
 		}
 	}
-	if !strings.Contains(m.HTML, "EMPLOYEE REQUESTS") || !strings.Contains(m.HTML, "Example &lt;A&gt;") || strings.Contains(m.HTML, "Example <A>") {
+	if !strings.Contains(m.HTML, "Employee requests") || !strings.Contains(m.HTML, "Example &lt;A&gt;") || strings.Contains(m.HTML, "Example <A>") {
 		t.Fatal("employee column missing or employee name was not escaped")
 	}
 }

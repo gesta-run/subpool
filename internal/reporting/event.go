@@ -8,7 +8,7 @@ import (
 )
 
 // EventMessage reuses the live daily report queries and template for an event email.
-func (s *Service) EventMessage(ctx context.Context, now time.Time, title, notice, recipient string) Message {
+func (s *Service) EventMessage(ctx context.Context, now time.Time, title, notice, recipient string, results ...ResetResult) Message {
 	c := s.Config
 	c.To = []string{recipient}
 	local := now.In(c.Location)
@@ -25,6 +25,7 @@ func (s *Service) EventMessage(ctx context.Context, now time.Time, title, notice
 			if countErr == nil {
 				r := NewReport(c, accounts, start, now, now, partial, unattributed)
 				r.NoticeTitle, r.Notice = title, notice
+				r.ResetResults = results
 				m, renderErr := Render(c, r)
 				if renderErr == nil {
 					m.Subject = "SubPool · " + title + " · " + local.Format("2006-01-02 15:04")
