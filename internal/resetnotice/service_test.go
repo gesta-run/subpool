@@ -68,7 +68,7 @@ func TestNoticeWindowAndDurableDeduplication(t *testing.T) {
 	if sender.calls != 1 || st.outcome != "sent" || !st.end.Equal(time.Date(2026, 1, 6, 16, 0, 0, 0, time.UTC)) {
 		t.Fatal("wrong schedule, duplicate delivery, or day boundary")
 	}
-	for _, want := range []string{"@channel", "January 6, 2026", "Beijing time, UTC+8", "**14:00**", "**21:00**", "first@example.com", "weekly reset", "scheduled reset credit"} {
+	for _, want := range []string{"<!here>", "January 6, 2026", "Beijing time, UTC+8", "**14:00**", "**21:00**", "first@example.com", "weekly reset", "scheduled reset credit"} {
 		if !strings.Contains(st.message, want) {
 			t.Fatalf("missing %q", want)
 		}

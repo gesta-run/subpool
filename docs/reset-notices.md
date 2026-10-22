@@ -10,6 +10,8 @@ has an upcoming reset later that local day. Fresh weekly quota reset times and
 pending automatic reset-credit jobs share the same summary. Past resets,
 disabled accounts and stale weekly quota data are excluded. Account labels,
 calendar dates, Beijing times and the type of reset come from existing records.
+Announcements use Slack's explicit `<!here>` special mention to notify active
+channel members rather than relying on automatic parsing of bare mention text.
 
 The scheduler runs in SubPool and requires no employee computer. It records the
 attempt in PostgreSQL before calling the configured Slack MCP tool. The date and
