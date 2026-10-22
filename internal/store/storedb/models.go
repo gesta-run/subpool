@@ -75,6 +75,31 @@ type AuditEvent struct {
 	CreatedAt  pgtype.Timestamptz
 }
 
+type CodexResetBatch struct {
+	ID         string
+	CreatedAt  pgtype.Timestamptz
+	LeaseUntil pgtype.Timestamptz
+	Attempts   int32
+	Payload    []byte
+	EmailID    *string
+	SentAt     pgtype.Timestamptz
+}
+
+type CodexResetJob struct {
+	AccountID    string
+	CreditID     string
+	AccountLabel string
+	RunAt        pgtype.Timestamptz
+	ExpiresAt    pgtype.Timestamptz
+	BatchID      pgtype.UUID
+	AttemptedAt  pgtype.Timestamptz
+	Outcome      *string
+	Detail       string
+	BeforeQuota  []byte
+	AfterQuota   []byte
+	FinishedAt   pgtype.Timestamptz
+}
+
 type DailyTeamReport struct {
 	ReportDay  pgtype.Date
 	Payload    []byte

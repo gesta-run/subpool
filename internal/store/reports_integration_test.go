@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -33,6 +34,12 @@ func TestReportCountsPersistDeduplicateAndClaimOnce(t *testing.T) {
 	if err = db.CreateProviderAccount(ctx, account); err != nil {
 		t.Fatal(err)
 	}
+	// Illustrative reset data verifies the reporting query loads the existing cache.
+	resetSnapshot := []byte(`{"available_count":2,"credits":[]}`)
+	resetChecked := time.Now().UTC().Truncate(time.Microsecond)
+	if err = db.SetProviderResetCredits(ctx, accountID, resetSnapshot, resetChecked); err != nil {
+		t.Fatal(err)
+	}
 	pool := domain.Pool{ID: poolID, Name: "Report test " + poolID, Provider: domain.ProviderCodex, Accounts: []domain.PoolAccount{{PoolID: poolID, ProviderAccountID: accountID, Weight: 1, Enabled: true}}}
 	if err = db.CreatePool(ctx, pool); err != nil {
 		t.Fatal(err)
@@ -58,6 +65,9 @@ func TestReportCountsPersistDeduplicateAndClaimOnce(t *testing.T) {
 			count = a.Requests
 			if a.Email != account.Email {
 				t.Fatal("report account email was not loaded")
+			}
+			if a.Provider != account.Provider || a.CredentialType != account.CredentialType || !a.ResetCheckedAt.Equal(resetChecked) || !strings.Contains(string(a.ResetSnapshot), `"available_count": 2`) {
+				t.Fatal("report did not load provider credit metadata")
 			}
 		}
 	}

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -18,16 +19,21 @@ type EmployeeRow struct {
 }
 
 type Account struct {
-	ID, Name, Email string
-	Employees       []Employee
-	Requests        int64
-	Snapshot        []byte
-	CheckedAt       time.Time
+	ID, Name, Email          string
+	Provider, CredentialType string
+	Employees                []Employee
+	Requests                 int64
+	Snapshot                 []byte
+	CheckedAt                time.Time
+	ResetSnapshot            []byte
+	ResetCheckedAt           time.Time
 }
 type Row struct {
 	Employees                               []EmployeeRow
 	Name, Requests, Share, Remaining, Reset string
 	Bar                                     int
+	AICredits, ResetCredits, CreditExpiry   string
+	ExpirySoon                              bool
 }
 type Report struct {
 	Date, Time, Zone, Window, URL string
@@ -71,6 +77,7 @@ func NewReport(c Config, accounts []Account, start, end, now time.Time, partial 
 			row.Employees = append(row.Employees, EmployeeRow{Name: employee.Name, Requests: number(employee.Requests), Share: share})
 		}
 		fillQuota(&row, a, now, c.Location)
+		fillCredits(&row, a, now, c.Location)
 		r.Rows = append(r.Rows, row)
 	}
 	return r
@@ -85,6 +92,10 @@ func number(n int64) string {
 }
 
 func resetLabel(reset, now time.Time, location *time.Location) string {
+	return timeLabel("Resets", reset, now, location)
+}
+
+func timeLabel(prefix string, reset, now time.Time, location *time.Location) string {
 	remaining := reset.Sub(now)
 	unit, duration := "minute", time.Minute
 	if remaining >= 24*time.Hour {
@@ -96,7 +107,66 @@ func resetLabel(reset, now time.Time, location *time.Location) string {
 	if count != 1 {
 		unit += "s"
 	}
-	return fmt.Sprintf("Resets %s (in %d %s)", reset.In(location).Format("2006-01-02 · 15:04"), count, unit)
+	return fmt.Sprintf("%s %s (in %d %s)", prefix, reset.In(location).Format("2006-01-02 · 15:04"), count, unit)
+}
+
+func freshQuota(checked, now time.Time) bool {
+	return !checked.IsZero() && !checked.After(now.Add(time.Minute)) && now.Sub(checked) <= 15*time.Minute
+}
+
+func fillCredits(row *Row, a Account, now time.Time, location *time.Location) {
+	if a.Provider != "codex" || a.CredentialType == "api_key" {
+		return
+	}
+	row.AICredits, row.ResetCredits = "Unavailable", "Unavailable"
+	var quota struct {
+		Credits *struct {
+			Balance   *string `json:"balance"`
+			Unlimited bool    `json:"unlimited"`
+		} `json:"credits"`
+	}
+	if freshQuota(a.CheckedAt, now) && json.Unmarshal(a.Snapshot, &quota) == nil && quota.Credits != nil {
+		if quota.Credits.Unlimited {
+			row.AICredits = "Unlimited"
+		} else if quota.Credits.Balance != nil {
+			if value, err := strconv.ParseFloat(strings.TrimSpace(*quota.Credits.Balance), 64); err == nil && !math.IsNaN(value) && !math.IsInf(value, 0) && value >= 0 && value < math.MaxInt64 {
+				row.AICredits = number(int64(math.Round(value)))
+			}
+		}
+	}
+	var resets struct {
+		Available *int `json:"available_count"`
+		Credits   []struct {
+			Status    string `json:"status"`
+			ExpiresAt *int64 `json:"expires_at"`
+		} `json:"credits"`
+	}
+	if !freshQuota(a.ResetCheckedAt, now) || json.Unmarshal(a.ResetSnapshot, &resets) != nil || resets.Available == nil || *resets.Available < 0 {
+		return
+	}
+	// Keep the provider's available count, including credits without an expiry.
+	available := *resets.Available
+	var next int64
+	for _, credit := range resets.Credits {
+		if credit.Status != "available" || credit.ExpiresAt == nil || *credit.ExpiresAt <= 0 {
+			continue
+		}
+		if *credit.ExpiresAt <= now.Unix() {
+			continue
+		}
+		if next == 0 || *credit.ExpiresAt < next {
+			next = *credit.ExpiresAt
+		}
+	}
+	row.ResetCredits = number(int64(available))
+	if available > 0 {
+		row.CreditExpiry = "Reset expiry unavailable"
+		if next > 0 {
+			expiry := time.Unix(next, 0)
+			row.CreditExpiry = timeLabel("Next reset expires", expiry, now, location)
+			row.ExpirySoon = expiry.Sub(now) <= 24*time.Hour
+		}
+	}
 }
 
 type quotaWindow struct {
@@ -105,7 +175,7 @@ type quotaWindow struct {
 }
 
 func fillQuota(row *Row, a Account, now time.Time, location *time.Location) {
-	if a.CheckedAt.IsZero() || a.CheckedAt.After(now.Add(time.Minute)) || now.Sub(a.CheckedAt) > 15*time.Minute {
+	if !freshQuota(a.CheckedAt, now) {
 		return
 	}
 	var quota struct {
