@@ -87,7 +87,8 @@ WITH employee_counts AS (
             ORDER BY requests DESC, employee_name, employee_id) AS employees
     FROM employee_counts GROUP BY provider_account_id
 )
-SELECT a.id, a.display_name, COALESCE(a.email, '')::text AS email, a.quota_snapshot, a.quota_checked_at,
+SELECT a.id, a.display_name, COALESCE(a.email, '')::text AS email, a.provider, a.credential_type,
+    a.quota_snapshot, a.quota_checked_at, a.reset_credits_snapshot, a.reset_credits_checked_at,
     COALESCE(c.requests, 0)::bigint AS requests,
     COALESCE(c.employees, '[]'::jsonb)::jsonb AS employees
 FROM provider_accounts a
@@ -101,13 +102,17 @@ type ReportAccountsParams struct {
 }
 
 type ReportAccountsRow struct {
-	ID             string
-	DisplayName    string
-	Email          string
-	QuotaSnapshot  []byte
-	QuotaCheckedAt pgtype.Timestamptz
-	Requests       int64
-	Employees      []byte
+	ID                    string
+	DisplayName           string
+	Email                 string
+	Provider              string
+	CredentialType        string
+	QuotaSnapshot         []byte
+	QuotaCheckedAt        pgtype.Timestamptz
+	ResetCreditsSnapshot  []byte
+	ResetCreditsCheckedAt pgtype.Timestamptz
+	Requests              int64
+	Employees             []byte
 }
 
 func (q *Queries) ReportAccounts(ctx context.Context, arg ReportAccountsParams) ([]ReportAccountsRow, error) {
@@ -123,8 +128,12 @@ func (q *Queries) ReportAccounts(ctx context.Context, arg ReportAccountsParams) 
 			&i.ID,
 			&i.DisplayName,
 			&i.Email,
+			&i.Provider,
+			&i.CredentialType,
 			&i.QuotaSnapshot,
 			&i.QuotaCheckedAt,
+			&i.ResetCreditsSnapshot,
+			&i.ResetCreditsCheckedAt,
 			&i.Requests,
 			&i.Employees,
 		); err != nil {

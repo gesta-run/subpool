@@ -23,12 +23,15 @@ func (p *Postgres) ReportAccounts(ctx context.Context, start, end time.Time) ([]
 	}
 	accounts := make([]reporting.Account, 0, len(rows))
 	for _, row := range rows {
-		account := reporting.Account{ID: row.ID, Name: row.DisplayName, Email: row.Email, Requests: row.Requests, Snapshot: row.QuotaSnapshot}
+		account := reporting.Account{ID: row.ID, Name: row.DisplayName, Email: row.Email, Provider: row.Provider, CredentialType: row.CredentialType, Requests: row.Requests, Snapshot: row.QuotaSnapshot, ResetSnapshot: row.ResetCreditsSnapshot}
 		if err := json.Unmarshal(row.Employees, &account.Employees); err != nil {
 			return nil, wrapDB("read report employees", err)
 		}
 		if row.QuotaCheckedAt.Valid {
 			account.CheckedAt = row.QuotaCheckedAt.Time
+		}
+		if row.ResetCreditsCheckedAt.Valid {
+			account.ResetCheckedAt = row.ResetCreditsCheckedAt.Time
 		}
 		accounts = append(accounts, account)
 	}

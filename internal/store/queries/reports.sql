@@ -17,7 +17,8 @@ WITH employee_counts AS (
             ORDER BY requests DESC, employee_name, employee_id) AS employees
     FROM employee_counts GROUP BY provider_account_id
 )
-SELECT a.id, a.display_name, COALESCE(a.email, '')::text AS email, a.quota_snapshot, a.quota_checked_at,
+SELECT a.id, a.display_name, COALESCE(a.email, '')::text AS email, a.provider, a.credential_type,
+    a.quota_snapshot, a.quota_checked_at, a.reset_credits_snapshot, a.reset_credits_checked_at,
     COALESCE(c.requests, 0)::bigint AS requests,
     COALESCE(c.employees, '[]'::jsonb)::jsonb AS employees
 FROM provider_accounts a
