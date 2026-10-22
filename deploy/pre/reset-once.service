@@ -1,0 +1,14 @@
+[Unit]
+Description=SubPool single-credit reset and usage report
+After=docker.service network-online.target
+Requires=docker.service
+StartLimitIntervalSec=1800
+StartLimitBurst=5
+
+[Service]
+Type=oneshot
+UMask=0077
+ExecStart=/usr/bin/flock -n /run/subpool-reset-once.lock /usr/bin/python3 /gesta/subpool/reset-once/reset-once.py
+TimeoutStartSec=240
+Restart=on-failure
+RestartSec=120

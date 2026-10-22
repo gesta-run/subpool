@@ -9,6 +9,7 @@ import (
 
 var emailTemplate = template.Must(template.New("report").Funcs(template.FuncMap{"formatNumber": number}).Parse(`<!doctype html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head><body style="margin:0;background:#f5f6f8;color:#151922;font-family:Arial,Helvetica,sans-serif"><table role="presentation" width="100%" cellspacing="0" cellpadding="0"><tr><td align="center" style="padding:32px 12px"><table role="presentation" width="860" cellspacing="0" cellpadding="0" style="width:100%;max-width:860px;background:white;border:1px solid #dce0e6;border-radius:12px"><tr><td style="padding:32px 28px">
 <div style="font-size:30px;font-weight:800;letter-spacing:-1px">sub<span style="color:#0768fa">pool</span></div>
+{{if .NoticeTitle}}<div style="margin-top:24px;padding:18px;background:#edf4ff;border-radius:8px;font-size:17px;line-height:1.6"><strong>{{.NoticeTitle}}</strong><br>{{.Notice}}</div>{{end}}
 <h1 style="font-size:30px;line-height:1.2;margin:32px 0 12px">Team usage overview</h1>
 <p style="font-size:17px;color:#596273;margin:0 0 24px">{{.Date}} · {{.Window}} · {{.Zone}}</p>
 <p style="font-size:18px;line-height:1.5">{{if .Partial}}Partial first-day report: only {{.Window}} is included. Earlier requests are not included.{{else}}All {{len .Rows}} connected accounts · Recorded calls in this reporting window.{{end}}</p>
@@ -18,7 +19,7 @@ var emailTemplate = template.Must(template.New("report").Funcs(template.FuncMap{
 <div style="padding:16px;background:#edf4ff;border-radius:8px;font-size:16px;line-height:1.5">Account rows show attributable calls through SubPool. {{if .Unattributed}}Calls without retained account attribution: {{formatNumber .Unattributed}} ({{.UnattributedShare}}). These are included in the total and percentage denominator. {{end}}Employee percentages are within each account; shared keys identify the key owner. Direct usage outside SubPool is excluded. Remaining capacity includes direct usage.</div>
 {{if .Partial}}<p style="font-size:16px;line-height:1.5;color:#596273">First report: request tracking started today at the beginning of the reporting window. Earlier requests are not included.</p>{{end}}
 <p style="margin:28px 0"><a href="{{.URL}}" style="display:inline-block;padding:14px 22px;background:#0768fa;color:white;text-decoration:none;border-radius:7px;font-size:18px;font-weight:600">Open SubPool</a></p>
-<div style="border-top:1px solid #dce0e6;padding-top:18px;color:#596273;font-size:14px;line-height:1.6">Reporting window: {{.Window}} · {{.Zone}}<br>Sent daily by SubPool</div>
+<div style="border-top:1px solid #dce0e6;padding-top:18px;color:#596273;font-size:14px;line-height:1.6">Reporting window: {{.Window}} · {{.Zone}}<br>{{if .NoticeTitle}}Sent by SubPool{{else}}Sent daily by SubPool{{end}}</div>
 </td></tr></table></td></tr></table></body></html>`))
 
 func Render(c Config, r Report) (Message, error) {
@@ -27,6 +28,9 @@ func Render(c Config, r Report) (Message, error) {
 		return Message{}, err
 	}
 	var text strings.Builder
+	if r.NoticeTitle != "" {
+		fmt.Fprintf(&text, "%s\n%s\n\n", r.NoticeTitle, r.Notice)
+	}
 	fmt.Fprintf(&text, "Team usage overview\n%s · %s · %s\n\n", r.Date, r.Window, r.Zone)
 	if r.Partial {
 		text.WriteString("Partial first-day report: only the reporting window below is included. Earlier requests are not included.\n\n")
