@@ -160,10 +160,13 @@ func (s *Server) processResetBatch(ctx context.Context, st autoResetStore, repor
 			}
 		}
 		lines := []string{"Automatic reset results · Asia/Shanghai"}
+		var results []reporting.ResetResult
 		for _, j := range b.Jobs {
 			lines = append(lines, fmt.Sprintf("%s: %s. Weekly capacity %s → %s. %s", j.Label, j.Outcome, resetCapacity(j.Before), resetCapacity(j.After), j.Detail))
+			results = append(results, reporting.ResetResult{Account: j.Label, Outcome: j.Outcome,
+				Before: resetCapacity(j.Before), After: resetCapacity(j.After), Detail: j.Detail})
 		}
-		m := reporter.EventMessage(ctx, time.Now(), "Reset results", strings.Join(lines, "\n"), recipient)
+		m := reporter.EventMessage(ctx, time.Now(), "Reset results", strings.Join(lines, "\n"), recipient, results...)
 		encoded, err := json.Marshal(m)
 		if err != nil {
 			return err

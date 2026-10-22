@@ -2,25 +2,39 @@ package reporting
 
 import (
 	"bytes"
+	_ "embed"
 	"fmt"
 	"html/template"
 	"strings"
 )
 
-var emailTemplate = template.Must(template.New("report").Funcs(template.FuncMap{"formatNumber": number}).Parse(`<!doctype html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head><body style="margin:0;background:#f5f6f8;color:#151922;font-family:Arial,Helvetica,sans-serif"><table role="presentation" width="100%" cellspacing="0" cellpadding="0"><tr><td align="center" style="padding:32px 12px"><table role="presentation" width="860" cellspacing="0" cellpadding="0" style="width:100%;max-width:860px;background:white;border:1px solid #dce0e6;border-radius:12px"><tr><td style="padding:32px 28px">
-<div style="font-size:30px;font-weight:800;letter-spacing:-1px">sub<span style="color:#0768fa">pool</span></div>
-{{if .NoticeTitle}}<div style="margin-top:24px;padding:18px;background:#edf4ff;border-radius:8px;font-size:17px;line-height:1.6;white-space:pre-line"><strong>{{.NoticeTitle}}</strong><br>{{.Notice}}</div>{{end}}
-<h1 style="font-size:30px;line-height:1.2;margin:32px 0 12px">Team usage overview</h1>
-<p style="font-size:17px;color:#596273;margin:0 0 24px">{{.Date}} · {{.Window}} · {{.Zone}}</p>
-<p style="font-size:18px;line-height:1.5">{{if .Partial}}Partial first-day report: only {{.Window}} is included. Earlier requests are not included.{{else}}All {{len .Rows}} connected accounts · Recorded calls in this reporting window.{{end}}</p>
-<table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;table-layout:fixed;margin:24px 0;font-size:18px"><colgroup><col style="width:25%"><col style="width:17%"><col style="width:23%"><col style="width:35%"></colgroup><thead><tr style="background:#f3f5f8;color:#596273;text-align:left;font-size:13px"><th style="padding:14px 10px;border:1px solid #dce0e6">ACCOUNT</th><th style="padding:14px 10px;border:1px solid #dce0e6">REQUESTS IN WINDOW</th><th style="padding:14px 10px;border:1px solid #dce0e6">EMPLOYEE REQUESTS</th><th style="padding:14px 10px;border:1px solid #dce0e6">CAPACITY LEFT</th></tr></thead><tbody>
-{{range .Rows}}<tr><td style="padding:22px 10px;border:1px solid #dce0e6;font-weight:700;overflow-wrap:anywhere">{{.Name}}</td><td style="padding:22px 10px;border:1px solid #dce0e6"><span style="font-size:20px;font-weight:700">{{.Requests}}</span><span style="font-size:20px;font-weight:700"> · {{.Share}}</span></td><td style="padding:22px 10px;border:1px solid #dce0e6;vertical-align:top">{{range .Employees}}<div style="margin-bottom:10px;font-size:16px;line-height:1.5;overflow-wrap:anywhere"><strong>{{.Name}}</strong><br><span>{{.Requests}} · {{.Share}}</span></div>{{else}}<span style="color:#596273">—</span>{{end}}</td><td style="padding:22px 10px;border:1px solid #dce0e6"><strong style="font-size:22px">{{.Remaining}}</strong><table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin:8px 0;background:#e8edf3;border-radius:6px"><tr><td style="height:8px;width:{{.Bar}}%;background:#0768fa;border-radius:6px"></td><td style="height:8px"></td></tr></table><div style="font-size:14px;color:#596273;line-height:1.4">{{.Reset}}</div>{{if .AICredits}}<div style="margin-top:13px;padding-top:11px;border-top:1px solid #e6e9ee;font-size:14px;line-height:1.5"><span style="display:inline-block;margin-right:12px"><strong>{{.AICredits}}</strong> AI credits</span><span style="display:inline-block"><strong>{{.ResetCredits}}</strong> reset credits</span>{{if .CreditExpiry}}<div style="margin-top:5px;color:{{if .ExpirySoon}}#925500{{else}}#596273{{end}}">{{.CreditExpiry}}</div>{{end}}</div>{{end}}</td></tr>{{end}}
-</tbody></table><p style="font-size:19px">{{formatNumber .Total}} recorded calls in this reporting window.</p>
-<div style="padding:16px;background:#edf4ff;border-radius:8px;font-size:16px;line-height:1.5">Account rows show attributable calls through SubPool. {{if .Unattributed}}Calls without retained account attribution: {{formatNumber .Unattributed}} ({{.UnattributedShare}}). These are included in the total and percentage denominator. {{end}}Employee percentages are within each account; shared keys identify the key owner. Direct usage outside SubPool is excluded. Remaining capacity includes direct usage.</div>
-{{if .Partial}}<p style="font-size:16px;line-height:1.5;color:#596273">First report: request tracking started today at the beginning of the reporting window. Earlier requests are not included.</p>{{end}}
-<p style="margin:28px 0"><a href="{{.URL}}" style="display:inline-block;padding:14px 22px;background:#0768fa;color:white;text-decoration:none;border-radius:7px;font-size:18px;font-weight:600">Open SubPool</a></p>
-<div style="border-top:1px solid #dce0e6;padding-top:18px;color:#596273;font-size:14px;line-height:1.6">Reporting window: {{.Window}} · {{.Zone}}<br>{{if .NoticeTitle}}Sent by SubPool{{else}}Sent daily by SubPool{{end}}</div>
-</td></tr></table></td></tr></table></body></html>`))
+//go:embed template.html
+var emailTemplateSource string
+
+var emailTemplate = template.Must(template.New("report").Funcs(template.FuncMap{
+	"formatNumber":       number,
+	"allResetsSucceeded": allResetsSucceeded,
+	"compactCapacity":    compactCapacity,
+}).Parse(emailTemplateSource))
+
+func allResetsSucceeded(results []ResetResult) bool {
+	if len(results) == 0 {
+		return false
+	}
+	for _, result := range results {
+		if result.Outcome != "succeeded" {
+			return false
+		}
+	}
+	return true
+}
+
+func compactCapacity(value string) string {
+	if strings.HasSuffix(value, ".0%") {
+		return strings.TrimSuffix(value, ".0%") + "%"
+	}
+	return value
+}
 
 func Render(c Config, r Report) (Message, error) {
 	var html bytes.Buffer

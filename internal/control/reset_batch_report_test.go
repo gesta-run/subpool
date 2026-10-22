@@ -88,7 +88,7 @@ func TestBatchReportCombinesResultsAndRetriesOnlyMail(t *testing.T) {
 	if len(m.To) != 1 || m.To[0] != "owner@example.test" {
 		t.Fatalf("wrong recipients %v", m.To)
 	}
-	for _, value := range []string{"first@example.test", "second@example.test", "succeeded", "failed", "Team usage overview", "EMPLOYEE REQUESTS"} {
+	for _, value := range []string{"first@example.test", "second@example.test", "succeeded", "failed", "Team usage overview", "Employee requests"} {
 		if !strings.Contains(m.HTML, value) {
 			t.Fatalf("missing %s", value)
 		}
