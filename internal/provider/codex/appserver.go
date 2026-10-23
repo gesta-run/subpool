@@ -83,8 +83,30 @@ func (a *AppServer) Usage(ctx context.Context, credentials Credentials) (UsageSn
 }
 
 func (a *AppServer) ReadResetCredits(ctx context.Context, credentials Credentials) (*ResetCreditsSummary, error) {
-	snapshot, err := a.readRateLimits(ctx, credentials)
+	session, err := startAppServerSession(ctx, a.executable, credentials)
+	if err != nil {
+		return nil, err
+	}
+	defer session.close()
+	snapshot, err := session.readResetCreditDetails(3)
 	return snapshot.ResetCredits, err
+}
+
+// An initial rate-limit read can contain the count before credit details arrive.
+// Retry within the same session and never replace a detailed cache with that
+// incomplete response. A credit with a null expiry is still a complete detail.
+func (s *appServerSession) readResetCreditDetails(id int) (appServerRateLimitSnapshot, error) {
+	for attempt := 0; attempt < 3; attempt++ {
+		snapshot, err := s.readRateLimits(id + attempt)
+		if err != nil {
+			return snapshot, err
+		}
+		credits := snapshot.ResetCredits
+		if credits == nil || credits.AvailableCount == 0 || len(credits.Credits) > 0 {
+			return snapshot, nil
+		}
+	}
+	return appServerRateLimitSnapshot{}, fmt.Errorf("Codex reset credit details are temporarily unavailable")
 }
 
 func (a *AppServer) ConsumeResetCredit(ctx context.Context, credentials Credentials, creditID, idempotencyKey string) (ConsumeResetCreditResult, error) {
@@ -103,7 +125,7 @@ func (a *AppServer) ConsumeResetCredit(ctx context.Context, credentials Credenti
 	if err = session.call(3, "account/rateLimitResetCredit/consume", params, &consumed); err != nil {
 		return ConsumeResetCreditResult{}, err
 	}
-	snapshot, err := session.readRateLimits(4)
+	snapshot, err := session.readResetCreditDetails(4)
 	if err != nil {
 		slog.Warn("Codex reset completed but rate limit refresh failed", "outcome", consumed.Outcome, "error", err)
 		return ConsumeResetCreditResult{Outcome: consumed.Outcome}, nil

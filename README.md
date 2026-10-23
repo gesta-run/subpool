@@ -218,8 +218,12 @@ weekly windows. At least one window must be present. Quota must be checked
 within 15 minutes and error-free; every present window must have a valid usage
 percentage and a future reset timestamp. An omitted window is not assumed to
 have zero or unlimited capacity. A candidate must improve the score by more than
-five percentage points and have the same plan, provider, priority, credential
-type, and fast-mode setting. Health, cooldown and key-capacity checks still
+five percentage points within the same priority tier and have the same plan,
+provider, credential type, and fast-mode setting. A healthy, fresh account in a
+lower-numbered priority tier takes precedence regardless of the quota gap, so
+an independent request returns to a recovered primary after failover. Configure
+a separate pool with distinct membership priorities for primary/fallback use;
+equal-priority pools retain quota balancing. Health, cooldown and key-capacity checks still
 apply. Equal scores prefer lower weighted key count. Missing or stale data
 keeps the current binding; normal availability failover remains unchanged.
 

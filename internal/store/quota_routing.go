@@ -46,37 +46,41 @@ func (p *Postgres) PreferQuotaAccount(ctx context.Context, route domain.KeyRoute
 	now := time.Now()
 	var currentScore float64
 	var currentPlan string
+	var currentPriority int32
 	currentValid := false
 	for _, c := range candidates {
 		if c.ID == currentID {
+			currentPriority = c.Priority
 			currentScore, currentPlan, currentValid = quotaRoutingScore(c.QuotaSnapshot, optionalTime(c.QuotaCheckedAt), c.QuotaError, now)
 		}
 	}
 	selected := currentID
 	bestScore := currentScore
+	bestPriority := currentPriority
 	bestLoad := math.Inf(1)
-	if currentValid {
-		for _, c := range candidates {
-			if c.ID == currentID {
-				continue
-			}
-			score, plan, valid := quotaRoutingScore(c.QuotaSnapshot, optionalTime(c.QuotaCheckedAt), c.QuotaError, now)
-			if !valid || plan != currentPlan || score <= currentScore+quotaRoutingMargin {
-				continue
-			}
-			// Capacity is checked in a new statement after acquiring account locks so
-			// assignments from other pools committed while we waited are visible.
-			capacity, capacityErr := q.ProviderAccountHasCapacity(ctx, c.ID)
-			if capacityErr != nil {
-				return domain.ProviderAccount{}, capacityErr
-			}
-			if !capacity {
-				continue
-			}
-			load := float64(c.BoundKeys) / math.Max(1, float64(c.Weight))
-			if selected == currentID || score > bestScore || (score == bestScore && load < bestLoad) {
-				selected, bestScore, bestLoad = c.ID, score, load
-			}
+	for _, c := range candidates {
+		if c.ID == currentID {
+			continue
+		}
+		score, plan, valid := quotaRoutingScore(c.QuotaSnapshot, optionalTime(c.QuotaCheckedAt), c.QuotaError, now)
+		if !valid || c.Priority > bestPriority {
+			continue
+		}
+		// Explicit pool priority takes precedence over quota balancing. Restore
+		// a recovered primary even when the fallback still has more quota.
+		if c.Priority == currentPriority && (!currentValid || plan != currentPlan || score <= currentScore+quotaRoutingMargin) {
+			continue
+		}
+		capacity, capacityErr := q.ProviderAccountHasCapacity(ctx, c.ID)
+		if capacityErr != nil {
+			return domain.ProviderAccount{}, capacityErr
+		}
+		if !capacity {
+			continue
+		}
+		load := float64(c.BoundKeys) / math.Max(1, float64(c.Weight))
+		if c.Priority < bestPriority || selected == currentID || score > bestScore || (score == bestScore && load < bestLoad) {
+			selected, bestPriority, bestScore, bestLoad = c.ID, c.Priority, score, load
 		}
 	}
 	if selected != currentID {
