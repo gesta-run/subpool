@@ -52,6 +52,35 @@ func TestAppServerReadsAndConsumesResetCredits(t *testing.T) {
 	}
 }
 
+func TestAppServerRetriesIncompleteResetCreditDetails(t *testing.T) {
+	for _, mode := range []string{"first", "always", "zero"} {
+		t.Run(mode, func(t *testing.T) {
+			t.Setenv("SUBPOOL_CODEX_PARTIAL_RESET_DETAILS", mode)
+			client := &AppServer{executable: codexTestExecutable(t)}
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			credentials := Credentials{AccessToken: "test-access-token", AccountID: "test-account"}
+			credits, err := client.ReadResetCredits(ctx, credentials)
+			if mode == "always" {
+				if err == nil || credits != nil {
+					t.Fatalf("incomplete details accepted: credits=%+v err=%v", credits, err)
+				}
+				result, consumeErr := client.ConsumeResetCredit(ctx, credentials, "credit-1", "illustrative-idempotency")
+				if consumeErr != nil || result.Outcome != "reset" || result.ResetCredits != nil {
+					t.Fatalf("successful reset lost: result=%+v err=%v", result, consumeErr)
+				}
+				return
+			}
+			if err != nil || credits == nil {
+				t.Fatalf("read failed: %v", err)
+			}
+			if mode == "first" && len(credits.Credits) != 1 || mode == "zero" && credits.AvailableCount != 0 {
+				t.Fatalf("unexpected credits: %+v", credits)
+			}
+		})
+	}
+}
+
 func TestNormalizeAppServerRateLimitsBlocksFullWindow(t *testing.T) {
 	weeklyMinutes := int64(7 * 24 * 60)
 	snapshot := normalizeAppServerRateLimits(appServerRateLimits{
@@ -144,6 +173,7 @@ func TestCodexAppServerHelperProcess(t *testing.T) {
 	}
 	scanner := bufio.NewScanner(os.Stdin)
 	consumed := false
+	reads := 0
 	for scanner.Scan() {
 		var request struct {
 			ID     json.RawMessage `json:"id"`
@@ -175,6 +205,17 @@ func TestCodexAppServerHelperProcess(t *testing.T) {
 			consumed = true
 			result = map[string]any{"outcome": "reset"}
 		case "account/rateLimits/read":
+			reads++
+			mode := os.Getenv("SUBPOOL_CODEX_PARTIAL_RESET_DETAILS")
+			if mode == "always" || mode == "first" && reads == 1 || mode == "zero" {
+				count := 2
+				if mode == "zero" {
+					count = 0
+				}
+				response, _ := json.Marshal(map[string]any{"id": request.ID, "result": map[string]any{"rateLimitResetCredits": map[string]any{"availableCount": count, "credits": nil}}})
+				_, _ = fmt.Fprintln(os.Stdout, string(response))
+				continue
+			}
 			if consumed && os.Getenv("SUBPOOL_CODEX_FAIL_POST_RESET_READ") == "1" {
 				response, _ := json.Marshal(map[string]any{"id": request.ID, "error": map[string]any{"code": -32000, "message": "rate limit refresh failed"}})
 				_, _ = fmt.Fprintln(os.Stdout, string(response))

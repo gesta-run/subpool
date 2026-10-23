@@ -638,14 +638,14 @@ func (q *Queries) LockPoolForUpdate(ctx context.Context, id string) (string, err
 const lockQuotaRoutingCandidates = `-- name: LockQuotaRoutingCandidates :many
 SELECT a.id, a.quota_snapshot, a.quota_checked_at,
     COALESCE(a.last_quota_error_code, '')::text AS quota_error,
-    pa.weight,
+    pa.weight, pa.priority,
     (SELECT count(*) FROM api_key_account_bindings b JOIN api_keys k ON k.id = b.api_key_id
      WHERE b.provider_account_id = a.id AND k.revoked_at IS NULL
        AND (k.expires_at IS NULL OR k.expires_at > now()))::bigint AS bound_keys
 FROM provider_accounts a
 JOIN pool_accounts pa ON pa.provider_account_id = a.id AND pa.pool_id = $1 AND pa.enabled
 JOIN pool_accounts current_pa ON current_pa.provider_account_id = $2
-    AND current_pa.pool_id = pa.pool_id AND current_pa.enabled AND current_pa.priority = pa.priority
+    AND current_pa.pool_id = pa.pool_id AND current_pa.enabled AND pa.priority <= current_pa.priority
 JOIN provider_accounts current_account ON current_account.id = current_pa.provider_account_id
 WHERE a.provider = 'codex' AND current_account.provider = 'codex'
   AND a.credential_type = current_account.credential_type
@@ -667,6 +667,7 @@ type LockQuotaRoutingCandidatesRow struct {
 	QuotaCheckedAt pgtype.Timestamptz
 	QuotaError     string
 	Weight         int32
+	Priority       int32
 	BoundKeys      int64
 }
 
@@ -685,6 +686,7 @@ func (q *Queries) LockQuotaRoutingCandidates(ctx context.Context, arg LockQuotaR
 			&i.QuotaCheckedAt,
 			&i.QuotaError,
 			&i.Weight,
+			&i.Priority,
 			&i.BoundKeys,
 		); err != nil {
 			return nil, err

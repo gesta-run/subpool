@@ -196,3 +196,73 @@ func TestPostgresQuotaRoutingPreservesSessionsAndCapacity(t *testing.T) {
 		t.Fatalf("session migrated: %s %v", pinned.ID, err)
 	}
 }
+
+func TestPostgresQuotaRoutingRestoresHigherPriorityPrimary(t *testing.T) {
+	databaseURL := os.Getenv("SUBPOOL_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("SUBPOOL_TEST_DATABASE_URL is not set")
+	}
+	ctx := context.Background()
+	db, err := Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	db.WithCodexQuotaRouting(true)
+	now := time.Now()
+	pool := domain.Pool{ID: "00000000-0000-4000-8000-000000009310", Name: "Illustrative primary pool", Provider: domain.ProviderCodex}
+	if err = db.CreatePool(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	accounts := make([]domain.ProviderAccount, 2)
+	for i := range accounts {
+		accounts[i] = domain.ProviderAccount{ID: fmt.Sprintf("00000000-0000-4000-8000-%012d", 9300+i), Provider: domain.ProviderCodex, CredentialType: domain.CredentialSubscription, DisplayName: "Illustrative primary account", SubjectHMAC: bytes.Repeat([]byte{byte(231 + i)}, 32), CredentialCiphertext: []byte("encrypted"), CredentialVersion: 1, Status: domain.AccountActive, HealthStatus: domain.HealthHealthy}
+		if err = db.CreateProviderAccount(ctx, accounts[i]); err != nil {
+			t.Fatal(err)
+		}
+		if err = db.AddPoolAccount(ctx, domain.PoolAccount{PoolID: pool.ID, ProviderAccountID: accounts[i].ID, Weight: 1, Priority: i * 10, Enabled: true}); err != nil {
+			t.Fatal(err)
+		}
+		if err = db.UpdateProviderDetails(ctx, accounts[i].ID, "", testQuota(now, 10, 10), now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	key := domain.APIKey{ID: "00000000-0000-4000-8000-000000009320", PoolID: pool.ID, EmployeeName: "Illustrative primary user", KeyHMAC: bytes.Repeat([]byte{241}, 32), KeyHint: "test"}
+	if _, err = db.CreateAPIKeyAndBind(ctx, key); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.ReassignAPIKey(ctx, key.ID, pool.ID, []string{accounts[0].ID}); err != nil {
+		t.Fatal(err)
+	}
+	sessionHash := bytes.Repeat([]byte{242}, 32)
+	if err = db.SaveSessionBinding(ctx, key.ID, pool.ID, sessionHash, accounts[1].ID, now.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name    string
+		used    float64
+		checked time.Time
+		want    int
+	}{
+		{"exhausted primary stays on fallback", 100, now, 1},
+		{"stale primary stays on fallback", 10, now.Add(-time.Hour), 1},
+		{"recovered primary overrides higher fallback quota", 99, now, 0},
+		{"primary is not balanced away", 99, now, 0},
+	} {
+		if err = db.UpdateProviderDetails(ctx, accounts[0].ID, "", testQuota(now, 10, test.used), test.checked); err != nil {
+			t.Fatal(err)
+		}
+		route, resolveErr := db.ResolveAPIKey(ctx, key.KeyHMAC)
+		if resolveErr != nil {
+			t.Fatal(resolveErr)
+		}
+		selected, selectErr := db.PreferQuotaAccount(ctx, route)
+		if selectErr != nil || selected.ID != accounts[test.want].ID {
+			t.Fatalf("%s: selected=%s err=%v", test.name, selected.ID, selectErr)
+		}
+	}
+	pinned, err := db.ResolveSessionAccount(ctx, key.ID, sessionHash)
+	if err != nil || pinned.ID != accounts[1].ID {
+		t.Fatalf("continuation moved: account=%s err=%v", pinned.ID, err)
+	}
+}
