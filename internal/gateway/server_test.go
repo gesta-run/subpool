@@ -710,6 +710,41 @@ func TestNewRequestReturnsFromPaidFallbackToSubscription(t *testing.T) {
 	}
 }
 
+func TestAPIPoolRechecksPriorityWithoutMovingContinuations(t *testing.T) {
+	for _, continuation := range []bool{false, true} {
+		t.Run(fmt.Sprintf("continuation=%t", continuation), func(t *testing.T) {
+			server, st, _, plain := newTestServer(t)
+			cipher := server.cipher.(*credential.Cipher)
+			fallback := compatibleAccountWithCipher(t, cipher, "fallback-api")
+			primary := compatibleAccountWithCipher(t, cipher, "primary-api")
+			raw, err := json.Marshal(openaicompat.Credentials{BaseURL: "https://primary.example.com/v1", APIKey: "sk-primary-placeholder"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			primary.CredentialCiphertext, err = cipher.Encrypt(raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			st.route.Pool.Provider = domain.ProviderOpenAICompatible
+			st.route.Account = fallback
+			st.sessionAccount = fallback
+			st.reassignedAccounts = []domain.ProviderAccount{primary}
+			compatible := &fakeCompatibleProvider{}
+			server.compatible = compatible
+			body := `{"model":"example-model","input":"hello"}`
+			wantKey, wantReassignments := "sk-primary-placeholder", 1
+			if continuation {
+				body = `{"model":"example-model","previous_response_id":"resp-existing","input":"continue"}`
+				wantKey, wantReassignments = "sk-paid-placeholder", 0
+			}
+			recorder := serveGateway(t, server, plain, "/v1/responses", body)
+			if recorder.Code != http.StatusOK || compatible.credentials.APIKey != wantKey || len(st.reassignExcludes) != wantReassignments {
+				t.Fatalf("status=%d primary=%t reassignments=%d body=%s", recorder.Code, compatible.credentials.APIKey == "sk-primary-placeholder", len(st.reassignExcludes), recorder.Body.String())
+			}
+		})
+	}
+}
+
 func TestProviderAttemptsAreBoundedWithoutReassigningPastLimit(t *testing.T) {
 	server, st, provider, plain := newTestServer(t)
 	for index := 2; index <= maxProviderAttempts+1; index++ {

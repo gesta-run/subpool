@@ -356,7 +356,7 @@ func (s *Server) call(w http.ResponseWriter, r *http.Request, route domain.KeyRo
 			return nil, false
 		}
 	}
-	if !continuation && !isImageRequest(request.Kind) && route.Pool.Provider == domain.ProviderMixed && account.CredentialType == domain.CredentialAPIKey {
+	if !continuation && !isImageRequest(request.Kind) && (route.Pool.Provider == domain.ProviderMixed || route.Pool.Provider == domain.ProviderOpenAICompatible) && account.CredentialType == domain.CredentialAPIKey {
 		if preferred, reassignErr := s.store.ReassignAPIKey(r.Context(), route.Key.ID, route.Pool.ID, nil); reassignErr == nil {
 			account = preferred
 		}
