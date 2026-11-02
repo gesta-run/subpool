@@ -48,12 +48,15 @@ export function AccountsPage() {
   const resets = useResetCredits(list.reload)
   const models = useAccountModels()
   const [quotaAccount, setQuotaAccount] = useState<ProviderAccount | null>(null)
+  const [showDisabled, setShowDisabled] = useState(false)
+  const visibleAccounts = list.items.filter((account) => showDisabled || account.status !== 'disabled')
+  const disabledCount = list.items.filter((account) => account.status === 'disabled').length
   const [pending, setPending] = useState<PendingAction | null>(null)
   const initialQuotaChecks = useRef(new Set<string>())
 
   useEffect(() => {
     list.items
-      .filter((account) => account.provider === 'codex' && account.credential_type !== 'api_key')
+      .filter((account) => account.provider === 'codex' && account.credential_type !== 'api_key' && account.status !== 'disabled')
       .forEach((account) => void resets.load(account.id))
   }, [list.items])
 
@@ -93,10 +96,11 @@ export function AccountsPage() {
       {!list.loading && !list.error && list.items.length > 0 ? <button className="button button--primary" type="button" onClick={() => connect.setOpen(true)}><PlusIcon className="button__icon" /> Connect account</button> : null}
     </header>
     {list.loading ? <PageSkeleton metrics={3} variant="table" /> : <>
-      <AccountSummary accounts={list.items} />
+      <AccountSummary accounts={list.items.filter((account) => account.status !== 'disabled')} />
+      {disabledCount > 0 ? <label><input type="checkbox" checked={showDisabled} onChange={(event) => setShowDisabled(event.target.checked)} /> Show disabled accounts ({disabledCount})</label> : null}
       {mutations.error ? <div className="inline-alert" role="alert">{mutations.error}</div> : null}
-      {list.error ? <StatePanel kind="error" title="Accounts unavailable" description={list.error} actionLabel="Try again" onAction={() => void list.reload()} /> : list.items.length === 0 ? <StatePanel kind="empty" title="No accounts connected" description="Connect a provider account before creating a pool." actionLabel="Connect account" onAction={() => connect.setOpen(true)} /> : <AccountTable
-        accounts={list.items} busyID={mutations.busyID} resetBusyID={resets.busyID} resetStates={resets.states}
+      {list.error ? <StatePanel kind="error" title="Accounts unavailable" description={list.error} actionLabel="Try again" onAction={() => void list.reload()} /> : visibleAccounts.length === 0 && list.items.length > 0 ? <StatePanel kind="empty" title="No enabled accounts" description="Disabled accounts are saved and can be enabled again." actionLabel="Show disabled accounts" onAction={() => setShowDisabled(true)} /> : list.items.length === 0 ? <StatePanel kind="empty" title="No accounts connected" description="Connect a provider account before creating a pool." actionLabel="Connect account" onAction={() => connect.setOpen(true)} /> : <AccountTable
+        accounts={visibleAccounts} busyID={mutations.busyID} resetBusyID={resets.busyID} resetStates={resets.states}
         onQuotaAuthorize={setQuotaAccount} onModels={models.open} onRefresh={(account) => void mutations.refresh(account, account.provider === 'codex' && account.credential_type !== 'api_key' ? () => resets.load(account.id, true) : undefined)}
         onResetLoad={(account) => void resets.load(account.id, true)} onReset={(account, creditID) => setPending({ type: 'reset', account, creditID })}
         onFastMode={toggleFastMode} onToggle={toggle} onRemove={(account) => setPending({ type: 'remove', account })}

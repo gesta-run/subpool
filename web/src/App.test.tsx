@@ -111,7 +111,7 @@ describe('Subpool console', () => {
     vi.mocked(fetch).mockImplementation(async (input, init) => {
       const path = String(input)
       if (path === '/api/v1/provider-accounts/account-1' && init?.method === 'PUT') {
-        status = 'disabled'
+        status = JSON.parse(String(init.body)).status
         return json({ id: 'account-1', status })
       }
       if (path === '/api/v1/provider-accounts') return json({ data: [{ id: 'account-1', display_name: 'Primary Codex', provider: 'codex', status, assigned_api_keys: 1 }] })
@@ -129,9 +129,14 @@ describe('Subpool console', () => {
     await user.click(await screen.findByRole('button', { name: 'Disable Primary Codex' }))
     await user.click(await screen.findByRole('button', { name: 'Disable account' }))
 
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Enable Primary Codex' })).toBeInTheDocument())
+    await screen.findByText('No enabled accounts')
+    expect(screen.queryByText('Primary Codex')).not.toBeInTheDocument()
+    await user.click(screen.getByRole('checkbox', { name: /Show disabled accounts/ }))
+    expect(screen.getByRole('button', { name: 'Enable Primary Codex' })).toBeInTheDocument()
     const update = vi.mocked(fetch).mock.calls.find(([path, init]) => String(path).endsWith('/account-1') && init?.method === 'PUT')
     expect(JSON.parse(String(update?.[1]?.body))).toEqual({ status: 'disabled' })
+    await user.click(screen.getByRole('button', { name: 'Enable Primary Codex' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Disable Primary Codex' })).toBeInTheDocument())
   })
 
   it('refreshes Codex credentials and quota together', async () => {

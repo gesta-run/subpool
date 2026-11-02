@@ -148,12 +148,12 @@ export function OverviewPage() {
 
       {loading ? <PageSkeleton metrics={4} variant="dashboard" /> : (
         <>
-          <OverviewMetrics accounts={accounts.items} pools={pools.items} keys={activeKeys} input={summary.input_tokens} output={summary.output_tokens} />
+          <OverviewMetrics accounts={accounts.items.filter((account) => account.status !== 'disabled')} pools={pools.items} keys={activeKeys} input={summary.input_tokens} output={summary.output_tokens} />
           <div className="overview-grid">
-            <AssignmentsPanel accounts={accounts.items} error={accounts.error} onReload={() => void accounts.reload()} />
+            <AssignmentsPanel accounts={accounts.items.filter((account) => account.status !== 'disabled')} error={accounts.error} onReload={() => void accounts.reload()} />
             <UsagePanel items={topUsage} error={usage.error} onReload={() => void usage.reload()} />
           </div>
-          <RecentKeysPanel accounts={accounts.items} keys={activeKeys} pools={pools.items} usageByKey={recentUsage.items} error={keys.error || recentUsage.error} onReload={() => { void keys.reload(); void recentUsage.reload() }} />
+          <RecentKeysPanel accounts={accounts.items.filter((account) => account.status !== 'disabled')} keys={activeKeys} pools={pools.items} usageByKey={recentUsage.items} error={keys.error || recentUsage.error} onReload={() => { void keys.reload(); void recentUsage.reload() }} />
         </>
       )}
     </section>

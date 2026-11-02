@@ -24,6 +24,7 @@ SELECT a.id, a.display_name, COALESCE(a.email, '')::text AS email, a.provider, a
     COALESCE(c.employees, '[]'::jsonb)::jsonb AS employees
 FROM provider_accounts a
 LEFT JOIN account_counts c ON c.provider_account_id = a.id
+WHERE a.status <> 'disabled'
 ORDER BY a.created_at;
 
 -- name: RecordProviderRequest :exec
