@@ -74,6 +74,33 @@ func TestReportCountsPersistDeduplicateAndClaimOnce(t *testing.T) {
 	if count != 2 {
 		t.Fatalf("duplicate response counted: %d", count)
 	}
+
+	// Disabling hides the row from future reports without deleting history.
+	if err = db.UpdateProviderStatus(ctx, accountID, domain.AccountDisabled, nil); err != nil {
+		t.Fatal(err)
+	}
+	hidden, err := db.ReportAccounts(ctx, start, time.Now().Add(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range hidden {
+		if row.ID == accountID {
+			t.Fatal("disabled account appeared in report")
+		}
+	}
+	if err = db.UpdateProviderStatus(ctx, accountID, domain.AccountActive, nil); err != nil {
+		t.Fatal(err)
+	}
+	restored, err := db.ReportAccounts(ctx, start, time.Now().Add(time.Second))
+	foundRestored := false
+	for _, row := range restored {
+		if row.ID == accountID {
+			foundRestored = row.Requests == 2
+		}
+	}
+	if err != nil || !foundRestored {
+		t.Fatal("enabling did not restore account history")
+	}
 	baseline, err := db.ReportUnattributedRequests(ctx, start, time.Now().Add(time.Second))
 	if err != nil {
 		t.Fatal(err)

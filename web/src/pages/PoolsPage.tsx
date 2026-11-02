@@ -177,6 +177,11 @@ export function PoolsPage() {
   const [actionError, setActionError] = useState('')
 
   const activeAccounts = accounts.items.filter((account) => account.status === 'active')
+  const disabledIDs = new Set(accounts.items.filter((account) => account.status === 'disabled').map((account) => account.id))
+  const visiblePools = items.map((pool) => {
+    const members = pool.accounts?.filter((member) => !disabledIDs.has(member.provider_account_id))
+    return { ...pool, accounts: members, account_count: members ? members.length : pool.account_count }
+  })
   const pageLoading = loading || accounts.loading
   const loadError = error || accounts.error
   const createNameError = nameTouched && !name.trim() ? 'Enter a pool name.' : ''
@@ -250,11 +255,11 @@ export function PoolsPage() {
     })
   }
 
-  const accountTotal = items.reduce((sum, pool) => sum + (pool.account_count ?? pool.accounts?.length ?? 0), 0)
+  const accountTotal = visiblePools.reduce((sum, pool) => sum + (pool.account_count ?? pool.accounts?.length ?? 0), 0)
 
   return (
     <section aria-labelledby="pools-heading">
-      <PoolsContent pools={items} loading={pageLoading} loadError={loadError} actionError={actionError} modalOpen={showCreate || Boolean(managePool)} accountTotal={accountTotal} onCreate={openCreate} onReload={() => { void reload(); void accounts.reload() }} onManage={(pool) => { setActionError(''); setManagePool(pool); setManageName(pool.name); setAttachAccountIDs([]) }} />
+      <PoolsContent pools={visiblePools} loading={pageLoading} loadError={loadError} actionError={actionError} modalOpen={showCreate || Boolean(managePool)} accountTotal={accountTotal} onCreate={openCreate} onReload={() => { void reload(); void accounts.reload() }} onManage={(pool) => { setActionError(''); setManagePool(pool); setManageName(pool.name); setAttachAccountIDs([]) }} />
       {showCreate ? <CreatePoolDialog accounts={activeAccounts} accountsError={accounts.error} accountsLoading={accounts.loading} actionError={actionError} createAccountsError={createAccountsError} createNameError={createNameError} name={name} saving={saving} selected={createAccountIDs} onClose={() => setShowCreate(false)} onGoToAccounts={() => { setShowCreate(false); window.location.hash = '#/accounts' }} onNameChange={setName} onNameBlur={() => setNameTouched(true)} onReloadAccounts={() => void accounts.reload()} onSelect={(accountID, selected) => setAccountSelected(setCreateAccountIDs, accountID, selected)} onSubmit={() => void createPool()} /> : null}
       {managePool ? <ManagePoolDialog pool={managePool} accounts={accounts.items} candidates={activeAccounts.filter((account) => !managePool.accounts?.some((membership) => membership.provider_account_id === account.id))} actionError={actionError} name={manageName} saving={saving} selected={attachAccountIDs} onAttach={() => void attachAccounts()} onClose={() => setManagePool(null)} onNameChange={setManageName} onSaveName={() => void savePoolSettings()} onSelect={(accountID, selected) => setAccountSelected(setAttachAccountIDs, accountID, selected)} /> : null}
     </section>

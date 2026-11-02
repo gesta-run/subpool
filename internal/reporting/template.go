@@ -65,7 +65,7 @@ func Render(c Config, r Report) (Message, error) {
 		}
 	}
 	fmt.Fprintf(&text, "\n%s recorded calls in this reporting window.\n", number(r.Total))
-	fmt.Fprintf(&text, "\nReporting window: %s · %s\nCounts cover recorded calls through SubPool. Employee percentages are within each account; shared keys identify the key owner. Direct usage outside SubPool is excluded. Remaining capacity includes direct usage.\n", r.Window, r.Zone)
+	fmt.Fprintf(&text, "\nReporting window: %s · %s\nCounts cover recorded calls through currently enabled SubPool accounts. Employee percentages are within each account; shared keys identify the key owner. Direct usage outside SubPool is excluded. Remaining capacity includes direct usage.\n", r.Window, r.Zone)
 	if r.Unattributed > 0 {
 		fmt.Fprintf(&text, "Calls without retained account attribution: %s (%s). These are included in the total and percentage denominator.\n", number(r.Unattributed), r.UnattributedShare)
 	}
