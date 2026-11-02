@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { request } from '../api'
+import { OpenAIBalanceDialog } from '../components/accounts/OpenAIBalanceDialog'
 import { BailianQuotaDialog } from '../components/accounts/BailianQuotaDialog'
 import { AccountTable } from '../components/accounts/AccountTable'
 import { ConnectAccountDialog } from '../components/accounts/ConnectAccountDialog'
@@ -23,7 +24,7 @@ type PendingAction =
 const quotaFreshnessMs = 5 * 60 * 1000
 
 function needsQuotaRefresh(account: ProviderAccount) {
-  if (account.quota_provider === 'bailian_token_plan') return Boolean(account.quota_authorized) && account.status === 'active' && (!account.quota_checked_at || Date.parse(account.quota_checked_at) <= Date.now() - quotaFreshnessMs)
+  if (account.quota_provider === 'bailian_token_plan' || account.quota_provider === 'openai_api_credits') return Boolean(account.quota_authorized) && account.status === 'active' && (!account.quota_checked_at || Date.parse(account.quota_checked_at) <= Date.now() - quotaFreshnessMs)
   if ((account.provider !== 'codex' && account.provider !== 'copilot' && account.provider !== 'antigravity') || account.credential_type === 'api_key') return false
   if (account.status !== 'active' && account.status !== 'exhausted') return false
   const checkedAt = Date.parse(account.quota_checked_at ?? '')
@@ -101,7 +102,7 @@ export function AccountsPage() {
         onFastMode={toggleFastMode} onToggle={toggle} onRemove={(account) => setPending({ type: 'remove', account })}
       />}
     </>}
-    {quotaAccount ? <BailianQuotaDialog account={quotaAccount} onClose={() => setQuotaAccount(null)} onSaved={() => { void list.reload() }} /> : null}
+    {quotaAccount?.quota_provider === 'openai_api_credits' ? <OpenAIBalanceDialog account={quotaAccount} onClose={() => setQuotaAccount(null)} onSaved={() => { void list.reload() }} /> : quotaAccount ? <BailianQuotaDialog account={quotaAccount} onClose={() => setQuotaAccount(null)} onSaved={() => { void list.reload() }} /> : null}
     {connect.open ? <ConnectAccountDialog google={connect.google} apiKey={connect.apiKey} baseURL={connect.baseURL} busy={connect.busy} displayName={connect.displayName} deviceLogin={connect.deviceLogin} error={connect.error} fieldErrors={connect.fieldErrors} provider={connect.provider} copyStatus={connect.copyStatus} onAPIKeyChange={connect.setAPIKey} onBaseURLChange={connect.setBaseURL} onClose={connect.close} onContinueToProvider={() => void connect.continueToProvider()} onDisplayNameChange={connect.setDisplayName} onFieldErrorsChange={connect.setFieldErrors} onProviderChange={connect.changeProvider} onSubmit={() => void connect.submit()} /> : null}
     {models.account ? <ModelsDialog account={models.account} models={models.models} loading={models.loading} error={models.error} onClose={models.close} onReload={() => void models.reload()} /> : null}
     {pending ? <ConfirmDialog

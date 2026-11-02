@@ -9,6 +9,7 @@ import (
 
 	"github.com/gesta-run/subpool/internal/domain"
 	"github.com/gesta-run/subpool/internal/provider/bailian"
+	"github.com/gesta-run/subpool/internal/provider/openaibilling"
 	"github.com/gesta-run/subpool/internal/provider/openaicompat"
 )
 
@@ -56,6 +57,9 @@ func (c *Checker) compatibleHealth(ctx context.Context, credentials openaicompat
 
 func (c *Checker) compatibleQuota(ctx context.Context, credentials openaicompat.Credentials) Result {
 	result := Result{HealthStatus: domain.HealthHealthy}
+	if openaibilling.SupportsURL(credentials.BaseURL) {
+		return c.openAIQuota(ctx, credentials)
+	}
 	if !bailian.SupportsURL(credentials.BaseURL) {
 		return result
 	}

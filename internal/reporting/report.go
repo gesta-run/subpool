@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/gesta-run/subpool/internal/provider/openaibilling"
 )
 
 type Employee struct {
@@ -20,6 +22,7 @@ type EmployeeRow struct {
 
 type Account struct {
 	ID, Name, Email          string
+	QuotaError               string
 	Provider, CredentialType string
 	Employees                []Employee
 	Requests                 int64
@@ -34,6 +37,8 @@ type Row struct {
 	Bar                                     int
 	AICredits, ResetCredits, CreditExpiry   string
 	ExpirySoon                              bool
+	HideBar                                 bool
+	BalanceUpdated, BalanceStatus           string
 }
 type ResetResult struct {
 	Account, Outcome, Before, After, Detail string
@@ -179,6 +184,9 @@ type quotaWindow struct {
 }
 
 func fillQuota(row *Row, a Account, now time.Time, location *time.Location) {
+	if fillOpenAIBalance(row, a, now, location) {
+		return
+	}
 	if !freshQuota(a.CheckedAt, now) {
 		return
 	}
@@ -216,4 +224,39 @@ func fillQuota(row *Row, a Account, now time.Time, location *time.Location) {
 	}
 	row.Bar = int(math.Round(*window.Remaining))
 	row.Reset = kind + " · " + resetLabel(time.Unix(window.Reset, 0), now, location)
+}
+
+func fillOpenAIBalance(row *Row, a Account, now time.Time, location *time.Location) bool {
+	var snapshot struct {
+		PlanType string `json:"plan_type"`
+		Balance  *struct {
+			Remaining *float64 `json:"remaining_usd"`
+			ExpiresAt int64    `json:"expires_at"`
+		} `json:"balance"`
+	}
+	if json.Unmarshal(a.Snapshot, &snapshot) != nil || snapshot.PlanType != openaibilling.PlanType {
+		return false
+	}
+	row.HideBar = true
+	if snapshot.Balance == nil || snapshot.Balance.Remaining == nil || a.CheckedAt.IsZero() || a.CheckedAt.After(now.Add(time.Minute)) {
+		return true
+	}
+	row.Remaining = fmt.Sprintf("$%.2f", *snapshot.Balance.Remaining)
+	row.Reset = "Credit expiry not reported"
+	if snapshot.Balance.ExpiresAt > 0 {
+		expiry := time.Unix(snapshot.Balance.ExpiresAt, 0)
+		if expiry.After(now) {
+			row.Reset = timeLabel("Credits expire", expiry, now, location)
+		} else {
+			row.Reset = "Credits expired " + expiry.In(location).Format("2006-01-02 · 15:04")
+		}
+	}
+	row.BalanceUpdated = "Updated " + a.CheckedAt.In(location).Format("2006-01-02 · 15:04")
+	if !freshQuota(a.CheckedAt, now) || a.QuotaError != "" {
+		row.BalanceStatus = "Last known balance; refresh unavailable"
+		if a.QuotaError == "quota_authorization_expired" || a.QuotaError == "quota_authorization_required" {
+			row.BalanceStatus = "Last known balance; reconnect billing"
+		}
+	}
+	return true
 }

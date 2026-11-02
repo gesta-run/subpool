@@ -56,15 +56,16 @@ type Result struct {
 }
 
 type Checker struct {
-	store       store.Store
-	cipher      Cipher
-	codex       CodexUsage
-	compatible  CompatibleModels
-	copilot     CopilotCredits
-	bailian     BailianUsage
-	antigravity AntigravityModels
-	refresher   credential.AccountRefresher
-	now         func() time.Time
+	store         store.Store
+	cipher        Cipher
+	codex         CodexUsage
+	compatible    CompatibleModels
+	copilot       CopilotCredits
+	bailian       BailianUsage
+	openaiBalance OpenAIBalance
+	antigravity   AntigravityModels
+	refresher     credential.AccountRefresher
+	now           func() time.Time
 }
 
 func NewChecker(st store.Store, cipher Cipher, codexUsage CodexUsage, compatible CompatibleModels, copilotCredits ...CopilotCredits) *Checker {
