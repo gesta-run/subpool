@@ -348,3 +348,22 @@ describe('AccountTable health states', () => {
     expect(screen.getByRole('progressbar', { name: /weekly usage remaining/i })).toHaveAttribute('aria-valuenow', '60')
   })
 })
+
+describe('OpenAI API balance', () => {
+  it('shows dollars and billing expiry, and labels expired authorization without disabling model routing', () => {
+    // Illustrative values only.
+    renderTable({ ...baseAccount, provider: 'openai_compatible', credential_type: 'api_key', quota_provider: 'openai_api_credits', quota_authorized: true, last_quota_error_code: 'quota_authorization_expired', quota_snapshot: { plan_type: 'openai_api_credits', balance: { remaining_usd: 37.5, used_usd: 12.5, granted_usd: 50, paid_available_usd: 0, expires_at: 1900000000 } } }, {}, { onQuotaAuthorize: vi.fn() })
+    expect(screen.getByText('$37.50')).toBeInTheDocument()
+    expect(screen.getByText('last known API credits')).toBeInTheDocument()
+    expect(screen.getByText(/Credits expire.*Beijing time/)).toBeInTheDocument()
+    expect(screen.getByText('Routing enabled')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Manage billing' })).toBeInTheDocument()
+    expect(screen.queryByRole('progressbar')).not.toBeInTheDocument()
+  })
+
+  it('offers billing connection for an unconnected API account', () => {
+    renderTable({ ...baseAccount, provider: 'openai_compatible', credential_type: 'api_key', quota_provider: 'openai_api_credits', quota_snapshot: null, quota_authorized: false }, {}, { onQuotaAuthorize: vi.fn() })
+    expect(screen.getByText('Balance not connected')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Connect billing' })).toBeInTheDocument()
+  })
+})

@@ -18,12 +18,13 @@ export interface ProviderAccount {
   last_health_error_code?: string | null
   consecutive_health_failures?: number
   assigned_api_keys?: number
-  quota_provider?: 'bailian_token_plan'
+  quota_provider?: 'bailian_token_plan' | 'openai_api_credits'
   quota_authorized?: boolean
   quota_authorization_method?: 'browser' | 'ram'
   quota_access_key_id_hint?: string
   quota_snapshot?: {
     models?: Record<string, { displayName?: string; quotaInfo?: { remainingFraction: number; resetTime?: string } }>
+    balance?: { granted_usd: number; used_usd: number; remaining_usd: number; paid_available_usd: number; expires_at?: number }
     plan_type?: string
     usage_allowed?: boolean
     limit_reason?: string

@@ -9,12 +9,14 @@ import (
 
 	"github.com/gesta-run/subpool/internal/provider/bailian"
 	providerhttp "github.com/gesta-run/subpool/internal/provider/httpclient"
+	"github.com/gesta-run/subpool/internal/provider/openaibilling"
 )
 
 type Credentials struct {
-	BaseURL      string               `json:"base_url"`
-	APIKey       string               `json:"api_key"`
-	BailianQuota *bailian.Credentials `json:"bailian_quota,omitempty"`
+	BaseURL       string                     `json:"base_url"`
+	APIKey        string                     `json:"api_key"`
+	OpenAIBilling *openaibilling.Credentials `json:"openai_billing,omitempty"`
+	BailianQuota  *bailian.Credentials       `json:"bailian_quota,omitempty"`
 }
 
 type Client struct {

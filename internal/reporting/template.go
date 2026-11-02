@@ -51,6 +51,9 @@ func Render(c Config, r Report) (Message, error) {
 	}
 	for _, a := range r.Rows {
 		fmt.Fprintf(&text, "%s: %s · %s | Capacity left: %s | %s\n", a.Name, a.Requests, a.Share, a.Remaining, a.Reset)
+		if a.BalanceUpdated != "" {
+			fmt.Fprintf(&text, "  %s %s\n", a.BalanceUpdated, a.BalanceStatus)
+		}
 		if a.AICredits != "" {
 			fmt.Fprintf(&text, "  %s AI credits · %s reset credits\n", a.AICredits, a.ResetCredits)
 			if a.CreditExpiry != "" {

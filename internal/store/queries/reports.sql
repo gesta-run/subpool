@@ -19,6 +19,7 @@ WITH employee_counts AS (
 )
 SELECT a.id, a.display_name, COALESCE(a.email, '')::text AS email, a.provider, a.credential_type,
     a.quota_snapshot, a.quota_checked_at, a.reset_credits_snapshot, a.reset_credits_checked_at,
+    COALESCE(a.last_quota_error_code, '')::text AS last_quota_error_code,
     COALESCE(c.requests, 0)::bigint AS requests,
     COALESCE(c.employees, '[]'::jsonb)::jsonb AS employees
 FROM provider_accounts a

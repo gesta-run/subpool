@@ -49,8 +49,9 @@
 <td class="request-value" style="font-size:24px;font-weight:700;letter-spacing:-0.8px;white-space:nowrap;vertical-align:bottom;padding-right:10px">{{.Requests}} · {{.Share}}</td>
 <td align="right" style="white-space:nowrap;vertical-align:bottom"><div style="margin-bottom:3px;font-size:13px;color:#637087">Remaining</div><div style="font-size:{{if gt (len .Remaining) 7}}16px{{else}}26px{{end}};line-height:1.1;font-weight:700;letter-spacing:-0.7px">{{.Remaining}}</div></td>
 </tr></table>
-{{if ne .Remaining "Unavailable"}}<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="height:6px;background:#e9eef6;border-radius:4px"><tr><td width="{{.Bar}}%" style="height:6px;background:#0768fa;border-radius:4px"></td>{{if lt .Bar 100}}<td style="height:6px"></td>{{end}}</tr></table>{{end}}
+{{if and (ne .Remaining "Unavailable") (not .HideBar)}}<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="height:6px;background:#e9eef6;border-radius:4px"><tr><td width="{{.Bar}}%" style="height:6px;background:#0768fa;border-radius:4px"></td>{{if lt .Bar 100}}<td style="height:6px"></td>{{end}}</tr></table>{{end}}
 <p style="margin:10px 0 0;color:#637087;font-size:14px;line-height:1.6">{{.Reset}}</p>
+{{if .BalanceUpdated}}<p style="margin:4px 0 0;color:#637087;font-size:13px;line-height:1.6">{{.BalanceUpdated}}{{if .BalanceStatus}} · {{.BalanceStatus}}{{end}}</p>{{end}}
 <div style="height:1px;background:#edf0f5;margin:17px 0 14px"></div>
 <p style="margin:0 0 7px;font-size:13px;line-height:1.5;color:#637087">Employee requests</p>
 <table width="100%" cellspacing="0" cellpadding="0" border="0" style="font-size:16px;line-height:1.6">
