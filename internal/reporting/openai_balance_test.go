@@ -50,3 +50,18 @@ func TestMissingBalanceIsNeverReportedAsZero(t *testing.T) {
 		}
 	}
 }
+
+func TestEstimatedBalanceIsLabeledInBothEmailFormats(t *testing.T) {
+	now := time.Unix(1800200000, 0)
+	account := Account{Name: "Illustrative API", CheckedAt: now, Snapshot: []byte(`{"plan_type":"openai_api_credits","balance":{"remaining_usd":37.5,"estimated":true,"usage_through":1800172800,"expires_at":1800600000}}`)}
+	r := NewReport(fixtureConfig(), []Account{account}, now.Add(-time.Hour), now, now, false, 0)
+	m, err := Render(fixtureConfig(), r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, body := range []string{m.HTML, m.Text} {
+		if !strings.Contains(body, "Estimated") || !strings.Contains(body, "Costs through") || !strings.Contains(body, "$37.50") {
+			t.Fatal("estimate source or amount missing")
+		}
+	}
+}

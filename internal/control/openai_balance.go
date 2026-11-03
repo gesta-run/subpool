@@ -45,6 +45,9 @@ func (s *Server) describeOpenAIBalance(ctx context.Context, account *domain.Prov
 	account.QuotaAuthorized = credentials.OpenAIBilling != nil
 	if account.QuotaAuthorized {
 		account.QuotaAuthorizationMethod = "browser"
+		if credentials.OpenAIBilling.AdminKey != "" {
+			account.QuotaAuthorizationMethod = "costs"
+		}
 	}
 }
 
@@ -69,8 +72,9 @@ func (s *Server) configureOpenAIBalance(w http.ResponseWriter, r *http.Request) 
 		}
 		request.SessionKey = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(request.SessionKey), "Bearer "))
 		request.OrganizationID = strings.TrimSpace(request.OrganizationID)
+		request.AdminKey = strings.TrimSpace(request.AdminKey)
 		if !request.Valid() {
-			writeError(w, http.StatusBadRequest, "provide a browser session key and organization ID")
+			writeError(w, http.StatusBadRequest, "provide an organization ID and either browser authorization or an Admin key with grant amount, start and expiry")
 			return
 		}
 		client := s.openaiBalance
@@ -84,7 +88,7 @@ func (s *Server) configureOpenAIBalance(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		if snapshot, err = client.Usage(ctx, request); err != nil {
-			writeError(w, http.StatusBadGateway, "billing authorization failed; sign in to the matching API Platform organization again")
+			writeError(w, http.StatusBadGateway, "billing query failed; check the credential, organization and Costs read access")
 			return
 		}
 		credentials.OpenAIBilling = &request

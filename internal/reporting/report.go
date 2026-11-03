@@ -32,6 +32,7 @@ type Account struct {
 	ResetCheckedAt           time.Time
 }
 type Row struct {
+	BalanceEstimated                        bool
 	Employees                               []EmployeeRow
 	Name, Requests, Share, Remaining, Reset string
 	Bar                                     int
@@ -230,8 +231,10 @@ func fillOpenAIBalance(row *Row, a Account, now time.Time, location *time.Locati
 	var snapshot struct {
 		PlanType string `json:"plan_type"`
 		Balance  *struct {
-			Remaining *float64 `json:"remaining_usd"`
-			ExpiresAt int64    `json:"expires_at"`
+			Remaining    *float64 `json:"remaining_usd"`
+			ExpiresAt    int64    `json:"expires_at"`
+			Estimated    bool     `json:"estimated"`
+			UsageThrough int64    `json:"usage_through"`
 		} `json:"balance"`
 	}
 	if json.Unmarshal(a.Snapshot, &snapshot) != nil || snapshot.PlanType != openaibilling.PlanType {
@@ -242,6 +245,7 @@ func fillOpenAIBalance(row *Row, a Account, now time.Time, location *time.Locati
 		return true
 	}
 	row.Remaining = fmt.Sprintf("$%.2f", *snapshot.Balance.Remaining)
+	row.BalanceEstimated = snapshot.Balance.Estimated
 	row.Reset = "Credit expiry not reported"
 	if snapshot.Balance.ExpiresAt > 0 {
 		expiry := time.Unix(snapshot.Balance.ExpiresAt, 0)
@@ -252,6 +256,12 @@ func fillOpenAIBalance(row *Row, a Account, now time.Time, location *time.Locati
 		}
 	}
 	row.BalanceUpdated = "Updated " + a.CheckedAt.In(location).Format("2006-01-02 · 15:04")
+	if snapshot.Balance.Estimated {
+		row.BalanceUpdated = "Estimated · " + row.BalanceUpdated
+		if snapshot.Balance.UsageThrough > 0 {
+			row.BalanceUpdated += " · Costs through " + time.Unix(snapshot.Balance.UsageThrough, 0).In(location).Format("2006-01-02 · 15:04")
+		}
+	}
 	if !freshQuota(a.CheckedAt, now) || a.QuotaError != "" {
 		row.BalanceStatus = "Last known balance; refresh unavailable"
 		if a.QuotaError == "quota_authorization_expired" || a.QuotaError == "quota_authorization_required" {

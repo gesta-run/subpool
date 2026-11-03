@@ -1,5 +1,5 @@
-// Package openaibilling reads the API Platform's browser-authenticated balance.
-// This dashboard endpoint is not a public API; expired sessions require reconnecting.
+// Package openaibilling reads browser-authorized balances or estimates one grant
+// from official organization Costs. Billing credentials are separate from inference.
 package openaibilling
 
 import (
@@ -23,12 +23,22 @@ var (
 )
 
 type Credentials struct {
-	SessionKey     string `json:"session_key"`
-	OrganizationID string `json:"organization_id"`
+	SessionKey     string  `json:"session_key,omitempty"`
+	OrganizationID string  `json:"organization_id"`
+	AdminKey       string  `json:"admin_key,omitempty"`
+	GrantAmount    float64 `json:"grant_amount_usd,omitempty"`
+	GrantStartAt   int64   `json:"grant_start_at,omitempty"`
+	GrantExpiresAt int64   `json:"grant_expires_at,omitempty"`
 }
 
 func (c Credentials) Valid() bool {
-	return c.SessionKey != "" && len(c.SessionKey) <= 8192 && !strings.ContainsAny(c.SessionKey, "\r\n") && strings.HasPrefix(c.OrganizationID, "org-") && !strings.ContainsAny(c.OrganizationID, "\r\n")
+	if !strings.HasPrefix(c.OrganizationID, "org-") || strings.ContainsAny(c.OrganizationID, "\r\n") {
+		return false
+	}
+	if c.AdminKey != "" {
+		return c.SessionKey == "" && strings.HasPrefix(c.AdminKey, "sk-admin-") && len(c.AdminKey) <= 8192 && !strings.ContainsAny(c.AdminKey, "\r\n") && c.GrantAmount > 0 && c.GrantAmount <= 1e15 && !math.IsNaN(c.GrantAmount) && c.GrantStartAt > 0 && c.GrantExpiresAt > c.GrantStartAt && c.GrantExpiresAt <= 253402300799
+	}
+	return c.SessionKey != "" && len(c.SessionKey) <= 8192 && !strings.ContainsAny(c.SessionKey, "\r\n")
 }
 
 func SupportsURL(base string) bool {
@@ -41,6 +51,9 @@ type Balance struct {
 	Remaining     float64 `json:"remaining_usd"`
 	PaidAvailable float64 `json:"paid_available_usd"`
 	ExpiresAt     int64   `json:"expires_at,omitempty"`
+	Estimated     bool    `json:"estimated,omitempty"`
+	UsageThrough  int64   `json:"usage_through,omitempty"`
+	GrantStartAt  int64   `json:"grant_start_at,omitempty"`
 }
 type Snapshot struct {
 	PlanType string  `json:"plan_type"`
@@ -96,6 +109,9 @@ func (c *Client) VerifyAccount(ctx context.Context, apiKey, org string) error {
 func (c *Client) Usage(ctx context.Context, credentials Credentials) (Snapshot, error) {
 	if !credentials.Valid() {
 		return Snapshot{}, ErrAuthorizationExpired
+	}
+	if credentials.AdminKey != "" {
+		return c.estimatedUsage(ctx, credentials)
 	}
 	resp, err := c.get(ctx, "dashboard/billing/credit_grants", credentials.SessionKey, credentials.OrganizationID)
 	if err != nil {
