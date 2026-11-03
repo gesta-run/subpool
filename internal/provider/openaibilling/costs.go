@@ -3,6 +3,7 @@ package openaibilling
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"math"
 	"net/http"
@@ -35,7 +36,7 @@ func (c *Client) estimatedUsage(ctx context.Context, credentials Credentials) (S
 			if resp.StatusCode == 401 || resp.StatusCode == 403 {
 				return Snapshot{}, ErrAuthorizationExpired
 			}
-			return Snapshot{}, ErrUnavailable
+			return Snapshot{}, fmt.Errorf("%w: Costs HTTP %d", ErrUnavailable, resp.StatusCode)
 		}
 		var page struct {
 			Data *[]struct {

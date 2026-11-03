@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 
 	"github.com/gesta-run/subpool/internal/domain"
 	"github.com/gesta-run/subpool/internal/provider/openaibilling"
@@ -26,6 +27,8 @@ func (c *Checker) openAIQuota(ctx context.Context, credentials openaicompat.Cred
 	}
 	snapshot, err := client.Usage(ctx, *credentials.OpenAIBilling)
 	if err != nil {
+		// Billing errors never include credential headers or upstream response bodies.
+		slog.Warn("OpenAI balance read failed", "error", err)
 		result.QuotaErrorCode = "quota_unavailable"
 		if errors.Is(err, openaibilling.ErrAuthorizationExpired) {
 			result.QuotaErrorCode = "quota_authorization_expired"
