@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"math"
 	"net/http"
@@ -85,7 +86,7 @@ func (c *Client) get(ctx context.Context, path, key, org string) (*http.Response
 	req.Header.Set("Accept", "application/json")
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return nil, ErrUnavailable
+		return nil, fmt.Errorf("%w: transport failure (deadline=%t, eof=%t)", ErrUnavailable, errors.Is(err, context.DeadlineExceeded), errors.Is(err, io.EOF))
 	}
 	return resp, nil
 }
