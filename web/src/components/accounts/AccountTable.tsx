@@ -151,9 +151,9 @@ export function AccountTable({ accounts, busyID, resetBusyID, resetStates, onMod
 function BailianQuotaStatus({ account, busy, onAuthorize }: { account: ProviderAccount; busy: boolean; onAuthorize?: (account: ProviderAccount) => void }) {
   const billing = account.quota_provider === 'openai_api_credits'
   const error = account.last_quota_error_code
-  const message = error === 'quota_authorization_required' ? 'Quota authorization required' : error === 'quota_authorization_expired' ? 'Browser authorization expired; sign in again' : error === 'quota_permission_denied' ? 'Grant Token Plan access to this console identity in Bailian' : error ? account.quota_snapshot ? 'Quota refresh failed; showing last known usage' : 'Quota refresh failed' : ''
+  const message = error === 'quota_authorization_required' ? 'Quota authorization required' : error === 'quota_authorization_expired' ? account.quota_authorization_method === 'costs' ? 'Admin authorization rejected; check the key and Costs read access' : 'Browser authorization expired; sign in again' : error === 'quota_permission_denied' ? 'Grant Token Plan access to this console identity in Bailian' : error ? account.quota_snapshot ? 'Quota refresh failed; showing last known usage' : 'Quota refresh failed' : ''
   const attention = Boolean(error) || !account.quota_authorized
-  const label = error === 'quota_authorization_expired' ? 'Authorization expired' : error === 'quota_permission_denied' ? 'Permission required' : error === 'quota_authorization_required' || !account.quota_authorized ? 'Authorization required' : error ? 'Quota refresh failed' : billing ? 'Billing connected' : 'Quota connected'
+  const label = error === 'quota_authorization_expired' ? account.quota_authorization_method === 'costs' ? 'Authorization rejected' : 'Authorization expired' : error === 'quota_permission_denied' ? 'Permission required' : error === 'quota_authorization_required' || !account.quota_authorized ? 'Authorization required' : error ? 'Quota refresh failed' : billing ? 'Billing connected' : 'Quota connected'
   return <div className={`reset-credit quota-authorization${attention ? ' quota-authorization--attention' : ''}`}>
     <div className="reset-credit__action">
       <div className="reset-credit__summary"><i aria-hidden="true" /><span className="reset-credit__copy">
@@ -175,8 +175,9 @@ function OpenAIBalance({ account }: { account: ProviderAccount }) {
   if (!balance || !Number.isFinite(balance.remaining_usd)) return <div className="subscription-summary__empty"><strong>{account.quota_authorized ? 'Balance unavailable' : 'Balance not connected'}</strong><small>Connect billing authorization to read API credits</small></div>
   const stale = Boolean(account.last_quota_error_code) || !account.quota_authorized || !account.quota_checked_at || Date.now() - Date.parse(account.quota_checked_at) > 15 * 60 * 1000
   return <div className="capacity">
-    <span><strong>${balance.remaining_usd.toFixed(2)}</strong> {stale ? 'last known API credits' : 'API credits remaining'}</span>
-    <small>${balance.used_usd.toFixed(2)} used / ${balance.granted_usd.toFixed(2)} granted</small>
+    <span><strong>${balance.remaining_usd.toFixed(2)}</strong> {balance.estimated ? stale ? 'last known estimate' : 'estimated API credits' : stale ? 'last known API credits' : 'API credits remaining'}</span>
+    <small>${balance.used_usd.toFixed(2)} {balance.estimated ? 'reported cost' : 'used'} / ${balance.granted_usd.toFixed(2)} granted</small>
+    {balance.estimated ? <small>{balance.usage_through ? `Costs through ${billingDate(balance.usage_through)}` : 'No cost records reported yet'}</small> : null}
     <small>{balance.expires_at ? `Credits expire ${billingDate(balance.expires_at)}` : 'Credit expiry not reported'}</small>
   </div>
 }

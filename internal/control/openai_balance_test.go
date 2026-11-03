@@ -61,6 +61,27 @@ func TestBillingCredentialsEncryptedAndRejectedOrganizationNotSaved(t *testing.T
 		}
 	}
 }
+func TestCostsCredentialsEncryptedWithoutChangingInference(t *testing.T) {
+	cipher, _ := credential.New(make([]byte, 32))
+	raw, _ := json.Marshal(openaicompat.Credentials{BaseURL: "https://api.openai.com/v1", APIKey: "illustrative-model-key"})
+	encrypted, _ := cipher.Encrypt(raw)
+	st := &quotaConfigStore{controlStore: controlStore{account: domain.ProviderAccount{ID: "example", Provider: domain.ProviderOpenAICompatible, CredentialVersion: 1, CredentialCiphertext: encrypted}}}
+	s := &Server{store: st, cipher: cipher, openaiBalance: billingConfigProbe{}}
+	r := httptest.NewRequest(http.MethodPut, "/", strings.NewReader(`{"admin_key":"sk-admin-illustrative","organization_id":"org-example","grant_amount_usd":50,"grant_start_at":1800000000,"grant_expires_at":1800600000}`))
+	r.SetPathValue("id", "example")
+	w := httptest.NewRecorder()
+	s.configureOpenAIBalance(w, r)
+	if w.Code != 200 || !st.saved || strings.Contains(w.Body.String(), "sk-admin-illustrative") {
+		t.Fatal("cost credential rejected or exposed")
+	}
+	plain, _ := cipher.Decrypt(st.account.CredentialCiphertext)
+	var stored openaicompat.Credentials
+	json.Unmarshal(plain, &stored)
+	if stored.APIKey != "illustrative-model-key" || stored.OpenAIBilling == nil || stored.OpenAIBilling.AdminKey != "sk-admin-illustrative" || stored.OpenAIBilling.SessionKey != "" {
+		t.Fatal("incorrect Costs credential persistence")
+	}
+}
+
 func TestBillingRouteRequiresAdmin(t *testing.T) {
 	mux := http.NewServeMux()
 	s := &Server{}

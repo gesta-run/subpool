@@ -367,3 +367,10 @@ describe('OpenAI API balance', () => {
     expect(screen.getByRole('button', { name: 'Connect billing' })).toBeInTheDocument()
   })
 })
+
+it('labels Costs API estimates and reports the cost cutoff independently of refresh time', () => {
+ renderTable({...baseAccount, provider:'openai_compatible',credential_type:'api_key',quota_provider:'openai_api_credits',quota_authorized:true,quota_authorization_method:'costs',quota_checked_at:new Date().toISOString(),quota_snapshot:{plan_type:'openai_api_credits',balance:{granted_usd:50,used_usd:12.5,remaining_usd:37.5,paid_available_usd:0,estimated:true,usage_through:1800172800}}}, {}, {onQuotaAuthorize:vi.fn()})
+ expect(screen.getByText('estimated API credits')).toBeInTheDocument()
+ expect(screen.getByText(/Costs through.*Beijing time/)).toBeInTheDocument()
+ expect(screen.queryByText(/Browser authorization expired/)).not.toBeInTheDocument()
+})

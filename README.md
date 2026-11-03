@@ -61,6 +61,27 @@ Replace every `replace-with-*` value. Docker Compose pulls the latest published 
 
 ## Connect and use
 
+### OpenAI API credit estimates
+
+For official OpenAI API accounts, choose **Manage billing → Estimated balance · Costs API**.
+Provide a separate Admin API key with Costs read access, the matching organization ID,
+and one grant's amount, start and expiry. Subpool encrypts these credentials, checks
+organization membership against the model key, and uses the existing health worker
+to refresh the estimate. The model key and inference routing stay unchanged.
+
+The estimate is the configured grant minus all organization-wide USD costs since
+its start. All Costs pages must succeed before an estimate is published. Console
+and usage emails label it **Estimated** and show the latest returned cost bucket's
+cutoff separately from the refresh timestamp; Costs may lag behind credit use.
+The estimate becomes zero at grant expiry. Update the grant when new credits arrive;
+this version does not discover new grants, aggregate multiple grants, or estimate
+purchased credit balances. It is a display feature, not a payment cutoff.
+
+Existing browser balance authorization remains supported. Switching to Costs replaces
+that account's temporary browser credential; model access does not depend on either
+billing method. Failed refreshes retain the last snapshot with a stale/error label.
+No new database migration, scheduled job, or external MCP service is required.
+
 ### Bailian Token Plan quota
 
 Beijing Token Plan personal endpoints support automatic five-hour, weekly, or
