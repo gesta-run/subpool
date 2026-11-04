@@ -10,6 +10,8 @@ import (
 	"log/slog"
 	"net/http"
 	"time"
+
+	"github.com/gesta-run/subpool/internal/reporting/modelusage"
 )
 
 type Store interface {
@@ -21,10 +23,13 @@ type Store interface {
 	RetryDailyReport(context.Context, string) error
 }
 type Service struct {
-	Config   Config
-	Store    Store
-	Client   *http.Client
-	Endpoint string
+	Config     Config
+	Store      Store
+	Client     *http.Client
+	Endpoint   string
+	ModelUsage interface {
+		Read(context.Context, time.Time, time.Time) (modelusage.Snapshot, error)
+	}
 }
 
 func (s *Service) Run(ctx context.Context) {
@@ -58,6 +63,7 @@ func (s *Service) SendDue(ctx context.Context, now time.Time) error {
 	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
 	start := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, c.Location)
+	modelStart := start
 	tracking, err := s.Store.ReportTrackingStarted(ctx)
 	if err != nil {
 		return err
@@ -78,6 +84,7 @@ func (s *Service) SendDue(ctx context.Context, now time.Time) error {
 		return err
 	}
 	report := NewReport(c, accounts, start, end, now, partial, unattributed)
+	s.fillModelUsage(ctx, &report, modelStart, end)
 	message, err := Render(c, report)
 	if err != nil {
 		return err

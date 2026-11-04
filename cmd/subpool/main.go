@@ -30,6 +30,7 @@ import (
 	providerhttp "github.com/gesta-run/subpool/internal/provider/httpclient"
 	"github.com/gesta-run/subpool/internal/provider/openaicompat"
 	"github.com/gesta-run/subpool/internal/reporting"
+	"github.com/gesta-run/subpool/internal/reporting/modelusage"
 	"github.com/gesta-run/subpool/internal/resetnotice"
 	"github.com/gesta-run/subpool/internal/store"
 )
@@ -117,6 +118,9 @@ func main() {
 	go healthChecker.Run(stopCtx)
 	go database.RunMaintenance(stopCtx)
 	reporter := &reporting.Service{Config: reportConfig, Store: database}
+	if reportConfig.GestaUsageURL != "" {
+		reporter.ModelUsage = &modelusage.Client{URL: reportConfig.GestaUsageURL, Token: reportConfig.GestaUsageToken}
+	}
 	go reporter.Run(stopCtx)
 	notices := &resetnotice.Service{Config: noticeConfig, Store: database, Sender: &resetnotice.MCP{Config: noticeConfig}}
 	go notices.Run(stopCtx)

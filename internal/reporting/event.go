@@ -4,8 +4,29 @@ import (
 	"context"
 	"fmt"
 	"html"
+	"log/slog"
 	"time"
+
+	"github.com/gesta-run/subpool/internal/reporting/modelusage"
 )
+
+func (s *Service) fillModelUsage(ctx context.Context, r *Report, start, end time.Time) {
+	source := s.ModelUsage
+	if source == nil && s.Config.GestaUsageURL != "" {
+		source = &modelusage.Client{URL: s.Config.GestaUsageURL, Token: s.Config.GestaUsageToken}
+	}
+	if source == nil {
+		return
+	}
+	r.ModelUsage = modelusage.View{Enabled: true, Unavailable: true}
+	snapshot, err := source.Read(ctx, start, end)
+	if err != nil {
+		slog.Warn("employee model report unavailable")
+		return
+	}
+	r.ModelUsage = modelusage.Build(snapshot, number)
+	r.ModelUsage.Window = start.In(s.Config.Location).Format("15:04") + "–" + end.In(s.Config.Location).Format("15:04")
+}
 
 // EventMessage reuses the live daily report queries and template for an event email.
 func (s *Service) EventMessage(ctx context.Context, now time.Time, title, notice, recipient string, results ...ResetResult) Message {
@@ -13,6 +34,7 @@ func (s *Service) EventMessage(ctx context.Context, now time.Time, title, notice
 	c.To = []string{recipient}
 	local := now.In(c.Location)
 	start := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, c.Location)
+	modelStart := start
 	tracking, err := s.Store.ReportTrackingStarted(ctx)
 	partial := err == nil && tracking.After(start)
 	if partial {
@@ -24,6 +46,7 @@ func (s *Service) EventMessage(ctx context.Context, now time.Time, title, notice
 			unattributed, countErr := s.Store.ReportUnattributedRequests(ctx, start, now)
 			if countErr == nil {
 				r := NewReport(c, accounts, start, now, now, partial, unattributed)
+				s.fillModelUsage(ctx, &r, modelStart, now)
 				r.NoticeTitle, r.Notice = title, notice
 				r.ResetResults = results
 				m, renderErr := Render(c, r)

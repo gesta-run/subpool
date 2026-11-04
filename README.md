@@ -267,7 +267,19 @@ Optional daily usage emails run inside the service and send through Resend. They
 | `SUBPOOL_DAILY_REPORT_TO` | Comma-separated team recipients or a mailing group. |
 | `SUBPOOL_DAILY_REPORT_TIME` | Local send time, default `17:50`. |
 | `SUBPOOL_DAILY_REPORT_TIMEZONE` | IANA timezone, default `Asia/Shanghai`. |
+| `SUBPOOL_GESTA_USAGE_REPORT_URL` | Optional Gesta `/api/v1/reports/employee-models` URL. |
+| `SUBPOOL_GESTA_USAGE_REPORT_TOKEN` | Dedicated read-only Gesta report token; configure together with the URL. |
 
 The email contains each Codex account's completed-response count and share, remaining weekly capacity, and reset time. Request counts include completed/incomplete HTTP responses and WebSocket turns with a response ID, deduplicated by key and response. Failed requests, internal probes, and direct account traffic are excluded; upstream capacity includes direct usage. The initial email explicitly states its partial tracking window. Historic requests before installation are not reconstructed from session expiry timestamps.
 
 The database preserves counters and the frozen daily email across restarts. A database lease prevents concurrent sends; retries reuse the frozen body and Resend idempotency key, with a bounded attempt count. An instance that restarts after the send time catches up for that day. It does not replay previous days. Stale or missing quota displays as unavailable, never as zero.
+
+When the optional Gesta feed is configured, daily and reset-event emails also show
+each employee's known model count, recorded turns, most-used model, and per-model
+turn shares for the same local-day cutoff. Captured direct usage is included by
+Gesta; these turns are separate from SubPool account request counts. Unknown
+models remain in the denominator but do not increase the known-model count.
+Employees with no recorded turns stay visible. An unavailable or invalid feed
+adds a clear unavailable notice without blocking the account email. Existing
+schedules, recipients, frozen retries, and Resend delivery remain unchanged.
+Use HTTPS or a private network, and keep the feed token in deployment secrets.
