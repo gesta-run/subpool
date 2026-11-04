@@ -283,3 +283,11 @@ Employees with no recorded turns stay visible. An unavailable or invalid feed
 adds a clear unavailable notice without blocking the account email. Existing
 schedules, recipients, frozen retries, and Resend delivery remain unchanged.
 Use HTTPS or a private network, and keep the feed token in deployment secrets.
+
+The colocated pre deployment joins the existing Gesta Docker network
+(`gesta_default`, overridable with `SUBPOOL_GESTA_NETWORK`) so its feed can use
+`http://control:8080/api/v1/reports/employee-models`. The dedicated read-only
+authorization is still required. This avoids routing internal report reads
+through a public CDN. The standalone Compose deployment keeps its own network.
+The pre database uses the `subpool-postgres` network alias so joining Gesta's
+network cannot resolve its database connection to Gesta's separate `postgres`.
