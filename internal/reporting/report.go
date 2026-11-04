@@ -86,7 +86,7 @@ func NewReport(c Config, accounts []Account, start, end, now time.Time, partial 
 			if a.Requests > 0 {
 				share = fmt.Sprintf("%.1f%%", float64(employee.Requests)*100/float64(a.Requests))
 			}
-			row.Employees = append(row.Employees, EmployeeRow{Name: employee.Name, Requests: number(employee.Requests), Share: share})
+			row.Employees = append(row.Employees, EmployeeRow{Name: c.People.Name(employee.Name), Requests: number(employee.Requests), Share: share})
 		}
 		fillQuota(&row, a, now, c.Location)
 		fillCredits(&row, a, now, c.Location)

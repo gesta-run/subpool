@@ -12,7 +12,49 @@ import (
 	"time"
 
 	"github.com/gesta-run/subpool/internal/reporting/modelusage"
+	"github.com/gesta-run/subpool/internal/reporting/people"
 )
+
+type fixedModelSource struct{ snapshot modelusage.Snapshot }
+
+func (f fixedModelSource) Read(context.Context, time.Time, time.Time) (modelusage.Snapshot, error) {
+	return f.snapshot, nil
+}
+
+func TestReportPeopleNamesAndExclusionsPreserveSourceAndRecomputeTotals(t *testing.T) {
+	c := fixtureConfig()
+	var err error
+	c.People, err = people.Parse(`{"names":{"am":"Alex Morgan","alex@example.test":"Alex Morgan"},"excluded":["retired@example.test"]}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	snapshot := modelusage.Snapshot{Employees: []modelusage.Employee{
+		{ID: "a", Name: "am", Email: "alex@example.test", Models: []modelusage.Model{{Model: "gpt-6.1-sol", Turns: 8}}},
+		{ID: "r", Name: "retired", Email: "retired@example.test", Models: []modelusage.Model{{Model: "excluded-model", Turns: 7}}},
+	}}
+	r := NewReport(c, []Account{{Name: "Account", Requests: 8, Employees: []Employee{{Name: "AM", Requests: 8}}}}, now.Add(-time.Hour), now, now, false, 0)
+	s := &Service{Config: c, ModelUsage: fixedModelSource{snapshot}}
+	s.fillModelUsage(context.Background(), &r, now.Add(-time.Hour), now)
+	if r.Rows[0].Employees[0].Name != "Alex Morgan" || r.Rows[0].Employees[0].Requests != "8" || r.Rows[0].Employees[0].Share != "100.0%" {
+		t.Fatal("account attribution changed")
+	}
+	if r.ModelUsage.Turns != "8" || r.ModelUsage.ModelCount != 1 || len(r.ModelUsage.Employees) != 1 || r.ModelUsage.Employees[0].Name != "Alex Morgan" {
+		t.Fatalf("model summary: %+v", r.ModelUsage)
+	}
+	if snapshot.Employees[0].Name != "am" || len(snapshot.Employees) != 2 {
+		t.Fatal("cached Gesta source was mutated")
+	}
+	m, err := Render(c, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, body := range []string{m.HTML, m.Text} {
+		if !strings.Contains(body, "Alex Morgan") || strings.Contains(body, "retired") || strings.Contains(body, "excluded-model") {
+			t.Fatal("report display policy not applied consistently")
+		}
+	}
+}
 
 func TestModelUsageEmailEscapesNamesKeepsEmptyEmployeesAndSeparatesMetrics(t *testing.T) {
 	c := fixtureConfig()
