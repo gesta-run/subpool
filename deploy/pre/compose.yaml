@@ -3,6 +3,9 @@ name: subpool-pre
 services:
   subpool:
     image: ${SUBPOOL_IMAGE:?Set SUBPOOL_IMAGE}
+    networks:
+      - default
+      - gesta
     restart: unless-stopped
     depends_on:
       postgres:
@@ -74,3 +77,8 @@ services:
 
 volumes:
   subpool-postgres:
+
+networks:
+  gesta:
+    external: true
+    name: ${SUBPOOL_GESTA_NETWORK:-gesta_default}
