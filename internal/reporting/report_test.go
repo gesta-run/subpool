@@ -10,7 +10,61 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/gesta-run/subpool/internal/reporting/modelusage"
 )
+
+func TestModelUsageEmailEscapesNamesKeepsEmptyEmployeesAndSeparatesMetrics(t *testing.T) {
+	c := fixtureConfig()
+	now := time.Now()
+	r := NewReport(c, []Account{{Name: "Subscription", Requests: 5}}, now.Add(-time.Hour), now, now, false, 0)
+	r.ModelUsage = modelusage.Build(modelusage.Snapshot{Employees: []modelusage.Employee{
+		{ID: "alice", Name: "<script>alert(1)</script>", Models: []modelusage.Model{{Model: "gpt-6.1-sol", Turns: 8}, {Model: "unknown", Turns: 2}}},
+		{ID: "empty", Name: "Empty employee"},
+	}}, number)
+	m, err := Render(c, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Account usage", "Models used by the team", "GPT-6.1 Sol", "80.0%", "Model not recorded", "Empty employee", "No turns recorded", "Turns and API requests are separate metrics"} {
+		if !strings.Contains(m.HTML, want) {
+			t.Errorf("HTML missing %q", want)
+		}
+	}
+	if strings.Contains(m.HTML, "<script>") || strings.Contains(m.HTML, "ZgotmplZ") || !strings.Contains(m.Text, "5 recorded calls") || !strings.Contains(m.Text, "10 recorded turns") {
+		t.Fatal("escaping, styles, or metric separation failed")
+	}
+	r.ModelUsage = modelusage.View{Enabled: true, Unavailable: true}
+	m, err = Render(c, r)
+	if err != nil || !strings.Contains(m.HTML, "Employee model usage unavailable") || !strings.Contains(m.Text, "Account request counts above are unaffected") {
+		t.Fatal("unavailable feed is not explicit", err)
+	}
+}
+
+type failingModelSource struct{}
+
+func (failingModelSource) Read(context.Context, time.Time, time.Time) (modelusage.Snapshot, error) {
+	return modelusage.Snapshot{}, io.ErrUnexpectedEOF
+}
+
+func TestUnavailableModelFeedDoesNotBlockScheduledAccountEmail(t *testing.T) {
+	var sent Message
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&sent); err != nil {
+			t.Error(err)
+		}
+		io.WriteString(w, `{"id":"illustrative-email"}`)
+	}))
+	defer server.Close()
+	s := &Service{Config: fixtureConfig(), Store: &fakeStore{count: 5}, ModelUsage: failingModelSource{}, Client: server.Client(), Endpoint: server.URL}
+	cutoff := time.Date(2026, 1, 2, 9, 50, 0, 0, time.UTC)
+	if err := s.SendDue(context.Background(), cutoff); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(sent.HTML, "Employee model usage unavailable") || !strings.Contains(sent.Text, "5 recorded calls") {
+		t.Fatal("account email was suppressed or data mixed")
+	}
+}
 
 func fixtureConfig() Config {
 	location, _ := time.LoadLocation("Asia/Shanghai")
@@ -176,6 +230,35 @@ func TestConfigDisabledByDefault(t *testing.T) {
 	c, err := LoadConfig("https://pool.example.com")
 	if err != nil || c.Enabled {
 		t.Fatal(c, err)
+	}
+}
+
+func TestGestaUsageConfigRequiresPairedHTTPFeed(t *testing.T) {
+	for key, value := range map[string]string{
+		"SUBPOOL_DAILY_REPORT_ENABLED": "true", "SUBPOOL_RESEND_API_KEY": "illustrative-key",
+		"SUBPOOL_DAILY_REPORT_FROM": "SubPool <sender@example.test>", "SUBPOOL_DAILY_REPORT_TO": "team@example.test",
+		"SUBPOOL_DAILY_REPORT_TIME": "17:00", "SUBPOOL_DAILY_REPORT_TIMEZONE": "Asia/Shanghai",
+	} {
+		t.Setenv(key, value)
+	}
+	for _, tc := range []struct {
+		url, token string
+		valid      bool
+	}{
+		{"", "", true}, {"https://gesta.example.test/api/v1/reports/employee-models", "illustrative-token", true},
+		{"http://control:8080/api/v1/reports/employee-models", "illustrative-token", true},
+		{"https://gesta.example.test", "", false}, {"", "illustrative-token", false},
+		{"file:///private/feed", "illustrative-token", false}, {"https://user:pass@example.test", "illustrative-token", false},
+	} {
+		t.Setenv("SUBPOOL_GESTA_USAGE_REPORT_URL", tc.url)
+		t.Setenv("SUBPOOL_GESTA_USAGE_REPORT_TOKEN", tc.token)
+		c, err := LoadConfig("https://example.test")
+		if (err == nil) != tc.valid {
+			t.Fatalf("URL %q valid=%t: %v", tc.url, tc.valid, err)
+		}
+		if err == nil && (c.Hour != 17 || c.Minute != 0) {
+			t.Fatal("existing schedule changed")
+		}
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/gesta-run/subpool/internal/provider/openaibilling"
+	"github.com/gesta-run/subpool/internal/reporting/modelusage"
 )
 
 type Employee struct {
@@ -45,6 +46,7 @@ type ResetResult struct {
 	Account, Outcome, Before, After, Detail string
 }
 type Report struct {
+	ModelUsage                    modelusage.View
 	Date, Time, Zone, Window, URL string
 	NoticeTitle, Notice           string
 	ResetResults                  []ResetResult

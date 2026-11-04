@@ -3,6 +3,7 @@ package reporting
 import (
 	"fmt"
 	"net/mail"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -11,11 +12,12 @@ import (
 )
 
 type Config struct {
-	Enabled                 bool
-	APIKey, From, PublicURL string
-	To                      []string
-	Location                *time.Location
-	Hour, Minute            int
+	Enabled                        bool
+	APIKey, From, PublicURL        string
+	To                             []string
+	Location                       *time.Location
+	Hour, Minute                   int
+	GestaUsageURL, GestaUsageToken string
 }
 
 func LoadConfig(publicURL string) (Config, error) {
@@ -30,6 +32,17 @@ func LoadConfig(publicURL string) (Config, error) {
 	}
 	if !c.Enabled {
 		return c, nil
+	}
+	c.GestaUsageURL = strings.TrimSpace(os.Getenv("SUBPOOL_GESTA_USAGE_REPORT_URL"))
+	c.GestaUsageToken = strings.TrimSpace(os.Getenv("SUBPOOL_GESTA_USAGE_REPORT_TOKEN"))
+	if (c.GestaUsageURL == "") != (c.GestaUsageToken == "") {
+		return c, fmt.Errorf("Gesta report URL and token must be configured together")
+	}
+	if c.GestaUsageURL != "" {
+		u, parseErr := url.Parse(c.GestaUsageURL)
+		if parseErr != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" || u.User != nil || u.Fragment != "" {
+			return c, fmt.Errorf("invalid Gesta usage report URL")
+		}
 	}
 	c.APIKey = os.Getenv("SUBPOOL_RESEND_API_KEY")
 	c.From = strings.TrimSpace(os.Getenv("SUBPOOL_DAILY_REPORT_FROM"))

@@ -23,6 +23,7 @@
 <div style="margin:0 0 26px;font-size:30px;line-height:1;font-weight:800;letter-spacing:-1.4px">sub<span style="color:#0768fa">pool</span></div>
 <h1 class="report-title" style="margin:0 0 12px;font-size:28px;line-height:1.18;letter-spacing:-0.7px;font-weight:700">Team usage overview</h1>
 <p style="margin:0;color:#637087;font-size:15px;line-height:1.6">{{.Date}} · {{.Window}}<br>{{if eq .Zone "Asia/Shanghai"}}Beijing time · UTC+8{{else}}{{.Zone}}{{end}}</p>
+<h2 style="margin:25px 0 0;font-size:21px;line-height:1.4;letter-spacing:-0.3px">Account usage</h2>
 <p style="margin:17px 0 23px;font-size:16px;line-height:1.5;color:#637087"><strong style="color:#172236">{{formatNumber .Total}} recorded calls</strong> · {{len .Rows}} accounts</p>
 
 {{if .NoticeTitle}}
@@ -68,9 +69,32 @@
 </td></tr></table>
 {{end}}
 
+{{if .ModelUsage.Enabled}}
+<div style="height:1px;background:#edf0f5;margin:30px 0 24px"></div>
+<h2 style="margin:0 0 8px;font-size:21px;line-height:1.4;letter-spacing:-0.3px">Models used by the team</h2>
+<p style="margin:0 0 12px;color:#637087;font-size:13px;line-height:1.6">Recorded by Gesta · Includes captured direct usage{{if .ModelUsage.Window}}<br>{{.ModelUsage.Window}} · {{.Zone}}{{end}}</p>
+{{if .ModelUsage.Unavailable}}
+<p style="margin:0 0 18px;color:#637087;font-size:14px;line-height:1.6">Employee model usage unavailable. Account request counts above are unaffected.</p>
+{{else}}
+<p style="margin:0 0 8px;color:#637087;font-size:15px;line-height:1.6"><strong style="color:#172236">{{.ModelUsage.Turns}} recorded turns</strong> · {{.ModelUsage.ModelCount}} models</p>
+{{range .ModelUsage.Employees}}
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border-bottom:1px solid #edf0f5"><tr><td style="padding:18px 0">
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0"><tr><td style="font-size:17px;line-height:1.5;font-weight:700;overflow-wrap:break-word">{{.Name}}</td><td align="right" style="padding-left:10px;color:#637087;font-size:13px;line-height:1.5">{{if .Models}}{{.ModelCount}} models · {{.Turns}} turns{{else}}No turns recorded{{end}}</td></tr></table>
+{{if .Models}}
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin:15px 0 10px"><tr><td style="padding-right:10px;vertical-align:bottom"><div style="font-size:12px;color:#637087;margin-bottom:4px">Most used{{if .Tied}} (tie){{end}}</div><strong style="font-size:18px;line-height:1.5;overflow-wrap:break-word">{{.TopModel}}</strong></td><td align="right" style="font-size:18px;font-weight:700;white-space:nowrap;vertical-align:bottom">{{.TopTurns}} · {{.TopShare}}</td></tr></table>
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin-bottom:11px"><tr>{{range .Models}}<td width="{{.Width}}%" style="height:6px;background:{{.Color}}"></td>{{end}}</tr></table>
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="font-size:14px;line-height:1.6">{{range .Models}}<tr><td style="padding:3px 10px 3px 0;overflow-wrap:break-word"><span style="color:{{.Color}}">●</span> {{.Name}}</td><td align="right" style="padding:3px 0;white-space:nowrap;font-variant-numeric:tabular-nums">{{.Turns}} · {{.Share}}</td></tr>{{end}}</table>
+{{else}}<p style="margin:8px 0 0;font-size:13px;line-height:1.6;color:#637087">Model distribution unavailable for this window.</p>{{end}}
+</td></tr></table>
+{{end}}
+<p style="margin:12px 0 0;color:#637087;font-size:12px;line-height:1.6">Shares are within each employee’s recorded turns. Missing models remain in the share denominator; model counts include known models only.</p>
+{{end}}
+{{end}}
+
 <div style="font-size:13px;line-height:1.65;color:#6b7689;margin:22px 2px">
 <p style="margin:0 0 9px">Calls through enabled SubPool accounts only. Direct usage is excluded from request counts. Remaining capacity includes direct usage.</p>
 <p style="margin:0 0 9px">Employee percentages are within each account; shared keys identify the key owner.</p>
+{{if .ModelUsage.Enabled}}<p style="margin:0 0 9px">Employee models: Gesta-recorded turns, including captured direct usage. Turns and API requests are separate metrics.</p>{{end}}
 {{if .Unattributed}}<p style="margin:0 0 9px">Calls without retained account attribution: {{formatNumber .Unattributed}} ({{.UnattributedShare}}). These are included in the total and percentage denominator.</p>{{end}}
 </div>
 <p style="margin:0"><a href="{{.URL}}" style="display:block;text-align:center;background:#0768fa;color:#ffffff;border-radius:9px;padding:15px 18px;text-decoration:none;font-size:16px;line-height:1.3;font-weight:700">Open SubPool</a></p>

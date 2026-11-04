@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"html/template"
 	"strings"
+
+	"github.com/gesta-run/subpool/internal/reporting/modelusage"
 )
 
 //go:embed template.html
@@ -65,6 +67,7 @@ func Render(c Config, r Report) (Message, error) {
 		}
 	}
 	fmt.Fprintf(&text, "\n%s recorded calls in this reporting window.\n", number(r.Total))
+	writeModelUsageText(&text, r.ModelUsage)
 	fmt.Fprintf(&text, "\nReporting window: %s · %s\nCounts cover recorded calls through currently enabled SubPool accounts. Employee percentages are within each account; shared keys identify the key owner. Direct usage outside SubPool is excluded. Remaining capacity includes direct usage.\n", r.Window, r.Zone)
 	if r.Unattributed > 0 {
 		fmt.Fprintf(&text, "Calls without retained account attribution: %s (%s). These are included in the total and percentage denominator.\n", number(r.Unattributed), r.UnattributedShare)
@@ -74,4 +77,31 @@ func Render(c Config, r Report) (Message, error) {
 	}
 	text.WriteString("\nOpen SubPool: " + r.URL)
 	return Message{From: c.From, To: c.To, Subject: "SubPool · Team usage overview · " + r.Date, HTML: html.String(), Text: text.String()}, nil
+}
+
+func writeModelUsageText(text *strings.Builder, v modelusage.View) {
+	if !v.Enabled {
+		return
+	}
+	text.WriteString("\nModels used by the team\nRecorded by Gesta; includes captured direct usage.\n")
+	if v.Window != "" {
+		fmt.Fprintf(text, "Model reporting window: %s\n", v.Window)
+	}
+	if v.Unavailable {
+		text.WriteString("Employee model usage unavailable. Account request counts above are unaffected.\n")
+		return
+	}
+	fmt.Fprintf(text, "%s recorded turns · %d models\n", v.Turns, v.ModelCount)
+	for _, e := range v.Employees {
+		fmt.Fprintf(text, "\n%s: %d models · %s turns\n", e.Name, e.ModelCount, e.Turns)
+		if len(e.Models) == 0 {
+			text.WriteString("No turns recorded in this window.\n")
+			continue
+		}
+		fmt.Fprintf(text, "Most used%s: %s · %s · %s\n", map[bool]string{true: " (tie)", false: ""}[e.Tied], e.TopModel, e.TopTurns, e.TopShare)
+		for _, m := range e.Models {
+			fmt.Fprintf(text, "  %s: %s · %s\n", m.Name, m.Turns, m.Share)
+		}
+	}
+	text.WriteString("Model shares are within each employee's recorded turns. Gesta turns and SubPool API requests are separate metrics. Missing models remain in the share denominator and are not counted as distinct known models.\n")
 }
