@@ -291,3 +291,12 @@ authorization is still required. This avoids routing internal report reads
 through a public CDN. The standalone Compose deployment keeps its own network.
 The pre database uses the `subpool-postgres` network alias so joining Gesta's
 network cannot resolve its database connection to Gesta's separate `postgres`.
+
+Report-only employee presentation can be configured with `SUBPOOL_REPORT_PEOPLE`,
+for example `{"names":{"am":"Alex Morgan","alex@example.test":"Alex Morgan"},"excluded":["retired@example.test"]}`
+(all values are illustrative). Names apply to account request rows and Gesta
+model summaries; exclusions remove model-summary identities and their model
+rollup totals. Matching is case-insensitive and accepts Gesta IDs, email addresses,
+or recorded names. Unknown identities keep their existing names. This never
+changes accounts, memberships, credentials, routing, or source usage records.
+Keep organization-specific mappings in deployment configuration rather than code.

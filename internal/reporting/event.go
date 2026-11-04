@@ -24,6 +24,15 @@ func (s *Service) fillModelUsage(ctx context.Context, r *Report, start, end time
 		slog.Warn("employee model report unavailable")
 		return
 	}
+	employees := make([]modelusage.Employee, 0, len(snapshot.Employees))
+	for _, employee := range snapshot.Employees {
+		if s.Config.People.Hidden(employee.ID, employee.Email, employee.Name) {
+			continue
+		}
+		employee.Name = s.Config.People.Name(employee.Name, employee.Email, employee.ID)
+		employees = append(employees, employee)
+	}
+	snapshot.Employees = employees
 	r.ModelUsage = modelusage.Build(snapshot, number)
 	r.ModelUsage.Window = start.In(s.Config.Location).Format("15:04") + "–" + end.In(s.Config.Location).Format("15:04")
 }

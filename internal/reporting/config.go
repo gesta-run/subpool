@@ -9,9 +9,12 @@ import (
 	"strings"
 	"time"
 	_ "time/tzdata"
+
+	"github.com/gesta-run/subpool/internal/reporting/people"
 )
 
 type Config struct {
+	People                         people.Directory
 	Enabled                        bool
 	APIKey, From, PublicURL        string
 	To                             []string
@@ -32,6 +35,10 @@ func LoadConfig(publicURL string) (Config, error) {
 	}
 	if !c.Enabled {
 		return c, nil
+	}
+	c.People, err = people.Parse(os.Getenv("SUBPOOL_REPORT_PEOPLE"))
+	if err != nil {
+		return c, err
 	}
 	c.GestaUsageURL = strings.TrimSpace(os.Getenv("SUBPOOL_GESTA_USAGE_REPORT_URL"))
 	c.GestaUsageToken = strings.TrimSpace(os.Getenv("SUBPOOL_GESTA_USAGE_REPORT_TOKEN"))
