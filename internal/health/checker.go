@@ -53,6 +53,7 @@ type Result struct {
 	AuthFailed       bool
 	Failure          bool
 	QuotaProbeFailed bool
+	QuotaSkipped     bool
 }
 
 type Checker struct {
@@ -65,6 +66,8 @@ type Checker struct {
 	openaiBalance OpenAIBalance
 	antigravity   AntigravityModels
 	refresher     credential.AccountRefresher
+	billingMu     sync.Mutex
+	billingPolls  map[string]billingPoll
 	now           func() time.Time
 }
 
@@ -77,6 +80,10 @@ func NewChecker(st store.Store, cipher Cipher, codexUsage CodexUsage, compatible
 }
 
 func (c *Checker) Check(ctx context.Context, account domain.ProviderAccount) Result {
+	return c.check(ctx, account, false)
+}
+
+func (c *Checker) check(ctx context.Context, account domain.ProviderAccount, forceBilling bool) Result {
 	timeout := checkTimeout
 	if account.Provider == domain.ProviderOpenAICompatible {
 		timeout = CheckTimeout
@@ -108,7 +115,7 @@ func (c *Checker) Check(ctx context.Context, account domain.ProviderAccount) Res
 		}
 		return classifyCodexQuotaError(err)
 	case domain.ProviderOpenAICompatible:
-		return c.checkCompatible(ctx, plaintext)
+		return c.checkCompatible(ctx, plaintext, account, forceBilling)
 	case domain.ProviderAntigravity:
 		return c.checkAntigravity(ctx, account, plaintext)
 	case domain.ProviderCopilot:
@@ -169,7 +176,7 @@ func (c *Checker) CheckAccount(ctx context.Context, accountID string) (domain.Pr
 	if err != nil {
 		return domain.ProviderAccount{}, err
 	}
-	result := c.Check(ctx, account)
+	result := c.check(ctx, account, true)
 	persistCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	if err = c.persist(persistCtx, account.ID, result); err != nil {
@@ -264,6 +271,9 @@ func (c *Checker) persist(ctx context.Context, accountID string, result Result) 
 	}
 	if err != nil {
 		return err
+	}
+	if result.QuotaSkipped {
+		return nil
 	}
 	if result.Email != "" || len(result.QuotaSnapshot) > 0 {
 		return c.store.UpdateProviderDetails(ctx, accountID, result.Email, result.QuotaSnapshot, now)

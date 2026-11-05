@@ -264,8 +264,17 @@ func fillOpenAIBalance(row *Row, a Account, now time.Time, location *time.Locati
 			row.BalanceUpdated += " · Costs through " + time.Unix(snapshot.Balance.UsageThrough, 0).In(location).Format("2006-01-02 · 15:04")
 		}
 	}
-	if !freshQuota(a.CheckedAt, now) || a.QuotaError != "" {
+	fresh := freshQuota(a.CheckedAt, now)
+	if snapshot.Balance.Estimated {
+		fresh = !a.CheckedAt.After(now.Add(time.Minute)) && now.Sub(a.CheckedAt) <= openaibilling.SnapshotFreshFor
+	}
+	if !fresh || a.QuotaError != "" {
 		row.BalanceStatus = "Last known balance; refresh unavailable"
+		if a.QuotaError == "quota_probe_rate_limited" {
+			row.BalanceStatus = "Refresh delayed by OpenAI rate limit; showing last estimate"
+		} else if a.QuotaError == "" {
+			row.BalanceStatus = "Last known balance; update pending"
+		}
 		if a.QuotaError == "quota_authorization_expired" || a.QuotaError == "quota_authorization_required" {
 			row.BalanceStatus = "Last known balance; reconnect billing"
 		}

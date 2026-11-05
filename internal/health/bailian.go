@@ -17,7 +17,7 @@ type BailianUsage interface {
 	Usage(context.Context, bailian.Credentials) (bailian.Snapshot, error)
 }
 
-func (c *Checker) checkCompatible(ctx context.Context, plaintext []byte) Result {
+func (c *Checker) checkCompatible(ctx context.Context, plaintext []byte, account domain.ProviderAccount, forceBilling bool) Result {
 	var credentials openaicompat.Credentials
 	if json.Unmarshal(plaintext, &credentials) != nil {
 		return Result{HealthStatus: domain.HealthUnhealthy, ErrorCode: "credential_unavailable", Failure: true}
@@ -26,9 +26,10 @@ func (c *Checker) checkCompatible(ctx context.Context, plaintext []byte) Result 
 	result := c.compatibleHealth(probeCtx, credentials)
 	cancel()
 	// The console quota API has separate credentials and availability from /models.
-	quota := c.compatibleQuota(ctx, credentials)
+	quota := c.compatibleQuota(ctx, credentials, account, forceBilling)
 	result.QuotaSnapshot = quota.QuotaSnapshot
 	result.QuotaErrorCode = quota.QuotaErrorCode
+	result.QuotaSkipped = quota.QuotaSkipped
 	return result
 }
 
@@ -55,10 +56,10 @@ func (c *Checker) compatibleHealth(ctx context.Context, credentials openaicompat
 	}
 }
 
-func (c *Checker) compatibleQuota(ctx context.Context, credentials openaicompat.Credentials) Result {
+func (c *Checker) compatibleQuota(ctx context.Context, credentials openaicompat.Credentials, account domain.ProviderAccount, forceBilling bool) Result {
 	result := Result{HealthStatus: domain.HealthHealthy}
 	if openaibilling.SupportsURL(credentials.BaseURL) {
-		return c.openAIQuota(ctx, credentials)
+		return c.openAIQuota(ctx, credentials, account, forceBilling)
 	}
 	if !bailian.SupportsURL(credentials.BaseURL) {
 		return result

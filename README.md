@@ -80,6 +80,13 @@ purchased credit balances. It is a display feature, not a payment cutoff.
 Existing browser balance authorization remains supported. Switching to Costs replaces
 that account's temporary browser credential; model access does not depend on either
 billing method. Failed refreshes retain the last snapshot with a stale/error label.
+Costs estimates refresh every 30 minutes independently of the existing model health
+checks. Manual checks can refresh sooner, but respect an active billing backoff.
+HTTP 429 responses trigger exponential backoff up to 30 minutes (or the upstream
+`Retry-After` delay if longer); concurrent checks share one billing read per account.
+Skipped polls preserve the original successful refresh timestamp. Console and email
+allow 45 minutes for the normal polling cadence and explicitly identify rate-limited
+refreshes instead of suggesting that billing authorization has expired.
 No new database migration, scheduled job, or external MCP service is required.
 
 ### Bailian Token Plan quota
