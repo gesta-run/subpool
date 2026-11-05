@@ -235,6 +235,17 @@ func (c *Checker) runBatch(ctx context.Context) {
 				account.CooldownUntil = nil
 			}
 			checkCtx, cancel := context.WithTimeout(ctx, CheckTimeout)
+			if account.Provider == domain.ProviderOpenAICompatible {
+				// Claimed rows omit quota fields. Load the saved snapshot before
+				// deciding whether the independent billing read is due.
+				fresh, err := c.store.GetProviderAccount(checkCtx, account.ID)
+				if err != nil {
+					cancel()
+					slog.Error("provider health snapshot read failed", "account_id", account.ID, "error", err)
+					return
+				}
+				account = fresh
+			}
 			result := c.Check(checkCtx, account)
 			cancel()
 			persistCtx, persistCancel := context.WithTimeout(context.Background(), 2*time.Second)

@@ -125,3 +125,27 @@ func TestSkippedBackoffPreservesQuotaErrorAndModelHealth(t *testing.T) {
 		t.Fatal("skipped poll erased the error or disabled routing")
 	}
 }
+
+type scheduledBillingStore struct{ quotaFailureStore }
+
+func (s *scheduledBillingStore) ClaimProviderHealthChecks(context.Context, int, time.Time, time.Time) ([]domain.ProviderAccount, error) {
+	// Match the real claim query: it intentionally returns no quota fields.
+	return []domain.ProviderAccount{{ID: s.account.ID, Provider: s.account.Provider, Status: s.account.Status}}, nil
+}
+
+func TestScheduledBillingReadsSavedQuotaBeforePolling(t *testing.T) {
+	now := time.Unix(1800200000, 0)
+	checked := now.Add(-20 * time.Minute)
+	credentials := pollingCredentials()
+	raw, _ := json.Marshal(openaicompat.Credentials{BaseURL: "https://api.openai.com/v1", APIKey: "example", OpenAIBilling: &credentials})
+	snapshot := json.RawMessage(`{"plan_type":"openai_api_credits","balance":{"estimated":true,"remaining_usd":37.5}}`)
+	st := &scheduledBillingStore{quotaFailureStore{account: domain.ProviderAccount{ID: "example", Provider: domain.ProviderOpenAICompatible, Status: domain.AccountActive, QuotaCheckedAt: &checked, QuotaSnapshot: snapshot}}}
+	c := NewChecker(st, testCipher{plaintext: raw}, nil, testCompatible{status: 200})
+	c.now = func() time.Time { return now }
+	// Any unexpected billing read would persist this error instead of using cache.
+	c.openaiBalance = balanceProbe{err: openaibilling.ErrUnavailable}
+	c.runBatch(context.Background())
+	if st.quotaError != "" || st.healthUpdates != 1 || !st.account.QuotaCheckedAt.Equal(checked) || string(st.account.QuotaSnapshot) != string(snapshot) {
+		t.Fatal("scheduled cache failed or changed the last successful snapshot")
+	}
+}
