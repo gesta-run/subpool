@@ -65,3 +65,26 @@ func TestEstimatedBalanceIsLabeledInBothEmailFormats(t *testing.T) {
 		}
 	}
 }
+
+func TestCostsPollingCadenceAndRateLimitAreReportedTruthfully(t *testing.T) {
+	now := time.Unix(1800200000, 0)
+	account := Account{Name: "Example API", CheckedAt: now.Add(-35 * time.Minute), Snapshot: []byte(`{"plan_type":"openai_api_credits","balance":{"remaining_usd":37.5,"estimated":true}}`)}
+	row := Row{}
+	fillOpenAIBalance(&row, account, now, time.UTC)
+	if row.BalanceStatus != "" {
+		t.Fatal("normal Costs polling interval reported as refresh failure")
+	}
+	account.QuotaError = "quota_probe_rate_limited"
+	row = Row{}
+	fillOpenAIBalance(&row, account, now, time.UTC)
+	if !strings.Contains(row.BalanceStatus, "rate limit") || !strings.Contains(row.BalanceStatus, "last estimate") || row.Remaining != "$37.50" {
+		t.Fatal("rate limit was hidden or the last estimate was dropped")
+	}
+	account.QuotaError = ""
+	account.CheckedAt = now.Add(-time.Hour)
+	row = Row{}
+	fillOpenAIBalance(&row, account, now, time.UTC)
+	if row.BalanceStatus != "Last known balance; update pending" {
+		t.Fatal("stale data was presented as fresh")
+	}
+}

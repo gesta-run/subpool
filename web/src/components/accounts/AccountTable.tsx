@@ -151,14 +151,15 @@ export function AccountTable({ accounts, busyID, resetBusyID, resetStates, onMod
 function BailianQuotaStatus({ account, busy, onAuthorize }: { account: ProviderAccount; busy: boolean; onAuthorize?: (account: ProviderAccount) => void }) {
   const billing = account.quota_provider === 'openai_api_credits'
   const error = account.last_quota_error_code
+  const rateLimited = billing && error === 'quota_probe_rate_limited'
   const message = error === 'quota_authorization_required' ? 'Quota authorization required' : error === 'quota_authorization_expired' ? account.quota_authorization_method === 'costs' ? 'Admin authorization rejected; check the key and Costs read access' : 'Browser authorization expired; sign in again' : error === 'quota_permission_denied' ? 'Grant Token Plan access to this console identity in Bailian' : error ? account.quota_snapshot ? 'Quota refresh failed; showing last known usage' : 'Quota refresh failed' : ''
   const attention = Boolean(error) || !account.quota_authorized
   const label = error === 'quota_authorization_expired' ? account.quota_authorization_method === 'costs' ? 'Authorization rejected' : 'Authorization expired' : error === 'quota_permission_denied' ? 'Permission required' : error === 'quota_authorization_required' || !account.quota_authorized ? 'Authorization required' : error ? 'Quota refresh failed' : billing ? 'Billing connected' : 'Quota connected'
   return <div className={`reset-credit quota-authorization${attention ? ' quota-authorization--attention' : ''}`}>
     <div className="reset-credit__action">
       <div className="reset-credit__summary"><i aria-hidden="true" /><span className="reset-credit__copy">
-        <strong>{label}</strong>
-        {message ? <small>{message}</small> : null}
+        <strong>{rateLimited ? 'Billing refresh delayed' : label}</strong>
+        {rateLimited ? <small>OpenAI billing rate limit; retrying automatically and showing the last estimate</small> : message ? <small>{message}</small> : null}
         {account.quota_checked_at ? <small>Updated {lastCheckedLabel(account.quota_checked_at)}</small> : null}
       </span></div>
       {onAuthorize ? <button className="reset-credit__button" type="button" disabled={busy} onClick={() => onAuthorize(account)}>{billing ? account.quota_authorized ? 'Manage billing' : 'Connect billing' : account.quota_authorized ? 'Manage quota' : 'Connect quota'}</button> : null}
@@ -173,7 +174,8 @@ function billingDate(seconds: number) {
 function OpenAIBalance({ account }: { account: ProviderAccount }) {
   const balance = account.quota_snapshot?.balance
   if (!balance || !Number.isFinite(balance.remaining_usd)) return <div className="subscription-summary__empty"><strong>{account.quota_authorized ? 'Balance unavailable' : 'Balance not connected'}</strong><small>Connect billing authorization to read API credits</small></div>
-  const stale = Boolean(account.last_quota_error_code) || !account.quota_authorized || !account.quota_checked_at || Date.now() - Date.parse(account.quota_checked_at) > 15 * 60 * 1000
+  const freshnessMinutes = balance.estimated ? 45 : 15
+  const stale = Boolean(account.last_quota_error_code) || !account.quota_authorized || !account.quota_checked_at || Date.now() - Date.parse(account.quota_checked_at) > freshnessMinutes * 60 * 1000
   return <div className="capacity">
     <span><strong>${balance.remaining_usd.toFixed(2)}</strong> {balance.estimated ? stale ? 'last known estimate' : 'estimated API credits' : stale ? 'last known API credits' : 'API credits remaining'}</span>
     <small>${balance.used_usd.toFixed(2)} {balance.estimated ? 'reported cost' : 'used'} / ${balance.granted_usd.toFixed(2)} granted</small>

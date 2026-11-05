@@ -350,6 +350,21 @@ describe('AccountTable health states', () => {
 })
 
 describe('OpenAI API balance', () => {
+  it('keeps a normally cached estimate fresh without changing its timestamp', () => {
+    renderTable({ ...baseAccount, provider: 'openai_compatible', credential_type: 'api_key', quota_provider: 'openai_api_credits', quota_authorized: true, quota_checked_at: new Date(Date.now() - 35 * 60 * 1000).toISOString(), quota_snapshot: { plan_type: 'openai_api_credits', balance: { remaining_usd: 37.5, used_usd: 12.5, granted_usd: 50, paid_available_usd: 0, estimated: true } } })
+    expect(screen.getByText('estimated API credits')).toBeInTheDocument()
+    expect(screen.queryByText('last known estimate')).not.toBeInTheDocument()
+  })
+
+  it('identifies rate-limited billing separately from rejected authorization', () => {
+    renderTable({ ...baseAccount, provider: 'openai_compatible', credential_type: 'api_key', quota_provider: 'openai_api_credits', quota_authorized: true, last_quota_error_code: 'quota_probe_rate_limited', quota_snapshot: { plan_type: 'openai_api_credits', balance: { remaining_usd: 37.5, used_usd: 12.5, granted_usd: 50, paid_available_usd: 0, estimated: true } } })
+    expect(screen.getByText('Billing refresh delayed')).toBeInTheDocument()
+    expect(screen.getByText(/retrying automatically/)).toBeInTheDocument()
+    expect(screen.getByText('last known estimate')).toBeInTheDocument()
+    expect(screen.queryByText('Authorization expired')).not.toBeInTheDocument()
+    expect(screen.getByText('Routing enabled')).toBeInTheDocument()
+  })
+
   it('shows dollars and billing expiry, and labels expired authorization without disabling model routing', () => {
     // Illustrative values only.
     renderTable({ ...baseAccount, provider: 'openai_compatible', credential_type: 'api_key', quota_provider: 'openai_api_credits', quota_authorized: true, last_quota_error_code: 'quota_authorization_expired', quota_snapshot: { plan_type: 'openai_api_credits', balance: { remaining_usd: 37.5, used_usd: 12.5, granted_usd: 50, paid_available_usd: 0, expires_at: 1900000000 } } }, {}, { onQuotaAuthorize: vi.fn() })
