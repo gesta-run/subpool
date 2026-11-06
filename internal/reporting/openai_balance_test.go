@@ -77,11 +77,17 @@ func TestCostsPollingCadenceAndRateLimitAreReportedTruthfully(t *testing.T) {
 	account.QuotaError = "quota_probe_rate_limited"
 	row = Row{}
 	fillOpenAIBalance(&row, account, now, time.UTC)
+	if row.BalanceStatus != "" || row.Remaining != "$37.50" {
+		t.Fatal("transient rate limit warned before the grace period")
+	}
+	account.CheckedAt = now.Add(-2*time.Hour - time.Second)
+	row = Row{}
+	fillOpenAIBalance(&row, account, now, time.UTC)
 	if !strings.Contains(row.BalanceStatus, "rate limit") || !strings.Contains(row.BalanceStatus, "last estimate") || row.Remaining != "$37.50" {
 		t.Fatal("rate limit was hidden or the last estimate was dropped")
 	}
 	account.QuotaError = ""
-	account.CheckedAt = now.Add(-time.Hour)
+	account.CheckedAt = now.Add(-3 * time.Hour)
 	row = Row{}
 	fillOpenAIBalance(&row, account, now, time.UTC)
 	if row.BalanceStatus != "Last known balance; update pending" {

@@ -356,12 +356,19 @@ describe('OpenAI API balance', () => {
     expect(screen.queryByText('last known estimate')).not.toBeInTheDocument()
   })
 
-  it('identifies rate-limited billing separately from rejected authorization', () => {
-    renderTable({ ...baseAccount, provider: 'openai_compatible', credential_type: 'api_key', quota_provider: 'openai_api_credits', quota_authorized: true, last_quota_error_code: 'quota_probe_rate_limited', quota_snapshot: { plan_type: 'openai_api_credits', balance: { remaining_usd: 37.5, used_usd: 12.5, granted_usd: 50, paid_available_usd: 0, estimated: true } } })
-    expect(screen.getByText('Billing refresh delayed')).toBeInTheDocument()
-    expect(screen.getByText(/retrying automatically/)).toBeInTheDocument()
-    expect(screen.getByText('last known estimate')).toBeInTheDocument()
-    expect(screen.queryByText('Authorization expired')).not.toBeInTheDocument()
+  it.each([30, 120, 121])('warns about rate limits only after the last success is over two hours old (%i minutes)', (age) => {
+    renderTable({ ...baseAccount, provider: 'openai_compatible', credential_type: 'api_key', quota_provider: 'openai_api_credits', quota_authorized: true, quota_checked_at: new Date(Date.now() - age * 60 * 1000 + 1000).toISOString(), last_quota_error_code: 'quota_probe_rate_limited', quota_snapshot: { plan_type: 'openai_api_credits', balance: { remaining_usd: 37.5, used_usd: 12.5, granted_usd: 50, paid_available_usd: 0, estimated: true } } })
+    const warning = screen.queryByText('Billing refresh delayed')
+    if (age > 120) {
+      expect(warning).toBeInTheDocument()
+      expect(warning?.closest('.quota-authorization')).toHaveClass('quota-authorization--attention')
+      expect(screen.getByText('last known estimate')).toBeInTheDocument()
+    } else {
+      expect(warning).not.toBeInTheDocument()
+      expect(screen.getByText('Billing connected').closest('.quota-authorization')).not.toHaveClass('quota-authorization--attention')
+      expect(screen.getByText('estimated API credits')).toBeInTheDocument()
+      expect(screen.queryByText(/retrying automatically/)).not.toBeInTheDocument()
+    }
     expect(screen.getByText('Routing enabled')).toBeInTheDocument()
   })
 

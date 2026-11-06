@@ -10,7 +10,9 @@ import (
 )
 
 const RefreshInterval = 30 * time.Minute
-const SnapshotFreshFor = RefreshInterval + 15*time.Minute
+
+// Presentation grace period; it does not delay polling or change saved errors.
+const SnapshotFreshFor = 2 * time.Hour
 
 // RateLimitError contains only a known error code and a retry delay, never a
 // credential, organization identifier, or upstream error message.
