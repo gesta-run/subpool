@@ -268,7 +268,8 @@ func fillOpenAIBalance(row *Row, a Account, now time.Time, location *time.Locati
 	if snapshot.Balance.Estimated {
 		fresh = !a.CheckedAt.After(now.Add(time.Minute)) && now.Sub(a.CheckedAt) <= openaibilling.SnapshotFreshFor
 	}
-	if !fresh || a.QuotaError != "" {
+	transientRateLimit := snapshot.Balance.Estimated && a.QuotaError == "quota_probe_rate_limited"
+	if !fresh || (a.QuotaError != "" && !transientRateLimit) {
 		row.BalanceStatus = "Last known balance; refresh unavailable"
 		if a.QuotaError == "quota_probe_rate_limited" {
 			row.BalanceStatus = "Refresh delayed by OpenAI rate limit; showing last estimate"

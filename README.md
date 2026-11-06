@@ -85,8 +85,10 @@ checks. Manual checks can refresh sooner, but respect an active billing backoff.
 HTTP 429 responses trigger exponential backoff up to 30 minutes (or the upstream
 `Retry-After` delay if longer); concurrent checks share one billing read per account.
 Skipped polls preserve the original successful refresh timestamp. Console and email
-allow 45 minutes for the normal polling cadence and explicitly identify rate-limited
-refreshes instead of suggesting that billing authorization has expired.
+allow a two-hour presentation grace period after the last successful estimate.
+Transient rate limits inside that window do not show a warning; estimates keep
+their original timestamps. Overdue updates warn in Console and email, while
+authorization failures or rate limits without a saved balance remain immediate.
 No new database migration, scheduled job, or external MCP service is required.
 
 ### Bailian Token Plan quota
