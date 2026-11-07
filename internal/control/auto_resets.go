@@ -18,6 +18,7 @@ import (
 
 type autoResetStore interface {
 	PlanReset(context.Context, store.ResetJob) error
+	ReconcilePendingResets(context.Context, string, []string) error
 	ClaimResetBatch(context.Context, time.Time, bool) (*store.ResetBatch, error)
 	StartResetAttempt(context.Context, store.ResetJob) error
 	FinishResetJob(context.Context, store.ResetJob) error
@@ -75,12 +76,14 @@ func (s *Server) discoverResets(ctx context.Context, st autoResetStore, now time
 		if decodeErr != nil {
 			return decodeErr
 		}
-		if checked == nil || now.Sub(*checked) > resetCreditsFreshFor {
+		freshSnapshot := checked != nil && now.Sub(*checked) <= resetCreditsFreshFor
+		if !freshSnapshot {
 			readCtx, readCancel := context.WithTimeout(ctx, 20*time.Second)
 			fresh, _, refreshErr := s.refreshResetCredits(readCtx, a.ID)
 			readCancel()
 			if refreshErr == nil {
 				credits = fresh
+				freshSnapshot = true
 			} else {
 				slog.Warn("automatic reset discovery used cached credits", "provider_account_id", a.ID)
 			}
@@ -89,13 +92,20 @@ func (s *Server) discoverResets(ctx context.Context, st autoResetStore, now time
 			continue
 		}
 		var first *codex.ResetCredit
+		availableIDs := make([]string, 0, len(credits.Credits))
 		for _, c := range credits.Credits {
 			if c.Status != "available" || c.ExpiresAt == nil || *c.ExpiresAt <= now.Unix() {
 				continue
 			}
+			availableIDs = append(availableIDs, c.ID)
 			if first == nil || *c.ExpiresAt < *first.ExpiresAt {
 				copy := c
 				first = &copy
+			}
+		}
+		if freshSnapshot {
+			if err := st.ReconcilePendingResets(ctx, a.ID, availableIDs); err != nil {
+				return err
 			}
 		}
 		if first == nil {

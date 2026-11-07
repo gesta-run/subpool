@@ -31,6 +31,16 @@ func (p *Postgres) PlanReset(ctx context.Context, j ResetJob) error {
 	return err
 }
 
+// ReconcilePendingResets retires withdrawn or redeemed credits before they can
+// create a reset batch. Claimed jobs and durable redemption intent stay intact.
+func (p *Postgres) ReconcilePendingResets(ctx context.Context, accountID string, availableIDs []string) error {
+	_, err := p.pool.Exec(ctx, `UPDATE codex_reset_jobs
+        SET outcome='skipped',detail='Credit is no longer available; no reset request was sent.',finished_at=now()
+        WHERE account_id=$1 AND batch_id IS NULL AND attempted_at IS NULL AND outcome IS NULL
+        AND NOT (credit_id=ANY($2::text[]))`, accountID, availableIDs)
+	return err
+}
+
 func (p *Postgres) ClaimResetBatch(ctx context.Context, now time.Time, allowNew bool) (*ResetBatch, error) {
 	tx, err := p.pool.Begin(ctx)
 	if err != nil {

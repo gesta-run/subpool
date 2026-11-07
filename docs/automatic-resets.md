@@ -18,6 +18,11 @@ The service discovers accounts and credits automatically; operators do not enter
 account IDs, credit IDs, weekday exceptions, or individual timers. Disabled accounts
 are not redeemed. Full reported rate-limit windows cause a skipped result.
 
+A fresh credit list also retires unclaimed jobs for credits that have disappeared,
+been redeemed, or expired. These obsolete jobs do not create reset-result emails.
+A failed refresh never retires jobs using an outdated snapshot. Claimed jobs and
+previously submitted redemption intent retain their existing recovery behavior.
+
 Due accounts are claimed together as a durable batch. Independent accounts can be
 processed concurrently; credits for the same account remain serial. One combined
 SubPool email reports each result, before/after weekly capacity, and the current
