@@ -2,6 +2,7 @@ package codex
 
 import (
 	"math"
+	"strconv"
 	"time"
 )
 
@@ -37,7 +38,20 @@ func (s UsageSnapshot) AllowsUsageAt(now time.Time) bool {
 	if s.UsageAllowed != nil && !*s.UsageAllowed {
 		return false
 	}
-	return !usageWindowBlocked(s.FiveHour, now) && !usageWindowBlocked(s.Weekly, now)
+	return (!usageWindowBlocked(s.FiveHour, now) && !usageWindowBlocked(s.Weekly, now)) || s.Credits.PrepaidBalance() > 0
+}
+
+// PrepaidBalance only accepts a finite, positive balance explicitly reported as
+// available. An unlimited entitlement is not evidence of prepaid credits.
+func (c *CreditsSnapshot) PrepaidBalance() float64 {
+	if c == nil || !c.HasCredits || c.Unlimited || c.Balance == nil {
+		return 0
+	}
+	balance, err := strconv.ParseFloat(*c.Balance, 64)
+	if err != nil || balance <= 0 || math.IsNaN(balance) || math.IsInf(balance, 0) {
+		return 0
+	}
+	return balance
 }
 
 func usageWindowBlocked(window *UsageWindow, now time.Time) bool {

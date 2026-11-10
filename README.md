@@ -235,27 +235,34 @@ Subpool is licensed under the [Apache License 2.0](LICENSE). It is independent a
 
 ### Opt-in Codex quota routing
 
-Set `SUBPOOL_CODEX_QUOTA_ROUTING=true` to prefer more remaining subscription
+Set `SUBPOOL_CODEX_QUOTA_ROUTING=true` to prefer remaining subscription
 capacity for independent, non-image Codex requests and the first unbound
 WebSocket turn. The default is `false`, including self-hosted deployments.
 Existing `previous_response_id` chains and established WebSockets keep their
 account; the policy does not migrate or replay them. API keys and client
-configuration stay unchanged. New keys still use the existing allocation
-policy; their first eligible request can update their default account.
+configuration stay unchanged.
 
-The score is the smallest remaining percentage of the available five-hour and
-weekly windows. At least one window must be present. Quota must be checked
-within 15 minutes and error-free; every present window must have a valid usage
-percentage and a future reset timestamp. An omitted window is not assumed to
-have zero or unlimited capacity. A candidate must improve the score by more than
-five percentage points within the same priority tier and have the same plan,
-provider, credential type, and fast-mode setting. A healthy, fresh account in a
-lower-numbered priority tier takes precedence regardless of the quota gap, so
-an independent request returns to a recovered primary after failover. Configure
-a separate pool with distinct membership priorities for primary/fallback use;
-equal-priority pools retain quota balancing. Health, cooldown and key-capacity checks still
-apply. Equal scores prefer lower weighted key count. Missing or stale data
-keeps the current binding; normal availability failover remains unchanged.
+Fresh subscription quota always takes precedence over prepaid AI credits. If
+all eligible subscription windows are depleted, accounts with an explicitly
+available, finite positive credit balance remain usable; the larger credit
+balance is preferred within the same pool priority. A refreshed subscription
+returns to the subscription tier even if another account still has more credits.
+This never purchases credits, enables auto-recharge, redeems a reset credit, or
+falls back to an OpenAI API billing account outside the configured pool. Explicit
+upstream denials and spend controls still block usage. Existing upstream billing
+settings remain the operator's responsibility.
+
+Within the subscription tier, the score is the smallest remaining percentage of
+the available five-hour and weekly windows. Switching between equal-priority,
+same-plan subscriptions requires an improvement of more than five percentage
+points. Configured pool priority applies within each tier; use equal priorities
+for shared balancing without a designated primary. Both tiers require an
+error-free quota check within 15 minutes, at least one complete window, and a
+valid usage percentage and future reset timestamp in every present window.
+Missing or stale data does not imply fresh quota or available prepaid credits.
+Health, cooldown, fast-mode compatibility and key-capacity checks still apply.
+Initial allocation and retry/failover selection use the same tier preference;
+request counts are not guaranteed to be equal.
 
 `subpool_codex_quota_routing_switches_total` counts committed default-binding
 changes and resets on process restart, like the routing observation counters.

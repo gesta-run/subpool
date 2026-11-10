@@ -294,3 +294,17 @@ func TestClassifyTimeout(t *testing.T) {
 		t.Fatalf("result = %#v, want %#v", got, want)
 	}
 }
+
+func TestCodexHealthCheckKeepsPrepaidAccountAvailable(t *testing.T) {
+	credentials, _ := json.Marshal(codex.Credentials{AccessToken: "illustrative-token", AccountID: "illustrative-account"})
+	allowed := true
+	balance := "1000"
+	snapshot := codex.UsageSnapshot{UsageAllowed: &allowed, Weekly: &codex.UsageWindow{UsedPercent: 100}, Credits: &codex.CreditsSnapshot{HasCredits: true, Balance: &balance}}
+	account := domain.ProviderAccount{Provider: domain.ProviderCodex, Status: domain.AccountActive}
+	checker := NewChecker(nil, testCipher{plaintext: credentials}, testCodexUsage{snapshot: snapshot}, nil)
+	result := checker.Check(context.Background(), account)
+	checker.ApplyNewAccount(&account, result)
+	if account.Status != domain.AccountActive || result.UsageAllowed == nil || !*result.UsageAllowed {
+		t.Fatalf("credits account exhausted: %+v", account)
+	}
+}

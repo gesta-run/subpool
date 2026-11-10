@@ -624,6 +624,20 @@ func (q *Queries) LockPoolAssignments(ctx context.Context, poolID string) error 
 	return err
 }
 
+const lockPoolCodexAccounts = `-- name: LockPoolCodexAccounts :exec
+SELECT a.id
+FROM provider_accounts a
+JOIN pool_accounts pa ON pa.provider_account_id = a.id
+WHERE pa.pool_id = $1 AND a.provider = 'codex'
+ORDER BY a.id
+FOR UPDATE OF a
+`
+
+func (q *Queries) LockPoolCodexAccounts(ctx context.Context, poolID string) error {
+	_, err := q.db.Exec(ctx, lockPoolCodexAccounts, poolID)
+	return err
+}
+
 const lockPoolForUpdate = `-- name: LockPoolForUpdate :one
 SELECT provider FROM pools WHERE id = $1 FOR UPDATE
 `
@@ -645,7 +659,7 @@ SELECT a.id, a.quota_snapshot, a.quota_checked_at,
 FROM provider_accounts a
 JOIN pool_accounts pa ON pa.provider_account_id = a.id AND pa.pool_id = $1 AND pa.enabled
 JOIN pool_accounts current_pa ON current_pa.provider_account_id = $2
-    AND current_pa.pool_id = pa.pool_id AND current_pa.enabled AND pa.priority <= current_pa.priority
+    AND current_pa.pool_id = pa.pool_id AND current_pa.enabled
 JOIN provider_accounts current_account ON current_account.id = current_pa.provider_account_id
 WHERE a.provider = 'codex' AND current_account.provider = 'codex'
   AND a.credential_type = current_account.credential_type
