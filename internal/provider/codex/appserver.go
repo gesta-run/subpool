@@ -366,11 +366,15 @@ func normalizeAppServerRateLimits(limits appServerRateLimits) *UsageSnapshot {
 			Balance:    limits.Credits.Balance,
 		}
 	}
+	subscriptionFull := (snapshot.FiveHour != nil && snapshot.FiveHour.UsedPercent >= 100) || (snapshot.Weekly != nil && snapshot.Weekly.UsedPercent >= 100)
+	// The generic subscription-limit signal can coexist with usable prepaid
+	// credits. Specific denials and spend controls still take precedence.
+	prepaidContinuation := subscriptionFull && snapshot.Credits.PrepaidBalance() > 0
 	if limits.SpendControlReached != nil && *limits.SpendControlReached {
 		snapshot.markUsageBlocked("spend_control_reached")
-	} else if limits.RateLimitReachedType != nil && *limits.RateLimitReachedType != "" && *limits.RateLimitReachedType != "unknown" {
+	} else if limits.RateLimitReachedType != nil && *limits.RateLimitReachedType != "" && *limits.RateLimitReachedType != "unknown" && !(*limits.RateLimitReachedType == "rate_limit_reached" && prepaidContinuation) {
 		snapshot.markUsageBlocked(*limits.RateLimitReachedType)
-	} else if snapshot.Credits.PrepaidBalance() == 0 && ((snapshot.FiveHour != nil && snapshot.FiveHour.UsedPercent >= 100) || (snapshot.Weekly != nil && snapshot.Weekly.UsedPercent >= 100)) {
+	} else if subscriptionFull && !prepaidContinuation {
 		snapshot.markUsageBlocked("rate_limit_reached")
 	}
 	return snapshot
