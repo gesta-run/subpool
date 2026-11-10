@@ -266,3 +266,138 @@ func TestPostgresQuotaRoutingRestoresHigherPriorityPrimary(t *testing.T) {
 		t.Fatalf("continuation moved: account=%s err=%v", pinned.ID, err)
 	}
 }
+
+func setupPrepaidRouting(t *testing.T) (*Postgres, domain.Pool, []domain.ProviderAccount, domain.APIKey, time.Time) {
+	t.Helper()
+	databaseURL := os.Getenv("SUBPOOL_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("SUBPOOL_TEST_DATABASE_URL is not set")
+	}
+	ctx := context.Background()
+	db, err := Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(db.Close)
+	db.WithCodexQuotaRouting(true)
+	now := time.Now()
+	accounts := make([]domain.ProviderAccount, 2)
+	pool := domain.Pool{ID: "00000000-0000-4000-8000-000000009450", Name: "Illustrative prepaid routing pool", Provider: domain.ProviderCodex}
+	if err = db.CreatePool(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	for i := range accounts {
+		accounts[i] = domain.ProviderAccount{ID: fmt.Sprintf("00000000-0000-4000-8000-%012d", 9400+i), Provider: domain.ProviderCodex, CredentialType: domain.CredentialSubscription, DisplayName: "Illustrative prepaid account", SubjectHMAC: bytes.Repeat([]byte{byte(151 + i)}, 32), CredentialCiphertext: []byte("encrypted"), CredentialVersion: 1, Status: domain.AccountActive, HealthStatus: domain.HealthHealthy}
+		if err = db.CreateProviderAccount(ctx, accounts[i]); err != nil {
+			t.Fatal(err)
+		}
+		if err = db.AddPoolAccount(ctx, domain.PoolAccount{PoolID: pool.ID, ProviderAccountID: accounts[i].ID, Weight: 1, Enabled: true}); err != nil {
+			t.Fatal(err)
+		}
+		if err = db.UpdateProviderDetails(ctx, accounts[i].ID, "", testCreditQuota(now, 100, "1000"), now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	key := domain.APIKey{ID: "00000000-0000-4000-8000-000000009460", PoolID: pool.ID, EmployeeName: "Illustrative prepaid employee", KeyHMAC: bytes.Repeat([]byte{153}, 32), KeyHint: "test"}
+	if _, err = db.CreateAPIKeyAndBind(ctx, key); err != nil {
+		t.Fatal(err)
+	}
+	return db, pool, accounts, key, now
+}
+
+func TestPostgresSubscriptionCreditsAndRecovery(t *testing.T) {
+	ctx := context.Background()
+	db, pool, accounts, key, now := setupPrepaidRouting(t)
+	initial, err := db.ResolveAPIKey(ctx, key.KeyHMAC)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondKey := domain.APIKey{ID: "00000000-0000-4000-8000-000000009461", PoolID: pool.ID, EmployeeName: "Illustrative second employee", KeyHMAC: bytes.Repeat([]byte{155}, 32), KeyHint: "test"}
+	secondID, err := db.CreateAPIKeyAndBind(ctx, secondKey)
+	if err != nil || secondID == initial.Account.ID {
+		t.Fatalf("equal budgets lost weighted allocation: %s %v", secondID, err)
+	}
+	// The remaining cases exercise budget ordering rather than a full account.
+	if err = db.RevokeAPIKey(ctx, secondKey.ID); err != nil {
+		t.Fatal(err)
+	}
+	session := bytes.Repeat([]byte{154}, 32)
+	if err = db.SaveSessionBinding(ctx, key.ID, pool.ID, session, accounts[1].ID, now.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name     string
+		used     [2]float64
+		balances [2]string
+		want     int
+	}{
+		{"subscription balancing", [2]float64{70, 30}, [2]string{"1000", "2000"}, 1},
+		{"subscription before larger prepaid balance", [2]float64{99, 100}, [2]string{"1000", "2000"}, 0},
+		{"both subscriptions depleted", [2]float64{100, 100}, [2]string{"1000", "2000"}, 1},
+		{"credits balance reversal", [2]float64{100, 100}, [2]string{"3000", "2000"}, 0},
+		{"restored subscription", [2]float64{100, 25}, [2]string{"3000", "2000"}, 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			for i := range accounts {
+				if err = db.UpdateProviderDetails(ctx, accounts[i].ID, "", testCreditQuota(now, test.used[i], test.balances[i]), now); err != nil {
+					t.Fatal(err)
+				}
+			}
+			// First exercise an existing independent request, then the retry allocator.
+			route, e := db.ResolveAPIKey(ctx, key.KeyHMAC)
+			if e != nil {
+				t.Fatal(e)
+			}
+			selected, e := db.PreferQuotaAccount(ctx, route)
+			if e != nil || selected.ID != accounts[test.want].ID {
+				t.Fatalf("independent=%s want=%s err=%v", selected.ID, accounts[test.want].ID, e)
+			}
+			selected, e = db.ReassignAPIKey(ctx, key.ID, pool.ID, nil)
+			if e != nil || selected.ID != accounts[test.want].ID {
+				t.Fatalf("retry=%s want=%s err=%v", selected.ID, accounts[test.want].ID, e)
+			}
+			pinned, e := db.ResolveSessionAccount(ctx, key.ID, session)
+			if e != nil || pinned.ID != accounts[1].ID {
+				t.Fatalf("continuation migrated: %s %v", pinned.ID, e)
+			}
+		})
+	}
+	// A restored subscription outranks a credit-funded account even across
+	// configured priorities. Priorities still apply within each budget tier.
+	for i := range accounts {
+		if err = db.AddPoolAccount(ctx, domain.PoolAccount{PoolID: pool.ID, ProviderAccountID: accounts[i].ID, Weight: 1, Priority: (1 - i) * 10, Enabled: true}); err != nil {
+			t.Fatal(err)
+		}
+		if err = db.UpdateProviderDetails(ctx, accounts[i].ID, "", testCreditQuota(now, []float64{99, 100}[i], "2000"), now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	selected, err := db.ReassignAPIKey(ctx, key.ID, pool.ID, nil)
+	if err != nil || selected.ID != accounts[0].ID {
+		t.Fatalf("subscription priority: %s %v", selected.ID, err)
+	}
+	for i := range accounts {
+		if err = db.AddPoolAccount(ctx, domain.PoolAccount{PoolID: pool.ID, ProviderAccountID: accounts[i].ID, Weight: 1, Enabled: true}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Excluded attempts must not be selected even when they have more credits.
+	for i := range accounts {
+		if err = db.UpdateProviderDetails(ctx, accounts[i].ID, "", testCreditQuota(now, 100, []string{"3000", "2000"}[i]), now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	selected, err = db.ReassignAPIKey(ctx, key.ID, pool.ID, []string{accounts[0].ID})
+	if err != nil || selected.ID != accounts[1].ID {
+		t.Fatalf("excluded retry=%s err=%v", selected.ID, err)
+	}
+	// Fresh health reports disable accounts when neither budget is available.
+	for _, account := range accounts {
+		if err = db.SetProviderUsageAllowed(ctx, account.ID, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err = db.ReassignAPIKey(ctx, key.ID, pool.ID, nil); err != ErrNoEligibleAccount {
+		t.Fatalf("empty budgets did not stop routing: %v", err)
+	}
+}

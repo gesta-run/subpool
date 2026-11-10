@@ -51,3 +51,18 @@ func TestRetryAfterCapsProviderQuotaWindow(t *testing.T) {
 		})
 	}
 }
+
+func TestAccountHealthyAcceptsPrepaidCodexCredits(t *testing.T) {
+	now := time.Now()
+	allowed := true
+	balance := "1000"
+	raw, _ := json.Marshal(codex.UsageSnapshot{UsageAllowed: &allowed, Weekly: &codex.UsageWindow{UsedPercent: 100, ResetAt: now.Add(time.Hour).Unix()}, Credits: &codex.CreditsSnapshot{HasCredits: true, Balance: &balance}})
+	a := domain.ProviderAccount{Provider: domain.ProviderCodex, Status: domain.AccountActive, HealthStatus: domain.HealthHealthy, QuotaSnapshot: raw}
+	if !accountHealthy(a, now) {
+		t.Fatal("prepaid continuation rejected")
+	}
+	a.Status = domain.AccountExhausted
+	if accountHealthy(a, now) {
+		t.Fatal("upstream exhausted state ignored")
+	}
+}

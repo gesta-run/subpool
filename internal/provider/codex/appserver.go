@@ -366,11 +366,11 @@ func normalizeAppServerRateLimits(limits appServerRateLimits) *UsageSnapshot {
 			Balance:    limits.Credits.Balance,
 		}
 	}
-	if limits.RateLimitReachedType != nil && *limits.RateLimitReachedType != "" && *limits.RateLimitReachedType != "unknown" {
-		snapshot.markUsageBlocked(*limits.RateLimitReachedType)
-	} else if limits.SpendControlReached != nil && *limits.SpendControlReached {
+	if limits.SpendControlReached != nil && *limits.SpendControlReached {
 		snapshot.markUsageBlocked("spend_control_reached")
-	} else if (snapshot.FiveHour != nil && snapshot.FiveHour.UsedPercent >= 100) || (snapshot.Weekly != nil && snapshot.Weekly.UsedPercent >= 100) {
+	} else if limits.RateLimitReachedType != nil && *limits.RateLimitReachedType != "" && *limits.RateLimitReachedType != "unknown" {
+		snapshot.markUsageBlocked(*limits.RateLimitReachedType)
+	} else if snapshot.Credits.PrepaidBalance() == 0 && ((snapshot.FiveHour != nil && snapshot.FiveHour.UsedPercent >= 100) || (snapshot.Weekly != nil && snapshot.Weekly.UsedPercent >= 100)) {
 		snapshot.markUsageBlocked("rate_limit_reached")
 	}
 	return snapshot
