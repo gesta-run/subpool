@@ -52,10 +52,45 @@ func TestQuotaRoutingScore(t *testing.T) {
 		{"exhausted", testQuota(now, 100, 20), &now, "", 0, false},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			score, _, valid := quotaRoutingScore(tt.raw, tt.checked, tt.quotaError, now)
-			if score != tt.want || valid != tt.valid {
-				t.Fatalf("score=%v valid=%v", score, valid)
+			budget, valid := quotaRoutingBudget(tt.raw, tt.checked, tt.quotaError, now)
+			if budget.remaining != tt.want || valid != tt.valid {
+				t.Fatalf("score=%v valid=%v", budget.remaining, valid)
 			}
 		})
+	}
+}
+
+func testCreditQuota(now time.Time, used float64, balance string) []byte {
+	allowed := true
+	raw, _ := json.Marshal(codex.UsageSnapshot{PlanType: "illustrative-plan", UsageAllowed: &allowed, Weekly: &codex.UsageWindow{UsedPercent: used, ResetAt: now.Add(time.Hour).Unix()}, Credits: &codex.CreditsSnapshot{HasCredits: true, Balance: &balance}})
+	return raw
+}
+
+func TestQuotaRoutingSubscriptionBeforeCredits(t *testing.T) {
+	now := time.Now()
+	subscription, valid := quotaRoutingBudget(testCreditQuota(now, 99, "1000"), &now, "", now)
+	if !valid || subscription.credits || subscription.remaining != 1 {
+		t.Fatalf("subscription=%+v", subscription)
+	}
+	credits, valid := quotaRoutingBudget(testCreditQuota(now, 100, "2000"), &now, "", now)
+	if !valid || !credits.credits || credits.remaining != 2000 {
+		t.Fatalf("credits=%+v", credits)
+	}
+	if !subscription.preferredTo(credits, 10, 0, true) || credits.preferredTo(subscription, 0, 10, true) {
+		t.Fatal("priority or balance overrode subscription tier")
+	}
+	more := credits
+	more.remaining++
+	if !more.preferredTo(credits, 0, 0, true) {
+		t.Fatal("credits incorrectly use subscription percentage margin")
+	}
+	for _, balance := range []string{"0", "-1", "invalid", "NaN"} {
+		if _, ok := quotaRoutingBudget(testCreditQuota(now, 100, balance), &now, "", now); ok {
+			t.Fatalf("unusable credits accepted: %q", balance)
+		}
+	}
+	stale := now.Add(-time.Hour)
+	if _, ok := quotaRoutingBudget(testCreditQuota(now, 100, "2000"), &stale, "", now); ok {
+		t.Fatal("stale credits accepted")
 	}
 }

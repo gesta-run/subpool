@@ -124,7 +124,7 @@ func (p *Postgres) CreateAPIKeyAndBind(ctx context.Context, key domain.APIKey) (
 	if err = queries.LockPoolAssignments(ctx, key.PoolID); err != nil {
 		return "", wrapDB("lock API key assignment", err)
 	}
-	accountID, err := selectAccountForUpdate(ctx, queries, key.PoolID, nil)
+	accountID, err := selectAccountForUpdate(ctx, queries, key.PoolID, nil, p.codexQuotaRouting)
 	if err != nil {
 		return "", err
 	}
@@ -151,7 +151,14 @@ func (p *Postgres) CreateAPIKeyAndBind(ctx context.Context, key domain.APIKey) (
 	return accountID, nil
 }
 
-func selectAccountForUpdate(ctx context.Context, queries *storedb.Queries, poolID string, excludeIDs []string) (string, error) {
+func selectAccountForUpdate(ctx context.Context, queries *storedb.Queries, poolID string, excludeIDs []string, quotaRouting bool) (string, error) {
+	if quotaRouting {
+		// Pools may share accounts. Lock in the same order as quota rebalancing
+		// before the allocator locks its first candidate.
+		if err := queries.LockPoolCodexAccounts(ctx, poolID); err != nil {
+			return "", wrapDB("lock Codex allocation candidates", err)
+		}
+	}
 	excluded := append([]string(nil), excludeIDs...)
 	for {
 		id, err := queries.SelectAccountForUpdate(ctx, storedb.SelectAccountForUpdateParams{
@@ -168,6 +175,9 @@ func selectAccountForUpdate(ctx context.Context, queries *storedb.Queries, poolI
 			return "", wrapDB("check provider account capacity", err)
 		}
 		if hasCapacity {
+			if quotaRouting {
+				return selectQuotaAccount(ctx, queries, poolID, id, excludeIDs)
+			}
 			return id, nil
 		}
 		excluded = append(excluded, id)
@@ -279,7 +289,7 @@ func (p *Postgres) ReassignAPIKey(ctx context.Context, keyID, poolID string, exc
 	if err = queries.LockPoolAssignments(ctx, poolID); err != nil {
 		return domain.ProviderAccount{}, wrapDB("lock API key reassignment", err)
 	}
-	id, err := selectAccountForUpdate(ctx, queries, poolID, excludeIDs)
+	id, err := selectAccountForUpdate(ctx, queries, poolID, excludeIDs, p.codexQuotaRouting)
 	if err != nil {
 		return domain.ProviderAccount{}, err
 	}

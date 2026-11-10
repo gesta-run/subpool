@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/gesta-run/subpool/internal/domain"
+	"github.com/gesta-run/subpool/internal/provider/codex"
 	"github.com/gesta-run/subpool/internal/store/storedb"
 )
 
@@ -44,31 +45,34 @@ func (p *Postgres) PreferQuotaAccount(ctx context.Context, route domain.KeyRoute
 		return domain.ProviderAccount{}, err
 	}
 	now := time.Now()
-	var currentScore float64
-	var currentPlan string
+	var currentBudget quotaBudget
 	var currentPriority int32
 	currentValid := false
 	for _, c := range candidates {
 		if c.ID == currentID {
 			currentPriority = c.Priority
-			currentScore, currentPlan, currentValid = quotaRoutingScore(c.QuotaSnapshot, optionalTime(c.QuotaCheckedAt), c.QuotaError, now)
+			currentBudget, currentValid = quotaRoutingBudget(c.QuotaSnapshot, optionalTime(c.QuotaCheckedAt), c.QuotaError, now)
 		}
 	}
 	selected := currentID
-	bestScore := currentScore
+	bestBudget := currentBudget
 	bestPriority := currentPriority
 	bestLoad := math.Inf(1)
 	for _, c := range candidates {
 		if c.ID == currentID {
 			continue
 		}
-		score, plan, valid := quotaRoutingScore(c.QuotaSnapshot, optionalTime(c.QuotaCheckedAt), c.QuotaError, now)
-		if !valid || c.Priority > bestPriority {
+		budget, valid := quotaRoutingBudget(c.QuotaSnapshot, optionalTime(c.QuotaCheckedAt), c.QuotaError, now)
+		if !valid {
 			continue
 		}
-		// Explicit pool priority takes precedence over quota balancing. Restore
-		// a recovered primary even when the fallback still has more quota.
-		if c.Priority == currentPriority && (!currentValid || plan != currentPlan || score <= currentScore+quotaRoutingMargin) {
+		// Subscription quota takes precedence over credits. Within the same tier,
+		// keep explicit pool priorities and the existing subscription hysteresis.
+		if !currentValid {
+			if c.Priority >= currentPriority {
+				continue
+			}
+		} else if !budget.preferredTo(currentBudget, c.Priority, currentPriority, true) {
 			continue
 		}
 		capacity, capacityErr := q.ProviderAccountHasCapacity(ctx, c.ID)
@@ -79,8 +83,8 @@ func (p *Postgres) PreferQuotaAccount(ctx context.Context, route domain.KeyRoute
 			continue
 		}
 		load := float64(c.BoundKeys) / math.Max(1, float64(c.Weight))
-		if c.Priority < bestPriority || selected == currentID || score > bestScore || (score == bestScore && load < bestLoad) {
-			selected, bestPriority, bestScore, bestLoad = c.ID, c.Priority, score, load
+		if selected == currentID || budget.preferredTo(bestBudget, c.Priority, bestPriority, false) || (budget == bestBudget && c.Priority == bestPriority && load < bestLoad) {
+			selected, bestPriority, bestBudget, bestLoad = c.ID, c.Priority, budget, load
 		}
 	}
 	if selected != currentID {
@@ -107,39 +111,119 @@ func (p *Postgres) PreferQuotaAccount(ctx context.Context, route domain.KeyRoute
 // QuotaRoutingSwitches counts committed default-binding changes, not attempts.
 func (p *Postgres) QuotaRoutingSwitches() uint64 { return p.quotaRoutingSwitches.Load() }
 
-// Require fresh quota and at least one complete window. Providers may omit an
-// unsupported window; it must not be treated as either empty or unlimited quota.
-func quotaRoutingScore(raw []byte, checked *time.Time, quotaError string, now time.Time) (float64, string, bool) {
+type quotaBudget struct {
+	remaining float64
+	plan      string
+	credits   bool
+}
+
+func (b quotaBudget) preferredTo(current quotaBudget, priority, currentPriority int32, hysteresis bool) bool {
+	if b.credits != current.credits {
+		return !b.credits
+	}
+	if priority != currentPriority {
+		return priority < currentPriority
+	}
+	margin := 0.0
+	if !b.credits {
+		if b.plan != current.plan {
+			return false
+		}
+		if hysteresis {
+			margin = quotaRoutingMargin
+		}
+	}
+	return b.remaining > current.remaining+margin
+}
+
+// Require a fresh, complete snapshot before choosing between subscription quota
+// and prepaid credits. Never infer renewed quota merely from an elapsed reset.
+func quotaRoutingBudget(raw []byte, checked *time.Time, quotaError string, now time.Time) (quotaBudget, bool) {
 	if checked == nil || checked.After(now) || now.Sub(*checked) > quotaRoutingMaxAge || quotaError != "" {
-		return 0, "", false
+		return quotaBudget{}, false
 	}
 	type window struct {
 		UsedPercent *float64 `json:"used_percent"`
 		ResetAt     int64    `json:"reset_at"`
 	}
 	var quota struct {
-		PlanType     string  `json:"plan_type"`
-		UsageAllowed *bool   `json:"usage_allowed"`
-		FiveHour     *window `json:"five_hour"`
-		Weekly       *window `json:"weekly"`
+		PlanType     string                 `json:"plan_type"`
+		UsageAllowed *bool                  `json:"usage_allowed"`
+		FiveHour     *window                `json:"five_hour"`
+		Weekly       *window                `json:"weekly"`
+		Credits      *codex.CreditsSnapshot `json:"credits"`
 	}
 	if json.Unmarshal(raw, &quota) != nil || quota.PlanType == "" || (quota.UsageAllowed != nil && !*quota.UsageAllowed) {
-		return 0, "", false
+		return quotaBudget{}, false
 	}
-	score := 100.0
-	windowCount := 0
+	budget := quotaBudget{remaining: 100, plan: quota.PlanType}
+	windows := 0
 	for _, w := range []*window{quota.FiveHour, quota.Weekly} {
 		if w == nil {
 			continue
 		}
-		if w.UsedPercent == nil || w.ResetAt <= now.Unix() || *w.UsedPercent < 0 || *w.UsedPercent >= 100 || math.IsNaN(*w.UsedPercent) {
-			return 0, "", false
+		if w.UsedPercent == nil || w.ResetAt <= now.Unix() || *w.UsedPercent < 0 || *w.UsedPercent > 100 || math.IsNaN(*w.UsedPercent) {
+			return quotaBudget{}, false
 		}
-		windowCount++
-		score = math.Min(score, 100-*w.UsedPercent)
+		windows++
+		budget.remaining = math.Min(budget.remaining, 100-*w.UsedPercent)
 	}
-	if windowCount == 0 {
-		return 0, "", false
+	if windows == 0 {
+		return quotaBudget{}, false
 	}
-	return score, quota.PlanType, true
+	if budget.remaining == 0 {
+		budget.remaining = quota.Credits.PrepaidBalance()
+		budget.credits = true
+		if budget.remaining == 0 {
+			return quotaBudget{}, false
+		}
+	}
+	return budget, true
+}
+
+// Keep initial assignments and retry/failover selections on the same policy as
+// independent requests. The caller already holds the pool assignment lock.
+func selectQuotaAccount(ctx context.Context, q *storedb.Queries, poolID, initialID string, excluded []string) (string, error) {
+	candidates, err := q.LockQuotaRoutingCandidates(ctx, storedb.LockQuotaRoutingCandidatesParams{PoolID: poolID, CurrentID: initialID})
+	if err != nil {
+		return "", err
+	}
+	now := time.Now()
+	selected := initialID
+	var best quotaBudget
+	var priority int32
+	valid := false
+	// The allocator already applied weighted key load and checked this account's
+	// capacity. Keep its choice when budgets are equal.
+	for _, c := range candidates {
+		if c.ID == initialID {
+			best, valid = quotaRoutingBudget(c.QuotaSnapshot, optionalTime(c.QuotaCheckedAt), c.QuotaError, now)
+			priority = c.Priority
+			break
+		}
+	}
+	for _, c := range candidates {
+		skip := false
+		for _, id := range excluded {
+			if c.ID == id {
+				skip = true
+				break
+			}
+		}
+		if skip {
+			continue
+		}
+		budget, ok := quotaRoutingBudget(c.QuotaSnapshot, optionalTime(c.QuotaCheckedAt), c.QuotaError, now)
+		if !ok || (valid && !budget.preferredTo(best, c.Priority, priority, false)) {
+			continue
+		}
+		capacity, err := q.ProviderAccountHasCapacity(ctx, c.ID)
+		if err != nil {
+			return "", err
+		}
+		if capacity {
+			selected, best, priority, valid = c.ID, budget, c.Priority, true
+		}
+	}
+	return selected, nil
 }
