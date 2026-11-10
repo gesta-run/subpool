@@ -39,12 +39,14 @@ func TestNormalizeCreditsAndSpendControls(t *testing.T) {
 	balance := "1000"
 	spend := true
 	reason := "credits_exhausted"
+	subscriptionReason := "rate_limit_reached"
 	for _, test := range []struct {
 		name    string
 		limits  appServerRateLimits
 		allowed bool
 	}{
 		{"prepaid continuation", appServerRateLimits{}, true},
+		{"subscription signal with prepaid continuation", appServerRateLimits{RateLimitReachedType: &subscriptionReason}, true},
 		{"spend limit", appServerRateLimits{SpendControlReached: &spend}, false},
 		{"upstream denial", appServerRateLimits{RateLimitReachedType: &reason}, false},
 	} {
@@ -54,6 +56,26 @@ func TestNormalizeCreditsAndSpendControls(t *testing.T) {
 			snapshot := normalizeAppServerRateLimits(test.limits)
 			if snapshot.UsageAllowed == nil || *snapshot.UsageAllowed != test.allowed {
 				t.Fatalf("snapshot=%+v", snapshot)
+			}
+		})
+	}
+}
+
+func TestSubscriptionLimitSignalRequiresPrepaidContinuation(t *testing.T) {
+	reason, balance := "rate_limit_reached", "1000"
+	for _, test := range []struct {
+		name    string
+		used    float64
+		credits *appServerCreditsSnapshot
+	}{
+		{"no prepaid credits", 100, nil},
+		{"no full subscription window", 25, &appServerCreditsSnapshot{HasCredits: true, Balance: &balance}},
+		{"unlimited entitlement", 100, &appServerCreditsSnapshot{HasCredits: true, Unlimited: true, Balance: &balance}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			snapshot := normalizeAppServerRateLimits(appServerRateLimits{Secondary: &appServerRateLimitWindow{UsedPercent: test.used}, Credits: test.credits, RateLimitReachedType: &reason})
+			if snapshot.UsageAllowed == nil || *snapshot.UsageAllowed {
+				t.Fatalf("unexpected continuation: %+v", snapshot)
 			}
 		})
 	}
