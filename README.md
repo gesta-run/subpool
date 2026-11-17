@@ -242,21 +242,28 @@ Existing `previous_response_id` chains and established WebSockets keep their
 account; the policy does not migrate or replay them. API keys and client
 configuration stay unchanged.
 
-Fresh subscription quota always takes precedence over prepaid AI credits. If
-all eligible subscription windows are depleted, accounts with an explicitly
-available, finite positive credit balance remain usable; the larger credit
-balance is preferred within the same pool priority. A refreshed subscription
-returns to the subscription tier even if another account still has more credits.
-This never purchases credits, enables auto-recharge, redeems a reset credit, or
-falls back to an OpenAI API billing account outside the configured pool. Explicit
-upstream denials and spend controls still block usage. Existing upstream billing
-settings remain the operator's responsibility.
+Fresh subscription quota takes precedence over configured promotional OpenAI
+API grants in the same mixed Codex pool, followed by finite prepaid AI credits.
+Grant accounts must use an explicit `openai_api_credits` quota snapshot with a
+positive remaining and granted balance, a future expiry and no purchased
+balance. Earlier-expiring grants are used first. Invalid, expired or exhausted
+grants are skipped, including on HTTP and WebSocket bridge continuations. A
+restored subscription returns to the subscription tier. Existing continuations
+are never moved or replayed across accounts.
+
+Grant checks may use a cached estimate for up to 24 hours during billing API
+rate limits; other refresh errors reject the grant. Estimates lag actual cost
+and are not a hard spending cap. Operators must disable paid billing and
+recharge upstream when only promotional usage is authorized. This policy never
+purchases credits, enables auto-recharge, redeems reset credits, or adds an API
+account outside the configured pool. API-only pools retain their existing
+allocation policy. Explicit upstream denials and spend controls still apply.
 
 Within the subscription tier, the score is the smallest remaining percentage of
 the available five-hour and weekly windows. Switching between equal-priority,
 same-plan subscriptions requires an improvement of more than five percentage
 points. Configured pool priority applies within each tier; use equal priorities
-for shared balancing without a designated primary. Both tiers require an
+for shared balancing without a designated primary. Both subscription and AI-credit tiers require an
 error-free quota check within 15 minutes, at least one complete window, and a
 valid usage percentage and future reset timestamp in every present window.
 Missing or stale data does not imply fresh quota or available prepaid credits.

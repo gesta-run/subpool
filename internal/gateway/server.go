@@ -30,6 +30,7 @@ import (
 	"github.com/gesta-run/subpool/internal/provider/antigravity"
 	"github.com/gesta-run/subpool/internal/provider/codex"
 	"github.com/gesta-run/subpool/internal/provider/copilot"
+	"github.com/gesta-run/subpool/internal/provider/openaibilling"
 	"github.com/gesta-run/subpool/internal/store"
 )
 
@@ -89,6 +90,14 @@ type Server struct {
 	now                   func() time.Time
 	eventSeq              atomic.Uint64
 	routingStats          routingstats.Counters
+
+	promotionalAPIFallback bool
+}
+
+// WithPromotionalAPIFallback enables the grant guard for opt-in mixed Codex pools.
+func (s *Server) WithPromotionalAPIFallback(enabled bool) *Server {
+	s.promotionalAPIFallback = enabled
+	return s
 }
 
 func New(st store.Store, keys *auth.APIKeys, cipher Cipher, client CodexClient, refresher credential.AccountRefresher, compatible ...OpenAICompatibleClient) *Server {
@@ -425,6 +434,11 @@ func (s *Server) attemptAccount(r *http.Request, route domain.KeyRoute, request 
 	if err != nil {
 		s.recordHealthFailure(r.Context(), account.ID, "credential_unavailable")
 		return nil, retryUnavailable, false
+	}
+	if s.promotionalAPIFallback && route.Pool.Provider == domain.ProviderMixed && account.Provider == domain.ProviderOpenAICompatible && openaibilling.SupportsURL(credentials.Compatible.BaseURL) {
+		if _, ok := openaibilling.PromotionalBudget(account.QuotaSnapshot, account.QuotaCheckedAt, account.LastQuotaErrorCode, s.now()); !ok {
+			return nil, retryUnavailable, false
+		}
 	}
 	if account.Provider == domain.ProviderAntigravity && time.Until(credentials.Antigravity.ExpiresAt) <= time.Minute {
 		return s.retryRefreshedAccount(r, route, request, account)

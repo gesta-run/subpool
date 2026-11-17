@@ -8,6 +8,7 @@ import (
 
 	"github.com/gesta-run/subpool/internal/domain"
 	"github.com/gesta-run/subpool/internal/provider/codex"
+	"github.com/gesta-run/subpool/internal/provider/openaibilling"
 	"github.com/gesta-run/subpool/internal/store/storedb"
 )
 
@@ -23,7 +24,7 @@ func (p *Postgres) WithCodexQuotaRouting(enabled bool) *Postgres {
 // PreferQuotaAccount must only be called before an independent request or the
 // first turn of an unbound connection. It never modifies response bindings.
 func (p *Postgres) PreferQuotaAccount(ctx context.Context, route domain.KeyRoute) (domain.ProviderAccount, error) {
-	if !p.codexQuotaRouting || route.Account.Provider != domain.ProviderCodex {
+	if !p.codexQuotaRouting || (route.Account.Provider != domain.ProviderCodex && route.Pool.Provider != domain.ProviderMixed) {
 		return route.Account, nil
 	}
 	tx, err := p.pool.Begin(ctx)
@@ -48,9 +49,15 @@ func (p *Postgres) PreferQuotaAccount(ctx context.Context, route domain.KeyRoute
 	var currentBudget quotaBudget
 	var currentPriority int32
 	currentValid := false
+	currentPromotional := false
 	for _, c := range candidates {
 		if c.ID == currentID {
 			currentPriority = c.Priority
+			var plan struct {
+				PlanType string `json:"plan_type"`
+			}
+			_ = json.Unmarshal(c.QuotaSnapshot, &plan)
+			currentPromotional = plan.PlanType == openaibilling.PlanType
 			currentBudget, currentValid = quotaRoutingBudget(c.QuotaSnapshot, optionalTime(c.QuotaCheckedAt), c.QuotaError, now)
 		}
 	}
@@ -66,10 +73,10 @@ func (p *Postgres) PreferQuotaAccount(ctx context.Context, route domain.KeyRoute
 		if !valid {
 			continue
 		}
-		// Subscription quota takes precedence over credits. Within the same tier,
+		// Subscription quota precedes promotional API grants, then AI credits. Within each tier,
 		// keep explicit pool priorities and the existing subscription hysteresis.
 		if !currentValid {
-			if c.Priority >= currentPriority {
+			if !currentPromotional && c.Priority >= currentPriority {
 				continue
 			}
 		} else if !budget.preferredTo(currentBudget, c.Priority, currentPriority, true) {
@@ -112,20 +119,34 @@ func (p *Postgres) PreferQuotaAccount(ctx context.Context, route domain.KeyRoute
 func (p *Postgres) QuotaRoutingSwitches() uint64 { return p.quotaRoutingSwitches.Load() }
 
 type quotaBudget struct {
-	remaining float64
-	plan      string
-	credits   bool
+	remaining  float64
+	plan       string
+	credits    bool
+	apiCredits bool
+	expiresAt  int64
 }
 
 func (b quotaBudget) preferredTo(current quotaBudget, priority, currentPriority int32, hysteresis bool) bool {
-	if b.credits != current.credits {
-		return !b.credits
+	tier := func(v quotaBudget) int {
+		if v.credits {
+			return 2
+		}
+		if v.apiCredits {
+			return 1
+		}
+		return 0
+	}
+	if tier(b) != tier(current) {
+		return tier(b) < tier(current)
+	}
+	if b.apiCredits && b.expiresAt != current.expiresAt {
+		return b.expiresAt < current.expiresAt
 	}
 	if priority != currentPriority {
 		return priority < currentPriority
 	}
 	margin := 0.0
-	if !b.credits {
+	if !b.credits && !b.apiCredits {
 		if b.plan != current.plan {
 			return false
 		}
@@ -139,6 +160,16 @@ func (b quotaBudget) preferredTo(current quotaBudget, priority, currentPriority 
 // Require a fresh, complete snapshot before choosing between subscription quota
 // and prepaid credits. Never infer renewed quota merely from an elapsed reset.
 func quotaRoutingBudget(raw []byte, checked *time.Time, quotaError string, now time.Time) (quotaBudget, bool) {
+	if b, ok := openaibilling.PromotionalBudget(raw, checked, quotaError, now); ok {
+		return quotaBudget{remaining: b.Remaining, plan: openaibilling.PlanType, apiCredits: true, expiresAt: b.ExpiresAt}, true
+	}
+	var plan struct {
+		PlanType string `json:"plan_type"`
+	}
+	_ = json.Unmarshal(raw, &plan)
+	if plan.PlanType == openaibilling.PlanType {
+		return quotaBudget{}, false
+	}
 	if checked == nil || checked.After(now) || now.Sub(*checked) > quotaRoutingMaxAge || quotaError != "" {
 		return quotaBudget{}, false
 	}
@@ -223,6 +254,19 @@ func selectQuotaAccount(ctx context.Context, q *storedb.Queries, poolID, initial
 		}
 		if capacity {
 			selected, best, priority, valid = c.ID, budget, c.Priority, true
+		}
+	}
+	if !valid {
+		for _, c := range candidates {
+			if c.ID == initialID {
+				var plan struct {
+					PlanType string `json:"plan_type"`
+				}
+				_ = json.Unmarshal(c.QuotaSnapshot, &plan)
+				if plan.PlanType == openaibilling.PlanType {
+					return "", ErrNoEligibleAccount
+				}
+			}
 		}
 	}
 	return selected, nil
