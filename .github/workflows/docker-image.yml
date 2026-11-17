@@ -133,8 +133,8 @@ jobs:
         with:
           images: public.ecr.aws/cloudpilotai/subpool
           tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
-            type=ref,event=branch
+            type=raw,value=latest,enable=${{ github.ref_name == github.event.repository.default_branch && (github.event_name != 'workflow_dispatch' || inputs.platforms != 'linux/amd64') }}
+            type=ref,event=branch,enable=${{ github.event_name != 'workflow_dispatch' || inputs.platforms != 'linux/amd64' }}
             type=ref,event=tag
             type=raw,value=sha-${{ github.sha }}
 
