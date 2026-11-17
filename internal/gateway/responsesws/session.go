@@ -290,7 +290,7 @@ func (s *responsesWSSession) initialAccount(request responsesWSRequest, route do
 		return account, true, nil
 	}
 	account := route.Account
-	if route.Pool.Provider == domain.ProviderMixed && account.CredentialType == domain.CredentialAPIKey {
+	if route.MembershipEnabled && route.Pool.Provider == domain.ProviderMixed && account.CredentialType == domain.CredentialAPIKey {
 		if reassigned, err := s.hub.backend.RoutingStore().ReassignAPIKey(s.ctx, route.Key.ID, route.Pool.ID, nil); err == nil {
 			account = reassigned
 		}

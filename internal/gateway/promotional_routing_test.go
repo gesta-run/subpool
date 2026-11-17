@@ -31,3 +31,47 @@ func TestPromotionalGuardRejectsExpiredAndMissingSnapshotBeforeUpstream(t *testi
 		}
 	}
 }
+
+func TestDisabledAPIMembershipReassignsOnlyOnce(t *testing.T) {
+	s, st, _, plain := newTestServer(t)
+	cipher := s.cipher.(*credential.Cipher)
+	old := compatibleAccountWithCipher(t, cipher, "disabled-api")
+	replacement := compatibleAccountWithCipher(t, cipher, "remaining-api")
+	st.route.Account = old
+	st.route.Pool.Provider = domain.ProviderMixed
+	st.route.MembershipEnabled = false
+	st.reassignedAccounts = []domain.ProviderAccount{replacement}
+	s.compatible = &fakeCompatibleProvider{}
+	response := serveGateway(t, s, plain, "/v1/responses", `{"model":"gpt-test","input":"hello"}`)
+	if response.Code != 200 {
+		t.Fatalf("remaining account was skipped: %d %s", response.Code, response.Body.String())
+	}
+	if len(st.reassignExcludes) != 1 || len(st.reassignExcludes[0]) != 1 || st.reassignExcludes[0][0] != old.ID {
+		t.Fatalf("reassignments=%v", st.reassignExcludes)
+	}
+}
+
+func TestWebSocketDisabledAPIMembershipReassignsOnlyOnce(t *testing.T) {
+	s, st, _, plain := newTestServer(t)
+	cipher := s.cipher.(*credential.Cipher)
+	old := compatibleAccountWithCipher(t, cipher, "disabled-api")
+	replacement := compatibleAccountWithCipher(t, cipher, "remaining-api")
+	st.route.Account = old
+	st.route.Pool.Provider = domain.ProviderMixed
+	st.route.MembershipEnabled = false
+	st.reassignedAccounts = []domain.ProviderAccount{replacement}
+	provider := &responsesWSBridgeProvider{payload: make(chan []byte, 1)}
+	s.compatible = provider
+	s.WithResponsesWebSocket(true, false, "")
+	client, cleanup := dialResponsesWSTestServer(t, s, plain)
+	defer cleanup()
+	writeResponsesWSMessage(t, client, `{"type":"response.create","model":"gpt-test","input":"hello"}`)
+	event := readResponsesWSMessage(t, client)
+	if event["type"] != "response.completed" {
+		t.Fatalf("remaining account was skipped: %#v", event)
+	}
+	<-provider.payload
+	if len(st.reassignExcludes) != 1 || len(st.reassignExcludes[0]) != 1 || st.reassignExcludes[0][0] != old.ID {
+		t.Fatalf("reassignments=%v", st.reassignExcludes)
+	}
+}
