@@ -73,7 +73,7 @@ LIMIT 1;
 SELECT a.id
 FROM provider_accounts a
 JOIN pool_accounts pa ON pa.provider_account_id = a.id
-WHERE pa.pool_id = sqlc.arg(pool_id) AND a.provider = 'codex'
+WHERE pa.pool_id = sqlc.arg(pool_id) AND (a.provider = 'codex' OR (a.provider = 'openai_compatible' AND a.quota_snapshot->>'plan_type' = 'openai_api_credits'))
 ORDER BY a.id
 FOR UPDATE OF a;
 
@@ -340,9 +340,12 @@ JOIN pool_accounts pa ON pa.provider_account_id = a.id AND pa.pool_id = sqlc.arg
 JOIN pool_accounts current_pa ON current_pa.provider_account_id = sqlc.arg(current_id)
     AND current_pa.pool_id = pa.pool_id AND current_pa.enabled
 JOIN provider_accounts current_account ON current_account.id = current_pa.provider_account_id
-WHERE a.provider = 'codex' AND current_account.provider = 'codex'
-  AND a.credential_type = current_account.credential_type
-  AND a.fast_mode_enabled = current_account.fast_mode_enabled
+WHERE EXISTS (SELECT 1 FROM pool_accounts cp JOIN provider_accounts ca ON ca.id = cp.provider_account_id
+              WHERE cp.pool_id = pa.pool_id AND cp.enabled AND ca.provider = 'codex')
+  AND (a.provider = 'codex' OR (a.provider = 'openai_compatible' AND a.credential_type = 'api_key' AND a.quota_snapshot->>'plan_type' = 'openai_api_credits'))
+  AND (current_account.provider = 'codex' OR (current_account.provider = 'openai_compatible' AND current_account.credential_type = 'api_key' AND current_account.quota_snapshot->>'plan_type' = 'openai_api_credits'))
+  AND (a.provider != 'codex' OR current_account.provider != 'codex' OR
+       (a.credential_type = current_account.credential_type AND a.fast_mode_enabled = current_account.fast_mode_enabled))
   AND (a.status = 'active' OR (a.status = 'cooling_down' AND a.cooldown_until <= now()))
   AND COALESCE(NULLIF(a.health_status, ''), 'unknown') != 'unhealthy'
 ORDER BY a.id

@@ -97,6 +97,7 @@ func main() {
 		os.Exit(1)
 	}
 	gatewayServer := gateway.New(database, keys, cipher, provider, refreshManager, compatibleProvider).
+		WithPromotionalAPIFallback(cfg.CodexQuotaRouting).
 		WithCopilot(copilotClient).
 		WithAntigravity(antigravityClient).
 		WithRequestBodyLimits(cfg.MaxRequestBodyBytes, cfg.MaxInflightRequestBodyBytes, cfg.RequestBodyReadTimeout).
