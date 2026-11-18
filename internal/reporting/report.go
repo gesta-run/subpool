@@ -260,15 +260,17 @@ func fillOpenAIBalance(row *Row, a Account, now time.Time, location *time.Locati
 			row.Reset = "Credits expired " + expiry.In(location).Format("2006-01-02 · 15:04")
 		}
 	}
+	if snapshot.GrantDepletedAt > 0 {
+		row.Remaining = "$0.00"
+		row.BalanceEstimated = false
+		row.BalanceUpdated = "Credit Grants verified " + time.Unix(snapshot.GrantDepletedAt, 0).In(location).Format("2006-01-02 · 15:04")
+		return true
+	}
 	if a.Status == domain.AccountExhausted && snapshot.Balance.Estimated && *snapshot.Balance.Remaining > 0 {
 		row.Remaining = "Unavailable"
 		row.BalanceUpdated = "API quota unavailable"
 		row.BalanceStatus = "Balance verification pending"
 		row.BalanceEstimated = false
-		if snapshot.GrantDepletedAt > 0 {
-			row.Remaining = "$0.00"
-			row.BalanceStatus = "Credit Grants verified " + time.Unix(snapshot.GrantDepletedAt, 0).In(location).Format("2006-01-02 · 15:04")
-		}
 		row.BalanceStatus += fmt.Sprintf(" · Previous Costs estimate $%.2f", *snapshot.Balance.Remaining)
 		if snapshot.Balance.UsageThrough > 0 {
 			row.BalanceStatus += " · Costs through " + time.Unix(snapshot.Balance.UsageThrough, 0).In(location).Format("2006-01-02 · 15:04")

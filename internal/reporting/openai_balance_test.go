@@ -105,8 +105,8 @@ func TestExhaustedGrantBalanceIsNotReportedAsAvailable(t *testing.T) {
 		account.Snapshot = []byte(tc.snapshot)
 		row := Row{}
 		if !fillOpenAIBalance(&row, account, now, time.UTC) || row.Remaining != tc.remaining ||
-			row.BalanceEstimated || !strings.Contains(row.BalanceStatus, tc.status) ||
-			!strings.Contains(row.BalanceStatus, "Previous Costs estimate $37.50") {
+			row.BalanceEstimated || !strings.Contains(row.BalanceUpdated+" "+row.BalanceStatus, tc.status) ||
+			strings.Contains(row.BalanceStatus, "Previous Costs estimate $37.50") != (tc.remaining == "Unavailable") {
 			t.Fatalf("incorrect report for exhausted grant: %+v", row)
 		}
 	}

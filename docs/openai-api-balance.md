@@ -31,6 +31,7 @@ For accounts using the Admin key and Costs estimate, **Manage billing → Replac
 authorization → Verify Credit Grants · keep Costs API** adds optional browser
 authorization for the same organization without replacing the Admin key. The
 existing health refresh checks Credit Grants when an exhausted route still has
-a positive Costs estimate. The console and email show a confirmed zero from
-Credit Grants or mark the balance as pending verification and keep the old
-estimate as context. Verification never changes the account's routing status.
+a positive Costs estimate. The console and email show a confirmed zero when Credit Grants reports no available credits,
+including an overage. The old estimate is shown only while verification is pending. A
+verified depleted grant stays ineligible even if Costs still estimates a
+positive balance. A new grant is evaluated separately.
