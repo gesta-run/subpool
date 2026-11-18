@@ -11,7 +11,7 @@ import (
 	"github.com/gesta-run/subpool/internal/domain"
 )
 
-func TestPostgresPromotionalGrantsBeforeSubscriptionAndCredits(t *testing.T) {
+func TestPostgresPromotionalGrantsBetweenSubscriptionAndCredits(t *testing.T) {
 	url := os.Getenv("SUBPOOL_TEST_DATABASE_URL")
 	if url == "" {
 		t.Skip("SUBPOOL_TEST_DATABASE_URL is not set")
@@ -49,8 +49,8 @@ func TestPostgresPromotionalGrantsBeforeSubscriptionAndCredits(t *testing.T) {
 			t.Fatal(e)
 		}
 	}
-	set(0, testCreditQuota(now, 50, "400"))
-	set(1, testCreditQuota(now, 30, "800"))
+	set(0, testCreditQuota(now, 100, "400"))
+	set(1, testCreditQuota(now, 100, "800"))
 	set(2, testPromotionalQuota(now, 5, time.Hour))
 	set(3, testPromotionalQuota(now, 40, 2*time.Hour))
 	key := domain.APIKey{ID: "00000000-0000-4000-8000-000000009711", PoolID: pool.ID, EmployeeName: "Illustrative grant employee", KeyHMAC: bytes.Repeat([]byte{85}, 32), KeyHint: "test"}
@@ -70,41 +70,20 @@ func TestPostgresPromotionalGrantsBeforeSubscriptionAndCredits(t *testing.T) {
 	assert(3, nil)
 	set(3, testPromotionalQuota(now, 40, -time.Second))
 	assert(1, nil)
-	set(0, testCreditQuota(now, 100, "400"))
-	set(1, testCreditQuota(now, 100, "800"))
-	assert(1, nil)
 	set(0, testCreditQuota(now, 50, "400"))
 	assert(0, nil)
-	// Independent requests on an existing subscription binding prefer a grant.
+	// A restored subscription takes precedence over an existing API binding too.
 	set(2, testPromotionalQuota(now, 5, time.Hour))
+	set(0, testCreditQuota(now, 100, "400"))
+	assert(2, nil)
+	set(0, testCreditQuota(now, 50, "400"))
 	route, e := db.ResolveAPIKey(ctx, key.KeyHMAC)
 	if e != nil {
 		t.Fatal(e)
 	}
 	a, e := db.PreferQuotaAccount(ctx, route)
-	if e != nil || a.ID != ids[2] {
-		t.Fatalf("grant did not replace subscription: %s err=%v", a.ID, e)
-	}
-	// Restoring subscription quota must not displace a valid promotional grant.
-	set(0, testCreditQuota(now, 100, "400"))
-	set(0, testCreditQuota(now, 50, "400"))
-	route, e = db.ResolveAPIKey(ctx, key.KeyHMAC)
-	if e != nil {
-		t.Fatal(e)
-	}
-	a, e = db.PreferQuotaAccount(ctx, route)
-	if e != nil || a.ID != ids[2] {
-		t.Fatalf("restored subscription displaced grant: %s err=%v", a.ID, e)
-	}
-	// An exhausted grant returns independent requests to subscription quota.
-	set(2, testPromotionalQuota(now, 0, time.Hour))
-	route, e = db.ResolveAPIKey(ctx, key.KeyHMAC)
-	if e != nil {
-		t.Fatal(e)
-	}
-	a, e = db.PreferQuotaAccount(ctx, route)
 	if e != nil || a.ID != ids[0] {
-		t.Fatalf("grant exhausted: %s err=%v", a.ID, e)
+		t.Fatalf("recovery=%s err=%v", a.ID, e)
 	}
 	// Ordinary API-only pools retain the existing allocator and do not acquire
 	// subscription or grant restrictions from the opt-in Codex policy.
