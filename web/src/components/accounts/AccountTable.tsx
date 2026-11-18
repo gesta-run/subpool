@@ -186,6 +186,14 @@ function OpenAIBalance({ account }: { account: ProviderAccount }) {
   const balance = account.quota_snapshot?.balance
   if (!balance || !Number.isFinite(balance.remaining_usd)) return <div className="subscription-summary__empty"><strong>{account.quota_authorized ? 'Balance unavailable' : 'Balance not connected'}</strong><small>Connect billing authorization to read API credits</small></div>
   const stale = billingNeedsAttention(account)
+  if (account.status === 'exhausted' && balance.estimated && balance.remaining_usd > 0) {
+    const depletedAt = account.quota_snapshot?.grant_depleted_at
+    return <div className="capacity">
+      <span><strong>{depletedAt ? '$0.00' : 'API quota unavailable'}</strong>{depletedAt ? ' · Credit Grants verified' : ''}</span>
+      <small>{depletedAt ? billingDate(depletedAt) : 'Balance verification pending'}</small>
+      <small>Previous Costs estimate: ${balance.remaining_usd.toFixed(2)}{balance.usage_through ? ` · Costs through ${billingDate(balance.usage_through)}` : ''}</small>
+    </div>
+  }
   return <div className="capacity">
     <span><strong>${balance.remaining_usd.toFixed(2)}</strong> {balance.estimated ? stale ? 'last known estimate' : 'estimated API credits' : stale ? 'last known API credits' : 'API credits remaining'}</span>
     <small>${balance.used_usd.toFixed(2)} {balance.estimated ? 'reported cost' : 'used'} / ${balance.granted_usd.toFixed(2)} granted</small>

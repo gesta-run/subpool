@@ -31,7 +31,7 @@ func (c *Checker) openAIQuota(ctx context.Context, credentials openaicompat.Cred
 	}
 	snapshot, err := client.Usage(ctx, *credentials.OpenAIBilling)
 	if credentials.OpenAIBilling.AdminKey != "" {
-		c.finishBillingPoll(account.ID, *credentials.OpenAIBilling, err)
+		defer c.finishBillingPoll(account.ID, *credentials.OpenAIBilling, err)
 	}
 	if err != nil {
 		// Billing errors never include credential headers or upstream response bodies.
@@ -48,6 +48,22 @@ func (c *Checker) openAIQuota(ctx context.Context, credentials openaicompat.Cred
 			result.QuotaErrorCode = "invalid_usage_response"
 		}
 		return result
+	}
+	if account.Status == domain.AccountExhausted && snapshot.Balance.Estimated && snapshot.Balance.Remaining > 0 {
+		browser := credentials.OpenAIBilling.GrantCredentials()
+		var previous openaibilling.Snapshot
+		if json.Unmarshal(account.QuotaSnapshot, &previous) == nil &&
+			previous.Balance.GrantStartAt == snapshot.Balance.GrantStartAt &&
+			previous.Balance.ExpiresAt == snapshot.Balance.ExpiresAt &&
+			previous.Balance.Granted == snapshot.Balance.Granted {
+			snapshot.GrantDepletedAt = previous.GrantDepletedAt
+		}
+		if snapshot.GrantDepletedAt == 0 && browser.Valid() {
+			grant, grantErr := client.Usage(ctx, browser)
+			if grantErr == nil && grant.PlanType == openaibilling.PlanType && grant.Balance.Remaining == 0 && grant.Balance.PaidAvailable == 0 {
+				snapshot.GrantDepletedAt = c.now().Unix()
+			}
+		}
 	}
 	result.QuotaSnapshot, _ = json.Marshal(snapshot)
 	return result

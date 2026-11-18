@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gesta-run/subpool/internal/domain"
 	"github.com/gesta-run/subpool/internal/provider/openaibilling"
 	"github.com/gesta-run/subpool/internal/reporting/modelusage"
 )
@@ -25,6 +26,7 @@ type Account struct {
 	ID, Name, Email          string
 	QuotaError               string
 	Provider, CredentialType string
+	Status                   string
 	Employees                []Employee
 	Requests                 int64
 	Snapshot                 []byte
@@ -231,8 +233,9 @@ func fillQuota(row *Row, a Account, now time.Time, location *time.Location) {
 
 func fillOpenAIBalance(row *Row, a Account, now time.Time, location *time.Location) bool {
 	var snapshot struct {
-		PlanType string `json:"plan_type"`
-		Balance  *struct {
+		PlanType        string `json:"plan_type"`
+		GrantDepletedAt int64  `json:"grant_depleted_at"`
+		Balance         *struct {
 			Remaining    *float64 `json:"remaining_usd"`
 			ExpiresAt    int64    `json:"expires_at"`
 			Estimated    bool     `json:"estimated"`
@@ -256,6 +259,21 @@ func fillOpenAIBalance(row *Row, a Account, now time.Time, location *time.Locati
 		} else {
 			row.Reset = "Credits expired " + expiry.In(location).Format("2006-01-02 · 15:04")
 		}
+	}
+	if a.Status == domain.AccountExhausted && snapshot.Balance.Estimated && *snapshot.Balance.Remaining > 0 {
+		row.Remaining = "Unavailable"
+		row.BalanceUpdated = "API quota unavailable"
+		row.BalanceStatus = "Balance verification pending"
+		row.BalanceEstimated = false
+		if snapshot.GrantDepletedAt > 0 {
+			row.Remaining = "$0.00"
+			row.BalanceStatus = "Credit Grants verified " + time.Unix(snapshot.GrantDepletedAt, 0).In(location).Format("2006-01-02 · 15:04")
+		}
+		row.BalanceStatus += fmt.Sprintf(" · Previous Costs estimate $%.2f", *snapshot.Balance.Remaining)
+		if snapshot.Balance.UsageThrough > 0 {
+			row.BalanceStatus += " · Costs through " + time.Unix(snapshot.Balance.UsageThrough, 0).In(location).Format("2006-01-02 · 15:04")
+		}
+		return true
 	}
 	row.BalanceUpdated = "Updated " + a.CheckedAt.In(location).Format("2006-01-02 · 15:04")
 	if snapshot.Balance.Estimated {

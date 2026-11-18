@@ -92,3 +92,44 @@ func TestBillingRouteRequiresAdmin(t *testing.T) {
 		t.Fatal("billing auth endpoint exposed")
 	}
 }
+
+func TestGrantVerificationKeepsCostsCredentialsAndSnapshot(t *testing.T) {
+	cipher, _ := credential.New(make([]byte, 32))
+	current := openaicompat.Credentials{
+		BaseURL: "https://api.openai.com/v1", APIKey: "example-model-key",
+		OpenAIBilling: &openaibilling.Credentials{
+			OrganizationID: "org-example", AdminKey: "sk-admin-example",
+			GrantAmount: 50, GrantStartAt: 1800000000, GrantExpiresAt: 1800600000,
+		},
+	}
+	raw, _ := json.Marshal(current)
+	encrypted, _ := cipher.Encrypt(raw)
+	quota := json.RawMessage(`{"plan_type":"openai_api_credits","balance":{"estimated":true,"remaining_usd":37.5}}`)
+	st := &quotaConfigStore{controlStore: controlStore{account: domain.ProviderAccount{
+		ID: "example", Provider: domain.ProviderOpenAICompatible, CredentialVersion: 1,
+		CredentialCiphertext: encrypted, QuotaSnapshot: quota,
+	}}}
+	s := &Server{store: st, cipher: cipher, openaiBalance: billingConfigProbe{}}
+	for _, tc := range []struct {
+		org  string
+		code int
+	}{{"org-other", http.StatusBadRequest}, {"org-example", http.StatusOK}} {
+		r := httptest.NewRequest(http.MethodPut, "/", strings.NewReader(`{"verify_grants":true,"session_key":"example-browser-session","organization_id":"`+tc.org+`"}`))
+		r.SetPathValue("id", "example")
+		w := httptest.NewRecorder()
+		s.configureOpenAIBalance(w, r)
+		if w.Code != tc.code || st.saved != (tc.code == http.StatusOK) || strings.Contains(w.Body.String(), "example-browser-session") {
+			t.Fatalf("unexpected authorization response: %d %s", w.Code, w.Body.String())
+		}
+	}
+	plain, _ := cipher.Decrypt(st.account.CredentialCiphertext)
+	var stored openaicompat.Credentials
+	if err := json.Unmarshal(plain, &stored); err != nil {
+		t.Fatal(err)
+	}
+	expected := *current.OpenAIBilling
+	expected.GrantSessionKey = "example-browser-session"
+	if stored.OpenAIBilling == nil || *stored.OpenAIBilling != expected || stored.APIKey != current.APIKey || string(st.account.QuotaSnapshot) != string(quota) {
+		t.Fatal("verification changed Costs credentials, inference, or the saved estimate")
+	}
+}

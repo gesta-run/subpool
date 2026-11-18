@@ -25,6 +25,7 @@ export interface ProviderAccount {
   quota_snapshot?: {
     models?: Record<string, { displayName?: string; quotaInfo?: { remainingFraction: number; resetTime?: string } }>
     balance?: { granted_usd: number; used_usd: number; remaining_usd: number; paid_available_usd: number; expires_at?: number; estimated?: boolean; usage_through?: number; grant_start_at?: number }
+    grant_depleted_at?: number
     plan_type?: string
     usage_allowed?: boolean
     limit_reason?: string

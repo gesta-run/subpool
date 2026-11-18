@@ -30,7 +30,7 @@ export function OpenAIBalanceDialog({ account, onClose, onSaved }: { account: Pr
       const body = method === 'costs' ? {
         organization_id: organizationID.trim(), admin_key: secret.trim(), grant_amount_usd: Number(grantAmount),
         grant_start_at: Date.parse(`${grantStart}+08:00`) / 1000, grant_expires_at: Date.parse(`${grantExpiry}+08:00`) / 1000,
-      } : { session_key: secret.trim(), organization_id: organizationID.trim() }
+      } : { session_key: secret.trim(), organization_id: organizationID.trim(), ...(method === 'verify' ? { verify_grants: true } : {}) }
       await request(`/api/v1/provider-accounts/${account.id}/openai-balance`, {
         method: remove ? 'DELETE' : 'PUT', signal: controller.signal,
         body: remove ? undefined : JSON.stringify(body),
@@ -49,7 +49,7 @@ export function OpenAIBalanceDialog({ account, onClose, onSaved }: { account: Pr
   return <Modal title={account.quota_authorized ? 'Manage OpenAI billing' : 'Connect OpenAI billing'} description={`Read API credit balance for ${account.display_name}. Model access stays unchanged.`} onClose={() => { if (!busy) onClose() }} showClose={!busy}>
     <form className="form-stack" onSubmit={(event) => { event.preventDefault(); void save() }} aria-busy={busy}>
       {replacing ? <>
-        <div className="field"><label htmlFor="openai-billing-method">Balance source</label><select id="openai-billing-method" value={method} disabled={busy} onChange={(event) => { setMethod(event.target.value); setSecret('') }}><option value="costs">Estimated balance · Costs API</option><option value="browser">Exact balance · browser authorization</option></select></div>
+        <div className="field"><label htmlFor="openai-billing-method">Balance source</label><select id="openai-billing-method" value={method} disabled={busy} onChange={(event) => { setMethod(event.target.value); setSecret('') }}><option value="costs">Estimated balance · Costs API</option><option value="browser">Exact balance · browser authorization</option>{account.quota_authorization_method === 'costs' ? <option value="verify">Verify Credit Grants · keep Costs API</option> : null}</select></div>
         <div className="field"><label htmlFor="openai-billing-org">Organization ID</label><input id="openai-billing-org" required placeholder="org-…" value={organizationID} onChange={(event) => setOrganizationID(event.target.value)} disabled={busy} autoComplete="off" /></div>
         <div className="field"><label htmlFor="openai-billing-secret">{method === 'costs' ? 'Admin API key' : 'Browser session key'}</label><input id="openai-billing-secret" required type="password" value={secret} onChange={(event) => setSecret(event.target.value)} disabled={busy} autoComplete="off" /></div>
         {method === 'costs' ? <>
@@ -58,7 +58,7 @@ export function OpenAIBalanceDialog({ account, onClose, onSaved }: { account: Pr
           <div className="field"><label htmlFor="openai-grant-expiry">Grant expiry (Beijing time)</label><input id="openai-grant-expiry" required type="datetime-local" step="1" value={grantExpiry} onChange={(event) => setGrantExpiry(event.target.value)} disabled={busy} /></div>
           <small>Estimated grant minus organization-wide Costs API spend. Costs can lag. Update this grant when new credits arrive; it is not a payment limit.</small>
         </> : <small>Temporary API Platform browser authorization. Reconnect when it expires. A model API key cannot read the balance.</small>}
-      </> : <div className="field"><strong>Billing authorization saved securely</strong><small>{account.quota_authorization_method === 'costs' ? 'Costs API estimate. Replace authorization to update the grant or Admin key.' : 'Reconnect when this temporary browser authorization expires.'}</small></div>}
+      </> : <div className="field"><strong>Billing authorization saved securely</strong><small>{account.quota_authorization_method === 'costs' ? 'Costs API estimate. Choose Credit Grants verification to connect a browser session without replacing Costs.' : 'Reconnect when this temporary browser authorization expires.'}</small></div>}
       <div className="field"><small>Billing credentials are encrypted and never returned by the API. SubPool uses them only for balance and cost queries.</small></div>
       {error ? <div className="inline-alert" role="alert">{error}</div> : null}
       <div className="form-actions">
