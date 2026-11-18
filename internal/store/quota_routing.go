@@ -73,7 +73,7 @@ func (p *Postgres) PreferQuotaAccount(ctx context.Context, route domain.KeyRoute
 		if !valid {
 			continue
 		}
-		// Subscription quota precedes promotional API grants, then AI credits. Within each tier,
+		// Promotional API grants precede subscription quota, then AI credits. Within each tier,
 		// keep explicit pool priorities and the existing subscription hysteresis.
 		if !currentValid {
 			if !currentPromotional && c.Priority >= currentPriority {
@@ -132,9 +132,9 @@ func (b quotaBudget) preferredTo(current quotaBudget, priority, currentPriority 
 			return 2
 		}
 		if v.apiCredits {
-			return 1
+			return 0
 		}
-		return 0
+		return 1
 	}
 	if tier(b) != tier(current) {
 		return tier(b) < tier(current)

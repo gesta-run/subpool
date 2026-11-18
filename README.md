@@ -235,20 +235,22 @@ Subpool is licensed under the [Apache License 2.0](LICENSE). It is independent a
 
 ### Opt-in Codex quota routing
 
-Set `SUBPOOL_CODEX_QUOTA_ROUTING=true` to prefer remaining subscription
-capacity for independent, non-image Codex requests and the first unbound
-WebSocket turn. The default is `false`, including self-hosted deployments.
+Set `SUBPOOL_CODEX_QUOTA_ROUTING=true` to prefer eligible promotional API
+grants, then remaining subscription capacity, for independent, non-image Codex
+requests and the first unbound WebSocket turn. The default is `false`, including self-hosted deployments.
 Existing `previous_response_id` chains and established WebSockets keep their
 account; the policy does not migrate or replay them. API keys and client
 configuration stay unchanged.
 
-Fresh subscription quota takes precedence over configured promotional OpenAI
-API grants in the same mixed Codex pool, followed by finite prepaid AI credits.
+Configured promotional OpenAI API grants take precedence over fresh
+subscription quota in the same mixed Codex pool, followed by finite prepaid
+AI credits.
 Grant accounts must use an explicit `openai_api_credits` quota snapshot with a
 positive remaining and granted balance, a future expiry and no purchased
 balance. Earlier-expiring grants are used first. Invalid, expired or exhausted
 grants are skipped, including on HTTP and WebSocket bridge continuations. A
-restored subscription returns to the subscription tier. Existing continuations
+restored subscription takes precedence over AI credits once no eligible grant
+remains; it does not displace a valid grant. Existing continuations
 are never moved or replayed across accounts.
 
 Grant checks may use a cached estimate for up to 24 hours during billing API
