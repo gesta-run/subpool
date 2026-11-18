@@ -24,12 +24,13 @@ var (
 )
 
 type Credentials struct {
-	SessionKey     string  `json:"session_key,omitempty"`
-	OrganizationID string  `json:"organization_id"`
-	AdminKey       string  `json:"admin_key,omitempty"`
-	GrantAmount    float64 `json:"grant_amount_usd,omitempty"`
-	GrantStartAt   int64   `json:"grant_start_at,omitempty"`
-	GrantExpiresAt int64   `json:"grant_expires_at,omitempty"`
+	SessionKey      string  `json:"session_key,omitempty"`
+	GrantSessionKey string  `json:"grant_session_key,omitempty"`
+	OrganizationID  string  `json:"organization_id"`
+	AdminKey        string  `json:"admin_key,omitempty"`
+	GrantAmount     float64 `json:"grant_amount_usd,omitempty"`
+	GrantStartAt    int64   `json:"grant_start_at,omitempty"`
+	GrantExpiresAt  int64   `json:"grant_expires_at,omitempty"`
 }
 
 func (c Credentials) Valid() bool {
@@ -56,9 +57,17 @@ type Balance struct {
 	UsageThrough  int64   `json:"usage_through,omitempty"`
 	GrantStartAt  int64   `json:"grant_start_at,omitempty"`
 }
+
+// GrantCredentials uses the optional dashboard authorization without the Costs key.
+func (c Credentials) GrantCredentials() Credentials {
+	return Credentials{OrganizationID: c.OrganizationID, SessionKey: c.GrantSessionKey}
+}
+
 type Snapshot struct {
 	PlanType string  `json:"plan_type"`
 	Balance  Balance `json:"balance"`
+	// GrantDepletedAt records a dashboard-confirmed zero independently of the Costs estimate.
+	GrantDepletedAt int64 `json:"grant_depleted_at,omitempty"`
 }
 
 type Client struct {

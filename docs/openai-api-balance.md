@@ -26,3 +26,11 @@ This uses an undocumented dashboard endpoint. There is no automatic browser logi
 or guaranteed renewal. Connect each API organization separately. Billing display
 is informational: it does not change routing, paid billing, recharge, or fallback
 configuration. Organization balances include usage outside SubPool.
+
+For accounts using the Admin key and Costs estimate, **Manage billing → Replace
+authorization → Verify Credit Grants · keep Costs API** adds optional browser
+authorization for the same organization without replacing the Admin key. The
+existing health refresh checks Credit Grants when an exhausted route still has
+a positive Costs estimate. The console and email show a confirmed zero from
+Credit Grants or mark the balance as pending verification and keep the old
+estimate as context. Verification never changes the account's routing status.

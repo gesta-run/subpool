@@ -88,7 +88,7 @@ WITH employee_counts AS (
     FROM employee_counts GROUP BY provider_account_id
 )
 SELECT a.id, a.display_name, COALESCE(a.email, '')::text AS email, a.provider, a.credential_type,
-    a.quota_snapshot, a.quota_checked_at, a.reset_credits_snapshot, a.reset_credits_checked_at,
+    a.status, a.quota_snapshot, a.quota_checked_at, a.reset_credits_snapshot, a.reset_credits_checked_at,
     COALESCE(a.last_quota_error_code, '')::text AS last_quota_error_code,
     COALESCE(c.requests, 0)::bigint AS requests,
     COALESCE(c.employees, '[]'::jsonb)::jsonb AS employees
@@ -109,6 +109,7 @@ type ReportAccountsRow struct {
 	Email                 string
 	Provider              string
 	CredentialType        string
+	Status                string
 	QuotaSnapshot         []byte
 	QuotaCheckedAt        pgtype.Timestamptz
 	ResetCreditsSnapshot  []byte
@@ -133,6 +134,7 @@ func (q *Queries) ReportAccounts(ctx context.Context, arg ReportAccountsParams) 
 			&i.Email,
 			&i.Provider,
 			&i.CredentialType,
+			&i.Status,
 			&i.QuotaSnapshot,
 			&i.QuotaCheckedAt,
 			&i.ResetCreditsSnapshot,

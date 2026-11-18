@@ -66,15 +66,23 @@ func (s *Server) configureOpenAIBalance(w http.ResponseWriter, r *http.Request) 
 	if r.Method == http.MethodDelete {
 		credentials.OpenAIBilling = nil
 	} else {
-		var request openaibilling.Credentials
+		var request struct {
+			openaibilling.Credentials
+			VerifyGrants bool `json:"verify_grants,omitempty"`
+		}
 		if !decode(w, r, &request) {
 			return
 		}
 		request.SessionKey = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(request.SessionKey), "Bearer "))
 		request.OrganizationID = strings.TrimSpace(request.OrganizationID)
 		request.AdminKey = strings.TrimSpace(request.AdminKey)
-		if !request.Valid() {
+		if !request.Valid() || request.GrantSessionKey != "" {
 			writeError(w, http.StatusBadRequest, "provide an organization ID and either browser authorization or an Admin key with grant amount, start and expiry")
+			return
+		}
+		current := credentials.OpenAIBilling
+		if request.VerifyGrants && (current == nil || current.AdminKey == "" || request.SessionKey == "" || request.OrganizationID != current.OrganizationID) {
+			writeError(w, http.StatusBadRequest, "grant verification requires browser authorization for the connected Costs organization")
 			return
 		}
 		client := s.openaiBalance
@@ -87,11 +95,20 @@ func (s *Server) configureOpenAIBalance(w http.ResponseWriter, r *http.Request) 
 			writeError(w, http.StatusBadGateway, "could not verify this API key belongs to the billing organization")
 			return
 		}
-		if snapshot, err = client.Usage(ctx, request); err != nil {
+		if snapshot, err = client.Usage(ctx, request.Credentials); err != nil {
 			writeError(w, http.StatusBadGateway, "billing query failed; check the credential, organization and Costs read access")
 			return
 		}
-		credentials.OpenAIBilling = &request
+		if request.VerifyGrants {
+			current.GrantSessionKey = request.SessionKey
+			// Authorization alone does not refresh the Costs estimate.
+			snapshot = openaibilling.Snapshot{}
+		} else {
+			if current != nil && current.OrganizationID == request.OrganizationID && request.AdminKey != "" {
+				request.GrantSessionKey = current.GrantSessionKey
+			}
+			credentials.OpenAIBilling = &request.Credentials
+		}
 	}
 	raw, err := json.Marshal(credentials)
 	if err != nil {
@@ -113,10 +130,10 @@ func (s *Server) configureOpenAIBalance(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	s.audit(r.Context(), "provider_account.billing_credentials.update", "provider_account", account.ID, "success")
-	if credentials.OpenAIBilling != nil {
+	if credentials.OpenAIBilling != nil && snapshot.PlanType != "" {
 		quota, _ := json.Marshal(snapshot)
 		err = s.store.UpdateProviderDetails(r.Context(), account.ID, "", quota, time.Now())
-	} else {
+	} else if credentials.OpenAIBilling == nil {
 		err = s.store.SetProviderQuotaError(r.Context(), account.ID, "quota_authorization_required", time.Now())
 	}
 	if err != nil {

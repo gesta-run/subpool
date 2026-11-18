@@ -149,3 +149,69 @@ func TestScheduledBillingReadsSavedQuotaBeforePolling(t *testing.T) {
 		t.Fatal("scheduled cache failed or changed the last successful snapshot")
 	}
 }
+
+type grantBalanceProbe struct {
+	calls    []openaibilling.Credentials
+	grantErr error
+}
+
+func (p *grantBalanceProbe) Usage(_ context.Context, c openaibilling.Credentials) (openaibilling.Snapshot, error) {
+	p.calls = append(p.calls, c)
+	snapshot := openaibilling.Snapshot{PlanType: openaibilling.PlanType}
+	if c.AdminKey != "" {
+		snapshot.Balance = openaibilling.Balance{
+			Granted: c.GrantAmount, GrantStartAt: c.GrantStartAt, ExpiresAt: c.GrantExpiresAt,
+			Remaining: 37.5, Estimated: true,
+		}
+		return snapshot, nil
+	}
+	return snapshot, p.grantErr
+}
+
+func TestExhaustedCostsEstimateChecksCreditGrants(t *testing.T) {
+	now := time.Unix(1800200000, 0)
+	for _, tc := range []struct {
+		name      string
+		status    string
+		session   string
+		grantErr  error
+		wantCalls int
+		verified  bool
+	}{
+		{"active", domain.AccountActive, "browser-session", nil, 1, false},
+		{"no browser auth", domain.AccountExhausted, "", nil, 1, false},
+		{"expired browser auth", domain.AccountExhausted, "browser-session", openaibilling.ErrAuthorizationExpired, 2, false},
+		{"confirmed zero", domain.AccountExhausted, "browser-session", nil, 2, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			credentials := pollingCredentials()
+			credentials.GrantSessionKey = tc.session
+			c := NewChecker(nil, nil, nil, nil)
+			c.now = func() time.Time { return now }
+			probe := &grantBalanceProbe{grantErr: tc.grantErr}
+			c.openaiBalance = probe
+			account := domain.ProviderAccount{ID: "example", Status: tc.status}
+			result := c.openAIQuota(context.Background(), openaicompat.Credentials{OpenAIBilling: &credentials}, account, true)
+			var snapshot openaibilling.Snapshot
+			if err := json.Unmarshal(result.QuotaSnapshot, &snapshot); err != nil {
+				t.Fatal(err)
+			}
+			if len(probe.calls) != tc.wantCalls || (snapshot.GrantDepletedAt == now.Unix()) != tc.verified {
+				t.Fatalf("unexpected verification: calls=%d, verified_at=%d", len(probe.calls), snapshot.GrantDepletedAt)
+			}
+			if tc.wantCalls == 2 && (probe.calls[1].AdminKey != "" || probe.calls[1].SessionKey != tc.session || probe.calls[1].OrganizationID != credentials.OrganizationID) {
+				t.Fatal("verification did not use the separate browser authorization")
+			}
+			if result.UsageAllowed != nil || result.QuotaErrorCode != "" || snapshot.Balance.Remaining != 37.5 {
+				t.Fatal("verification changed routing or replaced the Costs estimate")
+			}
+			if tc.verified {
+				account.QuotaSnapshot = result.QuotaSnapshot
+				c.openAIQuota(context.Background(), openaicompat.Credentials{OpenAIBilling: &credentials}, account, true)
+				if len(probe.calls) != 3 {
+					t.Fatal("a verified grant triggered another dashboard query")
+				}
+			}
+		})
+	}
+}

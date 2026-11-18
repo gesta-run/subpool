@@ -94,3 +94,20 @@ func TestCostsPollingCadenceAndRateLimitAreReportedTruthfully(t *testing.T) {
 		t.Fatal("stale data was presented as fresh")
 	}
 }
+
+func TestExhaustedGrantBalanceIsNotReportedAsAvailable(t *testing.T) {
+	now := time.Unix(1800200000, 0)
+	account := Account{Status: "exhausted", CheckedAt: now}
+	for _, tc := range []struct{ snapshot, remaining, status string }{
+		{`{"plan_type":"openai_api_credits","balance":{"remaining_usd":37.5,"estimated":true}}`, "Unavailable", "Balance verification pending"},
+		{`{"plan_type":"openai_api_credits","balance":{"remaining_usd":37.5,"estimated":true},"grant_depleted_at":1800199990}`, "$0.00", "Credit Grants verified"},
+	} {
+		account.Snapshot = []byte(tc.snapshot)
+		row := Row{}
+		if !fillOpenAIBalance(&row, account, now, time.UTC) || row.Remaining != tc.remaining ||
+			row.BalanceEstimated || !strings.Contains(row.BalanceStatus, tc.status) ||
+			!strings.Contains(row.BalanceStatus, "Previous Costs estimate $37.50") {
+			t.Fatalf("incorrect report for exhausted grant: %+v", row)
+		}
+	}
+}
