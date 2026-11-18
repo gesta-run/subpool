@@ -21,8 +21,11 @@ func TestPromotionalRoutingThreeTiers(t *testing.T) {
 		t.Fatal("valid grant rejected")
 	}
 	later, _ := quotaRoutingBudget(testPromotionalQuota(now, 40, 2*time.Hour), &now, "", now)
-	if !sub.preferredTo(api, 100, 0, true) || api.preferredTo(sub, 0, 100, true) {
-		t.Fatal("subscription tier lost")
+	if !api.preferredTo(sub, 100, 0, true) || sub.preferredTo(api, 0, 100, true) {
+		t.Fatal("promotional grant must precede available subscription quota")
+	}
+	if !sub.preferredTo(credits, 100, 0, true) || credits.preferredTo(sub, 0, 100, true) {
+		t.Fatal("subscription must precede AI credits")
 	}
 	if !api.preferredTo(credits, 100, 0, true) || credits.preferredTo(api, 0, 100, true) {
 		t.Fatal("grant tier lost")
