@@ -151,8 +151,9 @@ func TestScheduledBillingReadsSavedQuotaBeforePolling(t *testing.T) {
 }
 
 type grantBalanceProbe struct {
-	calls    []openaibilling.Credentials
-	grantErr error
+	calls          []openaibilling.Credentials
+	grantErr       error
+	grantRemaining float64
 }
 
 func (p *grantBalanceProbe) Usage(_ context.Context, c openaibilling.Credentials) (openaibilling.Snapshot, error) {
@@ -165,30 +166,33 @@ func (p *grantBalanceProbe) Usage(_ context.Context, c openaibilling.Credentials
 		}
 		return snapshot, nil
 	}
+	snapshot.Balance.Remaining = p.grantRemaining
 	return snapshot, p.grantErr
 }
 
 func TestExhaustedCostsEstimateChecksCreditGrants(t *testing.T) {
 	now := time.Unix(1800200000, 0)
 	for _, tc := range []struct {
-		name      string
-		status    string
-		session   string
-		grantErr  error
-		wantCalls int
-		verified  bool
+		name           string
+		status         string
+		session        string
+		grantErr       error
+		grantRemaining float64
+		wantCalls      int
+		verified       bool
 	}{
-		{"active", domain.AccountActive, "browser-session", nil, 1, false},
-		{"no browser auth", domain.AccountExhausted, "", nil, 1, false},
-		{"expired browser auth", domain.AccountExhausted, "browser-session", openaibilling.ErrAuthorizationExpired, 2, false},
-		{"confirmed zero", domain.AccountExhausted, "browser-session", nil, 2, true},
+		{"active", domain.AccountActive, "browser-session", nil, 0, 1, false},
+		{"no browser auth", domain.AccountExhausted, "", nil, 0, 1, false},
+		{"expired browser auth", domain.AccountExhausted, "browser-session", openaibilling.ErrAuthorizationExpired, 0, 2, false},
+		{"confirmed zero", domain.AccountExhausted, "browser-session", nil, 0, 2, true},
+		{"overage with no remaining credits", domain.AccountExhausted, "browser-session", nil, -1.25, 2, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			credentials := pollingCredentials()
 			credentials.GrantSessionKey = tc.session
 			c := NewChecker(nil, nil, nil, nil)
 			c.now = func() time.Time { return now }
-			probe := &grantBalanceProbe{grantErr: tc.grantErr}
+			probe := &grantBalanceProbe{grantErr: tc.grantErr, grantRemaining: tc.grantRemaining}
 			c.openaiBalance = probe
 			account := domain.ProviderAccount{ID: "example", Status: tc.status}
 			result := c.openAIQuota(context.Background(), openaicompat.Credentials{OpenAIBilling: &credentials}, account, true)
@@ -210,6 +214,14 @@ func TestExhaustedCostsEstimateChecksCreditGrants(t *testing.T) {
 				c.openAIQuota(context.Background(), openaicompat.Credentials{OpenAIBilling: &credentials}, account, true)
 				if len(probe.calls) != 3 {
 					t.Fatal("a verified grant triggered another dashboard query")
+				}
+				credentials.GrantStartAt = credentials.GrantExpiresAt
+				credentials.GrantExpiresAt += int64((24 * time.Hour).Seconds())
+				account.Status = domain.AccountActive
+				renewed := c.openAIQuota(context.Background(), openaicompat.Credentials{OpenAIBilling: &credentials}, account, true)
+				var next openaibilling.Snapshot
+				if err := json.Unmarshal(renewed.QuotaSnapshot, &next); err != nil || next.GrantDepletedAt != 0 {
+					t.Fatal("renewed grant inherited the old depletion")
 				}
 			}
 		})

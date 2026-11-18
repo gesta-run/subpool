@@ -397,7 +397,7 @@ it('labels Costs API estimates and reports the cost cutoff independently of refr
  expect(screen.queryByText(/Browser authorization expired/)).not.toBeInTheDocument()
 })
 
-it.each([false, true])('shows the previous Costs estimate as context for an exhausted account (verified: %s)', (verified) => {
+it.each([false, true])('hides the previous Costs estimate after verification (verified: %s)', (verified) => {
   renderTable({
     ...baseAccount, status: 'exhausted', provider: 'openai_compatible', credential_type: 'api_key',
     quota_provider: 'openai_api_credits', quota_authorized: true,
@@ -409,6 +409,10 @@ it.each([false, true])('shows the previous Costs estimate as context for an exha
   })
   expect(screen.getByText(verified ? '$0.00' : 'API quota unavailable')).toBeInTheDocument()
   expect(screen.getByText(verified ? /Credit Grants verified/ : /Balance verification pending/)).toBeInTheDocument()
-  expect(screen.getByText(/Previous Costs estimate: \$37\.50/)).toBeInTheDocument()
+  if (verified) {
+    expect(screen.queryByText(/Previous Costs estimate/)).not.toBeInTheDocument()
+  } else {
+    expect(screen.getByText(/Previous Costs estimate: \$37\.50/)).toBeInTheDocument()
+  }
   expect(screen.queryByText('estimated API credits')).not.toBeInTheDocument()
 })

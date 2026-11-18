@@ -10,7 +10,7 @@ import (
 // estimates do not replace the upstream account's disabled paid billing policy.
 func PromotionalBudget(raw []byte, checked *time.Time, quotaError string, now time.Time) (Balance, bool) {
 	var snapshot Snapshot
-	if json.Unmarshal(raw, &snapshot) != nil || snapshot.PlanType != PlanType {
+	if json.Unmarshal(raw, &snapshot) != nil || snapshot.PlanType != PlanType || snapshot.GrantDepletedAt > 0 {
 		return Balance{}, false
 	}
 	b := snapshot.Balance
