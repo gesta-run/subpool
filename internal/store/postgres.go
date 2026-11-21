@@ -20,6 +20,8 @@ type Postgres struct {
 	queries              *storedb.Queries
 	codexQuotaRouting    bool
 	quotaRoutingSwitches atomic.Uint64
+	codexRequestWeights  map[string]uint64
+	codexRequestSequence atomic.Uint64
 }
 
 func Open(ctx context.Context, databaseURL string) (*Postgres, error) {

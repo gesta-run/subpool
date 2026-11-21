@@ -370,8 +370,10 @@ func (s *Server) call(w http.ResponseWriter, r *http.Request, route domain.KeyRo
 			account = preferred
 		}
 	}
-	if !continuation && !isImageRequest(request.Kind) && route.MembershipEnabled && route.Account.Provider == domain.ProviderCodex && accountHealthy(account, s.now()) {
-		if preferred, quotaErr := s.store.PreferQuotaAccount(r.Context(), route); quotaErr == nil {
+	if !continuation && !isImageRequest(request.Kind) && route.MembershipEnabled && account.Provider == domain.ProviderCodex && accountHealthy(account, s.now()) {
+		quotaRoute := route
+		quotaRoute.Account = account
+		if preferred, quotaErr := s.store.PreferQuotaAccount(r.Context(), quotaRoute); quotaErr == nil {
 			account = preferred
 		}
 	}

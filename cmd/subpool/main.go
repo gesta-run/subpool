@@ -63,7 +63,7 @@ func main() {
 		os.Exit(1)
 	}
 	defer database.Close()
-	database.WithCodexQuotaRouting(cfg.CodexQuotaRouting)
+	database.WithCodexQuotaRouting(cfg.CodexQuotaRouting).WithCodexRequestWeights(cfg.CodexRequestWeights)
 	cipher, err := credential.New(cfg.CredentialKey)
 	if err != nil {
 		slog.Error("credential cipher startup failed", "error", err)

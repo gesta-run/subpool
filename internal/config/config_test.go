@@ -222,3 +222,15 @@ func TestCodexQuotaRoutingOptIn(t *testing.T) {
 		t.Fatal("invalid opt-in accepted")
 	}
 }
+
+func TestCodexRequestWeights(t *testing.T) {
+	weights, err := codexRequestWeights(`{"primary":4,"secondary":1}`)
+	if err != nil || weights["primary"] != 4 || weights["secondary"] != 1 {
+		t.Fatalf("weights = %v, err = %v", weights, err)
+	}
+	for _, raw := range []string{`{"primary":4}`, `{"primary":4,"secondary":0}`, `{"primary":4,"secondary":101}`} {
+		if _, err := codexRequestWeights(raw); err == nil {
+			t.Fatalf("accepted invalid weights %s", raw)
+		}
+	}
+}
