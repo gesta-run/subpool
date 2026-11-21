@@ -296,8 +296,10 @@ func (s *responsesWSSession) initialAccount(request responsesWSRequest, route do
 		}
 	}
 	if route.MembershipEnabled && s.hub.backend.AccountHealthy(account) {
-		if route.Account.Provider == domain.ProviderCodex {
-			if preferred, err := s.hub.backend.RoutingStore().PreferQuotaAccount(s.ctx, route); err == nil {
+		if account.Provider == domain.ProviderCodex {
+			quotaRoute := route
+			quotaRoute.Account = account
+			if preferred, err := s.hub.backend.RoutingStore().PreferQuotaAccount(s.ctx, quotaRoute); err == nil {
 				account = preferred
 			}
 		}

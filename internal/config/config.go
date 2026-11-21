@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -35,6 +36,7 @@ type Config struct {
 	AntigravityBaseURL            string
 	AntigravityUserAgent          string
 	CodexQuotaRouting             bool
+	CodexRequestWeights           map[string]uint64
 	CodexAutoReset                bool
 	AutoResetTo                   string
 	ResponsesWSEnabled            bool
@@ -80,6 +82,9 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	if cfg.CodexQuotaRouting, err = envBool("SUBPOOL_CODEX_QUOTA_ROUTING", false); err != nil {
+		return Config{}, err
+	}
+	if cfg.CodexRequestWeights, err = codexRequestWeights(os.Getenv("SUBPOOL_CODEX_REQUEST_WEIGHTS")); err != nil {
 		return Config{}, err
 	}
 	if cfg.CodexAutoReset, err = envBool("SUBPOOL_CODEX_AUTO_RESET", false); err != nil {
@@ -169,6 +174,22 @@ func Load() (Config, error) {
 		}
 	}
 	return cfg, nil
+}
+
+func codexRequestWeights(raw string) (map[string]uint64, error) {
+	if strings.TrimSpace(raw) == "" {
+		return nil, nil
+	}
+	var weights map[string]uint64
+	if err := json.Unmarshal([]byte(raw), &weights); err != nil || len(weights) < 2 {
+		return nil, errors.New("SUBPOOL_CODEX_REQUEST_WEIGHTS must be a JSON object with at least two account weights")
+	}
+	for account, weight := range weights {
+		if strings.TrimSpace(account) == "" || weight == 0 || weight > 100 {
+			return nil, errors.New("SUBPOOL_CODEX_REQUEST_WEIGHTS requires account IDs and weights between 1 and 100")
+		}
+	}
+	return weights, nil
 }
 
 func decodeKey(name string, expected int) ([]byte, error) {

@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"math"
 	"time"
 
@@ -10,6 +11,7 @@ import (
 	"github.com/gesta-run/subpool/internal/provider/codex"
 	"github.com/gesta-run/subpool/internal/provider/openaibilling"
 	"github.com/gesta-run/subpool/internal/store/storedb"
+	"github.com/jackc/pgx/v5"
 )
 
 const quotaRoutingMargin = 5.0
@@ -18,6 +20,12 @@ const quotaRoutingMaxAge = 15 * time.Minute
 // WithCodexQuotaRouting configures the opt-in policy before serving requests.
 func (p *Postgres) WithCodexQuotaRouting(enabled bool) *Postgres {
 	p.codexQuotaRouting = enabled
+	return p
+}
+
+// WithCodexRequestWeights sets optional request-level weights for explicitly listed accounts.
+func (p *Postgres) WithCodexRequestWeights(weights map[string]uint64) *Postgres {
+	p.codexRequestWeights = maps.Clone(weights)
 	return p
 }
 
@@ -46,6 +54,11 @@ func (p *Postgres) PreferQuotaAccount(ctx context.Context, route domain.KeyRoute
 		return domain.ProviderAccount{}, err
 	}
 	now := time.Now()
+	if selected := p.weightedSubscription(candidates, now); selected != "" {
+		// The request has its own account. Leave the default key assignment and
+		// all existing response bindings in place.
+		return commitQuotaAccount(ctx, tx, q, selected)
+	}
 	var currentBudget quotaBudget
 	var currentPriority int32
 	currentValid := false
@@ -99,15 +112,20 @@ func (p *Postgres) PreferQuotaAccount(ctx context.Context, route domain.KeyRoute
 			return domain.ProviderAccount{}, err
 		}
 	}
+	account, err := commitQuotaAccount(ctx, tx, q, selected)
+	if err == nil && selected != currentID {
+		p.quotaRoutingSwitches.Add(1)
+	}
+	return account, err
+}
+
+func commitQuotaAccount(ctx context.Context, tx pgx.Tx, q *storedb.Queries, selected string) (domain.ProviderAccount, error) {
 	row, err := q.GetRoutableProviderAccount(ctx, selected)
 	if err != nil {
 		return domain.ProviderAccount{}, err
 	}
 	if err = tx.Commit(ctx); err != nil {
 		return domain.ProviderAccount{}, err
-	}
-	if selected != currentID {
-		p.quotaRoutingSwitches.Add(1)
 	}
 	return routeAccount(row.ID, row.Provider, row.CredentialType, row.DisplayName,
 		row.CredentialCiphertext, row.CredentialVersion, row.Status, row.FastModeEnabled,

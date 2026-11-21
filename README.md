@@ -242,6 +242,16 @@ Existing `previous_response_id` chains and established WebSockets keep their
 account; the policy does not migrate or replay them. API keys and client
 configuration stay unchanged.
 
+To split new requests between specific Codex subscriptions, optionally set
+`SUBPOOL_CODEX_REQUEST_WEIGHTS` to a JSON object mapping provider account IDs
+to integer weights. For example, weights of 4 and 1 give a 4:1 split while both
+subscriptions have fresh, usable quota. This overrides pool priority only for
+the listed eligible subscriptions. If just one remains eligible, it receives
+the new requests. If no listed subscription is usable, or the pool also has
+an unlisted eligible subscription, the ordinary policy applies. The weighted
+choice does not change the API key's default assignment or any existing
+continuation.
+
 Fresh subscription quota takes precedence over configured promotional OpenAI
 API grants in the same mixed Codex pool, followed by finite prepaid AI credits.
 Grant accounts must use an explicit `openai_api_credits` quota snapshot with a
